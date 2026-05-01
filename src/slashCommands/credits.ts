@@ -92,30 +92,54 @@ export async function handleCreditsCommand(
     const totalUsage = creditsData?.data?.total_usage ?? 0;
     const balance = totalCredits - totalUsage;
 
+    const BAR_LENGTH = 16;
+
+    let description: string;
+    if (totalCredits > 0) {
+      const percentRemaining = (balance / totalCredits) * 100;
+      const filledBars = Math.round((balance / totalCredits) * BAR_LENGTH);
+      const bar = "█".repeat(filledBars) + "░".repeat(BAR_LENGTH - filledBars);
+      description = [
+        `## 💰 $${balance.toFixed(2)} remaining`,
+        `\`[${bar}]\` ${percentRemaining.toFixed(1)}% left of **$${totalCredits.toFixed(2)}** total`,
+        `> $${totalUsage.toFixed(2)} spent so far`,
+      ].join("\n");
+    } else {
+      description = `## 💰 $${balance.toFixed(2)} remaining`;
+    }
+
+    let embedColor: number;
+    if (balance < 2) {
+      embedColor = 0xe74c3c; // red — nearly empty
+    } else if (balance < 5) {
+      embedColor = 0xe67e22; // orange — getting low
+    } else {
+      embedColor = 0x2ecc71; // green — healthy
+    }
+
     const embed = new EmbedBuilder()
       .setTitle("OpenRouter Credits")
       .setURL("https://openrouter.ai/settings/credits")
-      .setColor(0x9b59b6)
+      .setColor(embedColor)
+      .setDescription(description)
       .setTimestamp();
 
-    if (totalCredits > 0) {
-      const percentUsed = (totalUsage / totalCredits) * 100;
-      embed.setDescription(
-        `**Balance:** $${balance.toFixed(2)} / $${totalCredits.toFixed(2)} (${percentUsed.toFixed(1)}% used)`,
-      );
-    } else {
-      embed.setDescription(`**Balance:** $${balance.toFixed(2)}`);
-    }
-
     embed.addFields(
-      { name: "Today", value: `$${usageDaily.toFixed(4)}`, inline: true },
-      { name: "This Week", value: `$${usageWeekly.toFixed(4)}`, inline: true },
       {
-        name: "This Month",
-        value: `$${usageMonthly.toFixed(4)}`,
+        name: "Spent Today",
+        value: `$${usageDaily.toFixed(2)}`,
         inline: true,
       },
-      { name: "All Time", value: `$${totalUsage.toFixed(4)}`, inline: true },
+      {
+        name: "Spent This Week",
+        value: `$${usageWeekly.toFixed(2)}`,
+        inline: true,
+      },
+      {
+        name: "Spent This Month",
+        value: `$${usageMonthly.toFixed(2)}`,
+        inline: true,
+      },
     );
 
     if (info.is_free_tier) {
