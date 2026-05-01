@@ -165,19 +165,6 @@ export class PermissionManager {
           time: timeoutMs,
         });
 
-        const disabledRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId("perm_approve_disabled")
-            .setLabel("✅ Allow")
-            .setStyle(ButtonStyle.Success)
-            .setDisabled(true),
-          new ButtonBuilder()
-            .setCustomId("perm_deny_disabled")
-            .setLabel("❌ Deny")
-            .setStyle(ButtonStyle.Danger)
-            .setDisabled(true),
-        );
-
         const approved = interaction.customId.startsWith("perm_approve");
 
         const resultEmbed = new EmbedBuilder()
@@ -193,7 +180,7 @@ export class PermissionManager {
 
         await interaction.update({
           embeds: [resultEmbed],
-          components: [disabledRow],
+          components: [],
         });
 
         aiLogger.info(
@@ -203,19 +190,6 @@ export class PermissionManager {
 
         return approved ? { kind: "approve-once" } : { kind: "reject" };
       } catch {
-        const timeoutRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId("perm_approve_timeout")
-            .setLabel("✅ Allow")
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(true),
-          new ButtonBuilder()
-            .setCustomId("perm_deny_timeout")
-            .setLabel("❌ Deny")
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(true),
-        );
-
         const timeoutEmbed = new EmbedBuilder()
           .setTitle(`⏰ Permission Expired: ${request.kind.toUpperCase()}`)
           .setDescription(getPermissionDescription(request))
@@ -226,7 +200,7 @@ export class PermissionManager {
         await promptMessage
           .edit({
             embeds: [timeoutEmbed],
-            components: [timeoutRow],
+            components: [],
           })
           .catch((error: unknown) => {
             aiLogger.debug(
