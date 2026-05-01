@@ -56,8 +56,9 @@ function getPermissionDescription(request: PermissionRequest): string {
       return "Use an MCP tool";
     case "url": {
       const req = request as UrlPermissionRequest;
-      const suffix = req.intention ? ` (${req.intention})` : "";
-      return "Fetch URL: " + req.url + suffix;
+      const parts = [req.url];
+      if (req.intention) parts.push(`Reason: ${req.intention}`);
+      return parts.join("\n");
     }
     case "custom-tool": {
       const req = request as CustomToolPermissionRequest;
@@ -76,7 +77,6 @@ function getPermissionDescription(request: PermissionRequest): string {
 function getPermissionLabel(request: PermissionRequest): string {
   if (request.kind === "custom-tool")
     return (request as CustomToolPermissionRequest).toolName;
-  if (request.kind === "url") return (request as UrlPermissionRequest).url;
   return request.kind.toUpperCase();
 }
 
