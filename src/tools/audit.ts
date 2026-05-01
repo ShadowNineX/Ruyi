@@ -2,7 +2,7 @@ import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { AuditLogEvent, type GuildAuditLogsEntry } from "discord.js";
 import { toolLogger } from "../logger";
-import { getToolContext } from "../utils/types";
+import { toolContextManager } from "../utils/types";
 
 const actionTypeMap: Record<string, AuditLogEvent> = {
   guild_update: AuditLogEvent.GuildUpdate,
@@ -124,7 +124,7 @@ export const auditLogTool = defineTool("get_audit_log", {
     limit: z.number().nullable().describe("Maximum entries to return (1-50)."),
   }),
   handler: async ({ action_type, user, target_user, limit }) => {
-    const { guild } = getToolContext();
+    const { guild } = toolContextManager.get();
 
     if (!guild) {
       toolLogger.warn("get_audit_log called without guild context");

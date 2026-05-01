@@ -11,6 +11,13 @@ export interface ICopilotSession extends Document {
   lastUsed: Date;
   /** Whether the session is still valid (not manually destroyed) */
   isActive: boolean;
+  /**
+   * Hash of the system prompt this session was created with. When the
+   * prompt changes (new persona text, new tool hints), sessions with a
+   * stale version are invalidated on next access so the model picks up
+   * the new prompt.
+   */
+  promptVersion?: string;
 }
 
 const CopilotSessionSchema = new Schema<ICopilotSession>({
@@ -19,6 +26,7 @@ const CopilotSessionSchema = new Schema<ICopilotSession>({
   createdAt: { type: Date, default: Date.now },
   lastUsed: { type: Date, default: Date.now },
   isActive: { type: Boolean, default: true },
+  promptVersion: { type: String },
 });
 
 export const CopilotSession = mongoose.model<ICopilotSession>(

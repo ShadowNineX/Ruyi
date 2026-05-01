@@ -1,30 +1,28 @@
 import mongoose from "mongoose";
 
-const MONGO_URI = Bun.env.MONGO_URI || "mongodb://localhost:27017/ruyi";
+import { env } from "../env";
+import { dbLogger } from "../logger";
+const MONGO_URI = env.MONGO_URI;
 
 export async function connectDB(): Promise<typeof mongoose> {
   try {
     await mongoose.connect(MONGO_URI);
-    console.log("Connected to MongoDB");
+    dbLogger.info("Connected to MongoDB");
 
     // Force exit on connection errors after initial connect
     mongoose.connection.on("error", (error) => {
-      console.error("MongoDB connection error:", error);
+      dbLogger.error({ error }, "MongoDB connection error");
       process.exit(1);
     });
 
     mongoose.connection.on("disconnected", () => {
-      console.error("MongoDB disconnected unexpectedly");
+      dbLogger.error("MongoDB disconnected unexpectedly");
       process.exit(1);
     });
 
     return mongoose;
   } catch (error) {
-    console.error("MongoDB connection error:", error);
+    dbLogger.error({ error }, "MongoDB connection error");
     process.exit(1);
   }
-}
-
-export async function closeDB(): Promise<void> {
-  await mongoose.disconnect();
 }

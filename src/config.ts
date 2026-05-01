@@ -2,18 +2,21 @@ import { getConfigValue, setConfigValue } from "./db/models";
 
 const DEFAULT_PREFIX = "!";
 
-// In-memory cache for prefix (to avoid async calls everywhere)
-let cachedPrefix = DEFAULT_PREFIX;
+export class ConfigManager {
+  private cachedPrefix = DEFAULT_PREFIX;
 
-export async function loadConfig(): Promise<void> {
-  cachedPrefix = await getConfigValue("prefix", DEFAULT_PREFIX);
+  async load(): Promise<void> {
+    this.cachedPrefix = await getConfigValue("prefix", DEFAULT_PREFIX);
+  }
+
+  getPrefix(): string {
+    return this.cachedPrefix;
+  }
+
+  async setPrefix(prefix: string): Promise<void> {
+    this.cachedPrefix = prefix;
+    await setConfigValue("prefix", prefix);
+  }
 }
 
-export function getPrefix(): string {
-  return cachedPrefix;
-}
-
-export async function setPrefix(prefix: string): Promise<void> {
-  cachedPrefix = prefix;
-  await setConfigValue("prefix", prefix);
-}
+export const configManager = new ConfigManager();

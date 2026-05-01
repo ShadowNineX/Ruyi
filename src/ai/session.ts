@@ -2,244 +2,273 @@ import type { CopilotSession as SDKSession } from "@github/copilot-sdk";
 import { allTools } from "../tools";
 import { aiLogger } from "../logger";
 import { CopilotSession as CopilotSessionModel } from "../db/models";
-import { getMcpTools } from "../mcp/client";
-import { getClient, getProviderConfig, MODEL } from "./client";
-import { createPermissionHandler } from "./permissions";
+import { mcpConnectionManager } from "../mcp/client";
+import { copilotClientManager } from "./client";
+import { permissionManager } from "./permissions";
+import { systemPromptVersion } from "./prompt";
 
-// In-memory cache of active SDK sessions by channel ID
-const activeSessions = new Map<string, SDKSession>();
+export class SessionManager {
+  private readonly activeSessions = new Map<string, SDKSession>();
 
-/**
- * Load persisted sessions from the database and try to resume them.
- * Call this after initializeCopilotClient().
- */
-export async function loadPersistedSessions(): Promise<void> {
-  try {
-    const client = await getClient();
-    const persistedSessions = await CopilotSessionModel.find({
+  /**
+   * Combined list of locally-defined tools and any MCP tools currently
+   * registered. Recomputed on each call so newly-connected MCP servers
+   * are picked up.
+   */
+  private getAllAvailableTools() {
+    const mcpTools = mcpConnectionManager.getTools();
+    return [...allTools, ...mcpTools];
+  }
+
+  async loadPersisted(): Promise<void> {
+    try {
+      const client = await copilotClientManager.getClient();
+      const persistedSessions = await CopilotSessionModel.find({
+        isActive: true,
+      });
+
+      const allAvailableTools = this.getAllAvailableTools();
+
+      aiLogger.info(
+        { count: persistedSessions.length },
+        "Loading persisted sessions",
+      );
+
+      for (const persisted of persistedSessions) {
+        if (
+          persisted.promptVersion &&
+          persisted.promptVersion !== systemPromptVersion
+        ) {
+          aiLogger.info(
+            {
+              channelId: persisted.channelId,
+              sessionId: persisted.sessionId,
+              storedVersion: persisted.promptVersion,
+              currentVersion: systemPromptVersion,
+            },
+            "Skipping resume: system prompt changed since session was created",
+          );
+          await CopilotSessionModel.updateOne(
+            { channelId: persisted.channelId },
+            { $set: { isActive: false } },
+          );
+          continue;
+        }
+        try {
+          const session = await client.resumeSession(persisted.sessionId, {
+            tools: [...allAvailableTools],
+            onPermissionRequest: permissionManager.createHandler(
+              persisted.channelId,
+            ),
+          });
+
+          this.activeSessions.set(persisted.channelId, session);
+          aiLogger.debug(
+            {
+              channelId: persisted.channelId,
+              sessionId: persisted.sessionId,
+            },
+            "Resumed persisted session",
+          );
+        } catch (error) {
+          aiLogger.warn(
+            {
+              channelId: persisted.channelId,
+              sessionId: persisted.sessionId,
+              error: (error as Error).message,
+            },
+            "Failed to resume session, marking inactive",
+          );
+          await CopilotSessionModel.updateOne(
+            { channelId: persisted.channelId },
+            { $set: { isActive: false } },
+          );
+        }
+      }
+
+      aiLogger.info(
+        { activeCount: this.activeSessions.size },
+        "Session loading complete",
+      );
+    } catch (error) {
+      aiLogger.error({ error }, "Failed to load persisted sessions");
+    }
+  }
+
+  async getOrCreate(
+    channelId: string,
+    systemMessage: string,
+  ): Promise<SDKSession> {
+    const existingSession = this.activeSessions.get(channelId);
+    if (existingSession) {
+      aiLogger.debug({ channelId }, "Using cached session");
+      await CopilotSessionModel.updateOne(
+        { channelId },
+        { $set: { lastUsed: new Date() } },
+      );
+      return existingSession;
+    }
+
+    const client = await copilotClientManager.getClient();
+
+    const persistedSession = await CopilotSessionModel.findOne({
+      channelId,
       isActive: true,
     });
 
-    // Get all tools including MCP tools
-    const mcpTools = getMcpTools();
-    const allAvailableTools = [...allTools, ...mcpTools];
+    if (persistedSession) {
+      const versionMatches =
+        !persistedSession.promptVersion ||
+        persistedSession.promptVersion === systemPromptVersion;
 
-    aiLogger.info(
-      { count: persistedSessions.length },
-      "Loading persisted sessions",
-    );
+      if (versionMatches) {
+        try {
+          const allAvailableTools = this.getAllAvailableTools();
 
-    for (const persisted of persistedSessions) {
-      try {
-        // Try to resume the session
-        const session = await client.resumeSession(persisted.sessionId, {
-          tools: [...allAvailableTools],
-        });
+          const session = await client.resumeSession(
+            persistedSession.sessionId,
+            {
+              tools: [...allAvailableTools],
+              onPermissionRequest: permissionManager.createHandler(channelId),
+            },
+          );
 
-        activeSessions.set(persisted.channelId, session);
-        aiLogger.debug(
-          { channelId: persisted.channelId, sessionId: persisted.sessionId },
-          "Resumed persisted session",
-        );
-      } catch (error) {
-        // Session couldn't be resumed (expired, invalid, etc.) - mark as inactive
-        aiLogger.warn(
+          this.activeSessions.set(channelId, session);
+          await CopilotSessionModel.updateOne(
+            { channelId },
+            { $set: { lastUsed: new Date() } },
+          );
+
+          aiLogger.debug(
+            { channelId, sessionId: persistedSession.sessionId },
+            "Resumed session from DB",
+          );
+          return session;
+        } catch (error) {
+          aiLogger.warn(
+            { channelId, error: (error as Error).message },
+            "Failed to resume session, creating new one",
+          );
+          await CopilotSessionModel.updateOne(
+            { channelId },
+            { $set: { isActive: false } },
+          );
+        }
+      } else {
+        aiLogger.info(
           {
-            channelId: persisted.channelId,
-            sessionId: persisted.sessionId,
-            error: (error as Error).message,
+            channelId,
+            sessionId: persistedSession.sessionId,
+            storedVersion: persistedSession.promptVersion,
+            currentVersion: systemPromptVersion,
           },
-          "Failed to resume session, marking inactive",
+          "System prompt changed; creating fresh session",
         );
         await CopilotSessionModel.updateOne(
-          { channelId: persisted.channelId },
+          { channelId },
           { $set: { isActive: false } },
         );
       }
     }
 
-    aiLogger.info(
-      { activeCount: activeSessions.size },
-      "Session loading complete",
-    );
-  } catch (error) {
-    aiLogger.error({ error }, "Failed to load persisted sessions");
-  }
-}
+    const sessionId = `ruyi-${channelId}-${Date.now()}`;
 
-/**
- * Get or create a session for a channel.
- * Sessions are cached in memory and persisted to MongoDB.
- */
-export async function getOrCreateSession(
-  channelId: string,
-  systemMessage: string,
-): Promise<SDKSession> {
-  // Check if we have an active session in memory
-  const existingSession = activeSessions.get(channelId);
-  if (existingSession) {
-    aiLogger.debug({ channelId }, "Using cached session");
-    // Update last used time in DB
+    const allAvailableTools = this.getAllAvailableTools();
+    const mcpTools = allAvailableTools.slice(allTools.length);
+
+    const permissionHandler = permissionManager.createHandler(channelId);
+
+    const session = await client.createSession({
+      sessionId,
+      model: copilotClientManager.model,
+      provider: copilotClientManager.getProviderConfig(),
+      tools: [...allAvailableTools],
+      systemMessage: {
+        mode: "replace",
+        content: systemMessage,
+      },
+      streaming: false,
+      infiniteSessions: { enabled: true },
+      onPermissionRequest: permissionHandler,
+    });
+
+    if (mcpTools.length > 0) {
+      aiLogger.info(
+        {
+          channelId,
+          mcpToolCount: mcpTools.length,
+          tools: mcpTools.map((t) => t.name),
+        },
+        "Session created with MCP tools",
+      );
+    }
+
+    this.activeSessions.set(channelId, session);
+
+    await CopilotSessionModel.findOneAndUpdate(
+      { channelId },
+      {
+        $set: {
+          sessionId: session.sessionId,
+          lastUsed: new Date(),
+          isActive: true,
+          promptVersion: systemPromptVersion,
+        },
+        $setOnInsert: {
+          createdAt: new Date(),
+        },
+      },
+      { upsert: true },
+    );
+
+    aiLogger.info(
+      { channelId, sessionId: session.sessionId },
+      "Created new session",
+    );
+
+    return session;
+  }
+
+  async invalidate(channelId: string): Promise<void> {
+    const session = this.activeSessions.get(channelId);
+    if (session) {
+      try {
+        await session.disconnect();
+      } catch (error) {
+        aiLogger.warn(
+          { channelId, error: (error as Error).message },
+          "Error disconnecting session",
+        );
+      }
+      this.activeSessions.delete(channelId);
+    }
+
     await CopilotSessionModel.updateOne(
       { channelId },
-      { $set: { lastUsed: new Date() } },
+      { $set: { isActive: false } },
     );
-    return existingSession;
+
+    aiLogger.debug({ channelId }, "Session invalidated");
   }
 
-  const client = await getClient();
-
-  // Check if we have a persisted session in DB that we haven't loaded yet
-  const persistedSession = await CopilotSessionModel.findOne({
-    channelId,
-    isActive: true,
-  });
-
-  if (persistedSession) {
-    try {
-      // Get all tools including MCP tools
-      const mcpTools = getMcpTools();
-      const allAvailableTools = [...allTools, ...mcpTools];
-
-      // Try to resume the session
-      const session = await client.resumeSession(persistedSession.sessionId, {
-        tools: [...allAvailableTools],
-      });
-
-      activeSessions.set(channelId, session);
-      await CopilotSessionModel.updateOne(
-        { channelId },
-        { $set: { lastUsed: new Date() } },
-      );
-
-      aiLogger.debug(
-        { channelId, sessionId: persistedSession.sessionId },
-        "Resumed session from DB",
-      );
-      return session;
-    } catch (error) {
-      aiLogger.warn(
-        { channelId, error: (error as Error).message },
-        "Failed to resume session, creating new one",
-      );
-      // Mark old session as inactive
-      await CopilotSessionModel.updateOne(
-        { channelId },
-        { $set: { isActive: false } },
-      );
+  async destroyAll(): Promise<void> {
+    for (const [channelId, session] of this.activeSessions) {
+      try {
+        await session.disconnect();
+        aiLogger.debug({ channelId }, "Session disconnected on shutdown");
+      } catch (error) {
+        aiLogger.warn(
+          { channelId, error: (error as Error).message },
+          "Error disconnecting session on shutdown",
+        );
+      }
     }
+    this.activeSessions.clear();
   }
 
-  // Create a new session with a channel-based session ID
-  const sessionId = `ruyi-${channelId}-${Date.now()}`;
-
-  // Get all tools including MCP tools (wrapped via client.ts)
-  const mcpTools = getMcpTools();
-  const allAvailableTools = [...allTools, ...mcpTools];
-
-  // Create permission handler for Discord button-based approval
-  const permissionHandler = createPermissionHandler(channelId);
-
-  const session = await client.createSession({
-    sessionId,
-    model: MODEL,
-    provider: getProviderConfig(),
-    tools: [...allAvailableTools],
-    systemMessage: {
-      mode: "replace",
-      content: systemMessage,
-    },
-    streaming: false,
-    infiniteSessions: { enabled: true },
-    onPermissionRequest: permissionHandler,
-  });
-
-  // Log MCP tools included
-  if (mcpTools.length > 0) {
-    aiLogger.info(
-      {
-        channelId,
-        mcpToolCount: mcpTools.length,
-        tools: mcpTools.map((t) => t.name),
-      },
-      "Session created with MCP tools",
-    );
+  getActiveCount(): number {
+    return this.activeSessions.size;
   }
-
-  // Cache the session in memory
-  activeSessions.set(channelId, session);
-
-  // Persist to MongoDB
-  await CopilotSessionModel.findOneAndUpdate(
-    { channelId },
-    {
-      $set: {
-        sessionId: session.sessionId,
-        lastUsed: new Date(),
-        isActive: true,
-      },
-      $setOnInsert: {
-        createdAt: new Date(),
-      },
-    },
-    { upsert: true },
-  );
-
-  aiLogger.info(
-    { channelId, sessionId: session.sessionId },
-    "Created new session",
-  );
-
-  return session;
 }
 
-/**
- * Invalidate and remove a session for a channel.
- * Use this when a session encounters errors or needs to be reset.
- */
-export async function invalidateSession(channelId: string): Promise<void> {
-  const session = activeSessions.get(channelId);
-  if (session) {
-    try {
-      await session.destroy();
-    } catch (error) {
-      aiLogger.warn(
-        { channelId, error: (error as Error).message },
-        "Error destroying session",
-      );
-    }
-    activeSessions.delete(channelId);
-  }
-
-  await CopilotSessionModel.updateOne(
-    { channelId },
-    { $set: { isActive: false } },
-  );
-
-  aiLogger.debug({ channelId }, "Session invalidated");
-}
-
-/**
- * Destroy all active sessions.
- */
-export async function destroyAllSessions(): Promise<void> {
-  for (const [channelId, session] of activeSessions) {
-    try {
-      await session.destroy();
-      aiLogger.debug({ channelId }, "Session destroyed on shutdown");
-    } catch (error) {
-      aiLogger.warn(
-        { channelId, error: (error as Error).message },
-        "Error destroying session on shutdown",
-      );
-    }
-  }
-  activeSessions.clear();
-}
-
-/**
- * Get the count of active sessions.
- */
-export function getActiveSessionCount(): number {
-  return activeSessions.size;
-}
+export const sessionManager = new SessionManager();

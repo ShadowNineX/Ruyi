@@ -5,6 +5,7 @@ import {
   type ChatInputCommandInteraction,
 } from "discord.js";
 import { botLogger } from "../logger";
+import { env } from "../env";
 
 interface KeyInfoResponse {
   data?: {
@@ -39,9 +40,9 @@ export async function handleCreditsCommand(
   botLogger.debug({ user: interaction.user.username }, "Credits command");
 
   try {
-    const keyHeaders = { Authorization: `Bearer ${Bun.env.MODEL_TOKEN}` };
+    const keyHeaders = { Authorization: `Bearer ${env.MODEL_TOKEN}` };
     const creditsHeaders = {
-      Authorization: `Bearer ${Bun.env.PROVISIONING_KEY ?? Bun.env.MODEL_TOKEN}`,
+      Authorization: `Bearer ${env.PROVISIONING_KEY ?? env.MODEL_TOKEN}`,
     };
 
     // Fetch both endpoints in parallel

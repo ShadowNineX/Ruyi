@@ -1,70 +1,59 @@
 import { CopilotClient } from "@github/copilot-sdk";
 import { aiLogger } from "../logger";
+import { env } from "../env";
 
-// =============================================================================
-// CLIENT MANAGEMENT - Single persistent client
-// =============================================================================
+export class CopilotClientManager {
+  private copilotClient: CopilotClient | null = null;
+  readonly model = env.MODEL_NAME;
 
-let copilotClient: CopilotClient | null = null;
-
-// Model to use - configurable via env
-export const MODEL = Bun.env.MODEL_NAME ?? "openrouter/auto";
-
-// Provider config for OpenRouter BYOK
-export function getProviderConfig() {
-  return {
-    type: "openai" as const,
-    baseUrl: "https://openrouter.ai/api/v1",
-    apiKey: Bun.env.MODEL_TOKEN!,
-  };
-}
-
-/**
- * Initialize the CopilotClient. Call this once at startup.
- */
-export async function initializeCopilotClient(): Promise<void> {
-  if (copilotClient && copilotClient.getState() === "connected") {
-    aiLogger.info("CopilotClient already initialized");
-    return;
+  getProviderConfig() {
+    return {
+      type: "openai" as const,
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: env.MODEL_TOKEN,
+    };
   }
 
-  copilotClient = new CopilotClient({
-    autoStart: false,
-    autoRestart: true,
-    logLevel: "warning",
-  });
+  async initialize(): Promise<void> {
+    if (this.copilotClient?.getState() === "connected") {
+      aiLogger.info("CopilotClient already initialized");
+      return;
+    }
 
-  await copilotClient.start();
-  aiLogger.info("CopilotClient initialized and started");
-}
+    this.copilotClient = new CopilotClient({
+      autoStart: false,
+      autoRestart: true,
+      logLevel: "warning",
+    });
 
-/**
- * Get the CopilotClient, initializing if needed.
- */
-export async function getClient(): Promise<CopilotClient> {
-  if (!copilotClient || copilotClient.getState() !== "connected") {
-    await initializeCopilotClient();
+    await this.copilotClient.start();
+    aiLogger.info("CopilotClient initialized and started");
   }
-  return copilotClient!;
-}
 
-/**
- * Stop and cleanup the CopilotClient.
- */
-export async function stopClient(): Promise<void> {
-  if (!copilotClient) return;
-
-  try {
-    await copilotClient.stop();
-  } catch (error) {
-    aiLogger.warn({ error: (error as Error).message }, "Error stopping client");
+  async getClient(): Promise<CopilotClient> {
+    if (this.copilotClient?.getState() !== "connected") {
+      await this.initialize();
+    }
+    return this.copilotClient!;
   }
-  copilotClient = null;
+
+  async stop(): Promise<void> {
+    if (!this.copilotClient) return;
+
+    try {
+      await this.copilotClient.stop();
+    } catch (error) {
+      aiLogger.warn(
+        { error: (error as Error).message },
+        "Error stopping client",
+      );
+    }
+    this.copilotClient = null;
+  }
+
+  isConnected(): boolean {
+    return this.copilotClient?.getState() === "connected";
+  }
 }
 
-/**
- * Check if the client is connected.
- */
-export function isClientConnected(): boolean {
-  return copilotClient?.getState() === "connected";
-}
+export const copilotClientManager = new CopilotClientManager();

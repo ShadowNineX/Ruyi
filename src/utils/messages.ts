@@ -183,7 +183,15 @@ export async function fetchReplyChain(
           }
         : null;
       depth++;
-    } catch {
+    } catch (error) {
+      botLogger.debug(
+        {
+          error: (error as Error)?.message,
+          messageId: currentRef?.messageId,
+          depth,
+        },
+        "Stopping reply-chain walk (message unfetchable)",
+      );
       break;
     }
   }
@@ -219,7 +227,15 @@ export async function fetchReferencedMessage(
   }
   try {
     return await message.channel.messages.fetch(message.reference.messageId);
-  } catch {
+  } catch (error) {
+    botLogger.debug(
+      {
+        error: (error as Error)?.message,
+        referencedMessageId: message.reference.messageId,
+        channelId: message.channel.id,
+      },
+      "Could not fetch referenced message",
+    );
     return null;
   }
 }

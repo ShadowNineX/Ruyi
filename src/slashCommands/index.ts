@@ -2,8 +2,14 @@ import type { ChatInputCommandInteraction } from "discord.js";
 import { creditsCommand, handleCreditsCommand } from "./credits";
 import { prefixCommand, handlePrefixCommand } from "./prefix";
 import { smitheryCommand, handleSmitheryCommand } from "./smithery";
+import { memoriesCommand, handleMemoriesCommand } from "./memories";
 
-export const slashCommands = [prefixCommand, creditsCommand, smitheryCommand];
+export const slashCommands = [
+  prefixCommand,
+  creditsCommand,
+  smitheryCommand,
+  memoriesCommand,
+];
 
 export {
   handleSmitherySelect,
@@ -23,6 +29,9 @@ export async function handleSlashCommand(
       break;
     case "smithery":
       await handleSmitheryCommand(interaction);
+      break;
+    case "memories":
+      await handleMemoriesCommand(interaction);
       break;
   }
 }

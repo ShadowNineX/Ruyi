@@ -1,13 +1,13 @@
 import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
-import { getToolContext } from "../utils/types";
+import { toolContextManager } from "../utils/types";
 
 export const channelInfoTool = defineTool("get_channel_info", {
   description: "Get information about the current Discord channel",
   parameters: z.object({}),
   handler: async () => {
-    const { channel } = getToolContext();
+    const { channel } = toolContextManager.get();
     if (!channel) {
       toolLogger.warn("get_channel_info called without channel context");
       return { error: "No channel context" };

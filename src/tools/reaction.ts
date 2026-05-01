@@ -2,11 +2,7 @@ import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import type { Message, MessageReaction } from "discord.js";
 import { toolLogger } from "../logger";
-import {
-  getToolContext,
-  resolveTargetMessage,
-  formatError,
-} from "../utils/types";
+import { toolContextManager, formatError } from "../utils/types";
 
 // Find a reaction by emoji (handles unicode and custom emojis)
 function findReaction(
@@ -45,13 +41,16 @@ export const reactionTool = defineTool("manage_reaction", {
       ),
   }),
   handler: async ({ action, emoji, message_id }) => {
-    const result = await resolveTargetMessage(message_id, "reaction");
+    const result = await toolContextManager.resolveTargetMessage(
+      message_id,
+      "reaction",
+    );
     if (!result.success) {
       return { error: result.error };
     }
 
     const targetMessage = result.message;
-    const ctx = getToolContext();
+    const ctx = toolContextManager.get();
 
     try {
       if (action === "add") {

@@ -1,15 +1,7 @@
 import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
-import {
-  getNowPlaying,
-  getRecentTracks,
-  getUserInfo,
-  getTopArtists,
-  getTopTracks,
-  getTopAlbums,
-  type Period,
-} from "../lib/lastfm";
+import { lastFMClient, type Period } from "../lib/lastfm";
 
 export const lastfmTool = defineTool("lastfm", {
   description:
@@ -47,7 +39,7 @@ export const lastfmTool = defineTool("lastfm", {
 
       switch (action) {
         case "now_playing": {
-          const result = await getNowPlaying(username);
+          const result = await lastFMClient.getNowPlaying(username);
           if (!result) {
             return { error: "No recent tracks found for this user" };
           }
@@ -55,17 +47,20 @@ export const lastfmTool = defineTool("lastfm", {
         }
 
         case "recent_tracks": {
-          const result = await getRecentTracks(username, effectiveLimit);
+          const result = await lastFMClient.getRecentTracks(
+            username,
+            effectiveLimit,
+          );
           return { success: true, ...result };
         }
 
         case "user_info": {
-          const result = await getUserInfo(username);
+          const result = await lastFMClient.getUserInfo(username);
           return { success: true, user: result };
         }
 
         case "top_artists": {
-          const result = await getTopArtists(
+          const result = await lastFMClient.getTopArtists(
             username,
             effectivePeriod,
             effectiveLimit,
@@ -74,7 +69,7 @@ export const lastfmTool = defineTool("lastfm", {
         }
 
         case "top_tracks": {
-          const result = await getTopTracks(
+          const result = await lastFMClient.getTopTracks(
             username,
             effectivePeriod,
             effectiveLimit,
@@ -83,7 +78,7 @@ export const lastfmTool = defineTool("lastfm", {
         }
 
         case "top_albums": {
-          const result = await getTopAlbums(
+          const result = await lastFMClient.getTopAlbums(
             username,
             effectivePeriod,
             effectiveLimit,

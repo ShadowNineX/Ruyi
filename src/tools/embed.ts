@@ -2,7 +2,7 @@ import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { EmbedBuilder } from "discord.js";
 import { toolLogger } from "../logger";
-import { getToolContext } from "../utils/types";
+import { toolContextManager } from "../utils/types";
 
 // Map color names to hex values
 const colorMap: Record<string, number> = {
@@ -215,7 +215,7 @@ export const embedTool = defineTool("send_embed", {
       .describe("URL of a small image in top-right corner."),
   }),
   handler: async ({ title, description, color, fields, footer, thumbnail }) => {
-    const ctx = getToolContext();
+    const ctx = toolContextManager.get();
 
     if (!ctx.channel) {
       toolLogger.warn("No channel context available for send_embed");

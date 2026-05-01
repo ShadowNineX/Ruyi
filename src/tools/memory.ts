@@ -2,11 +2,11 @@ import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { Memory, Conversation } from "../db/models";
-import { getToolContext } from "../utils/types";
+import { toolContextManager } from "../utils/types";
 
 // Get the actual Discord username from context - don't trust model's username parameter
 function getContextUsername(): string | null {
-  const ctx = getToolContext();
+  const ctx = toolContextManager.get();
   return ctx.message?.author.username ?? null;
 }
 
@@ -21,6 +21,7 @@ async function handleSaveMemory(
   value: string | null,
   scope: "global" | "user",
   username: string | null,
+  pinned: boolean,
 ) {
   if (!key || !value) {
     return { error: "Key and value are required for save" };
@@ -36,7 +37,10 @@ async function handleSaveMemory(
   const count = await Memory.countDocuments(query);
 
   if (count >= limit) {
-    const oldest = await Memory.findOne(query).sort({ updatedAt: 1 });
+    // Evict oldest non-pinned entry first; pinned entries are protected.
+    const oldest = await Memory.findOne({ ...query, pinned: false }).sort({
+      updatedAt: 1,
+    });
     if (oldest) await oldest.deleteOne();
   }
 
@@ -48,13 +52,39 @@ async function handleSaveMemory(
       scope,
       username: scope === "global" ? null : username,
       createdBy: username ?? "unknown",
+      pinned,
+      source: "user",
     },
     { upsert: true },
   );
 
   return {
     success: true,
-    message: `Remembered "${key}" for ${scope === "global" ? "everyone" : username}`,
+    message: `${pinned ? "Pinned" : "Remembered"} "${key}" for ${scope === "global" ? "everyone" : username}`,
+  };
+}
+
+async function handlePinMemory(
+  key: string | null,
+  scope: "global" | "user",
+  username: string | null,
+  pinned: boolean,
+) {
+  if (!key) return { error: "Key is required" };
+  if (scope === "user" && !username) {
+    return { error: "Username required for user-scoped memories" };
+  }
+  const filter =
+    scope === "global"
+      ? { key, scope: "global" }
+      : { key, scope: "user", username };
+  const result = await Memory.updateOne(filter, { $set: { pinned } });
+  if (result.matchedCount === 0) {
+    return { success: false, message: `No memory found for "${key}"` };
+  }
+  return {
+    success: true,
+    message: `${pinned ? "Pinned" : "Unpinned"} "${key}"`,
   };
 }
 
@@ -111,6 +141,8 @@ async function handleListMemories(username: string | null) {
     key: string;
     value: string;
     createdBy: string;
+    pinned: boolean;
+    source: string;
   }[] = [];
 
   const globalMemories = await Memory.find({ scope: "global" });
@@ -120,6 +152,8 @@ async function handleListMemories(username: string | null) {
       key: m.key,
       value: m.value,
       createdBy: m.createdBy,
+      pinned: m.pinned,
+      source: m.source,
     });
   }
 
@@ -131,6 +165,8 @@ async function handleListMemories(username: string | null) {
         key: m.key,
         value: m.value,
         createdBy: m.createdBy,
+        pinned: m.pinned,
+        source: m.source,
       });
     }
   }
@@ -140,10 +176,10 @@ async function handleListMemories(username: string | null) {
 
 export const memoryStoreTool = defineTool("memory_store", {
   description:
-    "Store information to remember for later. Use this when a user asks you to remember something, save a note, or store information. The username is automatically detected from the message context.",
+    "Store, retrieve, pin, or delete memories. PINNED memories are always loaded into context (treat them as the user's persona/core facts). Use 'pin' to mark an existing memory as pinned, 'unpin' to remove that flag. The username is automatically detected.",
   parameters: z.object({
     action: z
-      .enum(["save", "get", "delete", "list"])
+      .enum(["save", "get", "delete", "list", "pin", "unpin"])
       .describe("The action to perform."),
     key: z
       .string()
@@ -160,21 +196,40 @@ export const memoryStoreTool = defineTool("memory_store", {
       .describe(
         "Where to store the memory. Use 'user' for personal info about the current user.",
       ),
+    pinned: z
+      .boolean()
+      .nullable()
+      .describe(
+        "For 'save': whether to pin the memory so it always appears in context. Defaults to false.",
+      ),
   }),
-  handler: async ({ action, key, value, scope }) => {
+  handler: async ({ action, key, value, scope, pinned }) => {
     const username = getContextUsername();
-    toolLogger.info({ action, key, scope, username }, "Memory store operation");
+    toolLogger.info(
+      { action, key, scope, username, pinned },
+      "Memory store operation",
+    );
 
     try {
       switch (action) {
         case "save":
-          return await handleSaveMemory(key, value, scope, username);
+          return await handleSaveMemory(
+            key,
+            value,
+            scope,
+            username,
+            pinned ?? false,
+          );
         case "get":
           return await handleGetMemory(key, scope, username);
         case "delete":
           return await handleDeleteMemory(key, scope, username);
         case "list":
           return await handleListMemories(username);
+        case "pin":
+          return await handlePinMemory(key, scope, username, true);
+        case "unpin":
+          return await handlePinMemory(key, scope, username, false);
         default:
           return { error: `Unknown action: ${action}` };
       }
@@ -192,7 +247,7 @@ export const memoryStoreTool = defineTool("memory_store", {
 
 // Helper to collect memories with length limit
 function collectMemoryLines(
-  memories: Array<{ key: string; value: string }>,
+  memories: Array<{ key: string; value: string; pinned?: boolean }>,
   header: string,
   currentLength: number,
   maxLength: number,
@@ -206,7 +261,8 @@ function collectMemoryLines(
 
   lines.push(header);
   for (const m of memories) {
-    const line = `• ${m.key}: ${m.value}`;
+    const marker = m.pinned ? "[PINNED] " : "";
+    const line = `• ${marker}${m.key}: ${m.value}`;
     if (length + line.length > maxLength) {
       lines.push("... (truncated)");
       break;
@@ -233,7 +289,10 @@ export const memoryRecallTool = defineTool("memory_recall", {
     let currentLength = 0;
 
     if (include_global) {
-      const globalMemories = await Memory.find({ scope: "global" });
+      const globalMemories = await Memory.find({ scope: "global" }).sort({
+        pinned: -1,
+        updatedAt: -1,
+      });
       const { lines, newLength } = collectMemoryLines(
         globalMemories,
         "=== Global Memories ===",
@@ -245,7 +304,10 @@ export const memoryRecallTool = defineTool("memory_recall", {
     }
 
     if (username) {
-      const userMemories = await Memory.find({ scope: "user", username });
+      const userMemories = await Memory.find({ scope: "user", username }).sort({
+        pinned: -1,
+        updatedAt: -1,
+      });
       const { lines } = collectMemoryLines(
         userMemories,
         `=== Memories about ${username} ===`,

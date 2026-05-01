@@ -2,7 +2,8 @@ import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { AttachmentBuilder, EmbedBuilder } from "discord.js";
 import { toolLogger } from "../logger";
-import { getToolContext } from "../utils/types";
+import { toolContextManager } from "../utils/types";
+import { env } from "../env";
 
 interface ImageGenerationResponse {
   choices?: Array<{
@@ -114,7 +115,7 @@ export const generateImageTool = defineTool("generate_image", {
       .describe("Resolution: '1K', '2K', or '4K'."),
   }),
   handler: async ({ prompt, aspect_ratio, image_size }) => {
-    const ctx = getToolContext();
+    const ctx = toolContextManager.get();
 
     if (!ctx.channel || !("send" in ctx.channel)) {
       return { error: "No valid channel context available" };
@@ -131,7 +132,7 @@ export const generateImageTool = defineTool("generate_image", {
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${Bun.env.MODEL_TOKEN}`,
+            Authorization: `Bearer ${env.MODEL_TOKEN}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify(

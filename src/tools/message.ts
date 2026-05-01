@@ -1,7 +1,7 @@
 import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
-import { getToolContext } from "../utils/types";
+import { toolContextManager, type ToolContext } from "../utils/types";
 import { ChannelType, TextChannel, Message } from "discord.js";
 
 interface ReactionInfo {
@@ -46,7 +46,7 @@ function filterMessages(
 async function getChannelsToSearch(
   channelName: string | null,
   searchAllChannels: boolean | null,
-  ctx: ReturnType<typeof getToolContext>,
+  ctx: ToolContext,
 ): Promise<TextChannel[] | string> {
   if (searchAllChannels && ctx.guild) {
     const channels = await ctx.guild.channels.fetch();
@@ -177,7 +177,7 @@ export const searchMessagesTool = defineTool("search_messages", {
     limit,
     include_reactions,
   }) => {
-    const ctx = getToolContext();
+    const ctx = toolContextManager.get();
 
     if (!ctx.guild && search_all_channels) {
       return { error: "Cannot search all channels outside of a server" };
@@ -336,7 +336,7 @@ For "clean this channel" or "delete all messages" requests, use count=100.`,
       .describe("Only delete messages containing this text."),
   }),
   handler: async ({ message_ids, author, count, contains }) => {
-    const ctx = getToolContext();
+    const ctx = toolContextManager.get();
 
     if (!ctx.channel || !("messages" in ctx.channel)) {
       return { error: "No valid channel context for message deletion" };

@@ -1,54 +1,42 @@
 // Main AI module - re-exports all public APIs
 
 // Client management
-export { initializeCopilotClient, getProviderConfig, MODEL } from "./client";
-import { stopClient } from "./client";
-import { destroyAllSessions, getActiveSessionCount } from "./session";
-import { aiLogger } from "../logger";
+export { copilotClientManager } from "./client";
 
 // Session management
-export { loadPersistedSessions, invalidateSession } from "./session";
+export { sessionManager } from "./session";
 
 // Context and memory
-export {
-  rememberMessage,
-  getMemoryContext,
-  isOngoingConversation,
-  loadLastInteractions,
-  type ChatMessage,
-} from "./context";
+export { conversationContext, type ChatMessage } from "./context";
 
-// Chat function
-export { chat, type ChatOptions } from "./chat";
+// Chat
+export { chatService, type ChatOptions } from "./chat";
 
 // Classifier
-export { shouldReply } from "./classifier";
+export { replyClassifier } from "./classifier";
 
-// Permissions (for Discord button-based approval of shell/write/etc)
-export {
-  setPermissionContext,
-  clearPermissionContext,
-  type PermissionContext,
-} from "./permissions";
+// Permissions
+export { permissionManager, type PermissionContext } from "./permissions";
 
-// System prompt (for reference/testing)
+// System prompt
 export { systemPrompt } from "./prompt";
 
-/**
- * Gracefully shutdown the Copilot client and all sessions.
- * Call this on app shutdown.
- */
+// Auto-extraction (c.ai-style long-term memory)
+export { autoExtractFacts } from "./extraction";
+
+// Convenience shutdown
+import { sessionManager } from "./session";
+import { copilotClientManager } from "./client";
+import { aiLogger } from "../logger";
+
 export async function shutdownCopilotClient(): Promise<void> {
   aiLogger.info(
-    { sessionCount: getActiveSessionCount() },
+    { sessionCount: sessionManager.getActiveCount() },
     "Shutting down Copilot client",
   );
 
-  // Destroy all active sessions
-  await destroyAllSessions();
-
-  // Stop the client
-  await stopClient();
+  await sessionManager.destroyAll();
+  await copilotClientManager.stop();
 
   aiLogger.info("Copilot client shutdown complete");
 }

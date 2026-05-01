@@ -1,4 +1,5 @@
 import { MCPServer } from "./base";
+import { env } from "../env";
 import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import {
   getSmitheryTokens,
@@ -141,13 +142,13 @@ export abstract class SmitheryMCPServer extends MCPServer {
     // Check cache for this server
     if (cachedTokens.has(this.slug)) return true;
     // Fallback to env for initial load before DB is checked
-    return !!Bun.env.SMITHERY_ACCESS_TOKEN;
+    return !!env.SMITHERY_ACCESS_TOKEN;
   }
 
   protected getHeaders(): Record<string, string> | undefined {
     // Use cached token for this server, or env fallback
     const token =
-      cachedTokens.get(this.slug)?.accessToken ?? Bun.env.SMITHERY_ACCESS_TOKEN;
+      cachedTokens.get(this.slug)?.accessToken ?? env.SMITHERY_ACCESS_TOKEN;
     return token ? { Authorization: `Bearer ${token}` } : undefined;
   }
 

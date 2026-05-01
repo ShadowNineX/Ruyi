@@ -5,11 +5,15 @@ import {
   GatewayIntentBits,
   REST,
   Routes,
+  type Interaction,
   type Message,
   type GuildTextBasedChannel,
+  type TextChannel,
 } from "discord.js";
-import { chat, shouldReply, rememberMessage } from "./ai";
-import { setToolContext } from "./tools";
+import { chatService, replyClassifier, conversationContext } from "./ai";
+import { runWithToolContext, type ToolContext } from "./utils/types";
+import { env } from "./env";
+import { selfRespondingToolNames } from "./tools";
 import { botLogger } from "./logger";
 import { handleCommands } from "./commands";
 import {
@@ -27,261 +31,322 @@ import {
   sendReplyChunks,
   getErrorMessage,
 } from "./utils/messages";
-import { startMessageSync, deleteMessageFromDb } from "./services/messageSync";
+import { messageSyncService } from "./services/messageSync";
 
-export const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers,
-  ],
-});
+interface ResponseGate {
+  isMentioned: boolean;
+  isDM: boolean;
+  isReplyToBot: boolean;
+}
 
-const SELF_RESPONDING_TOOLS = new Set(["send_embed", "generate_image"]);
-
-function setDefaultPresence() {
-  client.user?.setPresence({
-    activities: [{ name: "Serving...", type: ActivityType.Watching }],
+export class RuyiBot {
+  readonly client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+      GatewayIntentBits.GuildMembers,
+    ],
   });
-}
 
-function setTypingStatus(username: string) {
-  client.user?.setActivity(`Assisting ${username}...`, {
-    type: ActivityType.Custom,
-    state: `Assisting ${username}...`,
-  });
-}
+  // ---- Presence helpers ----------------------------------------------------
 
-async function shouldBotRespond(
-  content: string,
-  username: string,
-  channelName: string | null,
-  isMentioned: boolean,
-  isDM: boolean,
-  isReplyToBot: boolean,
-  channelId: string,
-): Promise<boolean> {
-  // Skip shouldReply check entirely for mentions, DMs, or replies to bot - always respond
-  if (isMentioned || isDM || isReplyToBot) {
-    botLogger.info(
-      {
-        user: username,
-        channel: channelName,
-        mentioned: isMentioned,
-        dm: isDM,
-        replyToBot: isReplyToBot,
-      },
-      "Replying to mention/DM/reply",
-    );
-    return true;
-  }
-
-  // Only run shouldReply for standalone messages (saves tokens)
-  try {
-    botLogger.debug(
-      { user: username, channel: channelName, content: content.slice(0, 50) },
-      "Checking if should reply to standalone message",
-    );
-    const shouldRespond = await shouldReply(
-      content,
-      client.user?.username ?? "Bot",
-      channelId,
-    );
-    if (shouldRespond) {
-      botLogger.info(
-        { user: username, channel: channelName, content: content.slice(0, 50) },
-        "Decided to reply to message",
-      );
-    } else {
-      botLogger.debug(
-        { user: username, channel: channelName, content: content.slice(0, 50) },
-        "Decided NOT to reply to message",
-      );
-    }
-    return shouldRespond;
-  } catch (error) {
-    botLogger.error(
-      {
-        error: (error as Error)?.message,
-        user: username,
-        channel: channelName,
-        content: content.slice(0, 50),
-      },
-      "Error checking if should reply",
-    );
-    return false;
-  }
-}
-
-async function handleAIChat(message: Message): Promise<void> {
-  const isMentioned = message.mentions.has(client.user!);
-  const isDM = message.channel.isDMBased();
-  const isReplyToBot =
-    message.reference?.messageId != null &&
-    (await message.channel.messages
-      .fetch(message.reference.messageId)
-      .then((msg) => msg.author.id === client.user!.id)
-      .catch(() => false));
-  const content = message.content.trim();
-
-  const username = message.author.username;
-  const channelName = "name" in message.channel ? message.channel.name : "DM";
-
-  const shouldRespond = await shouldBotRespond(
-    content,
-    username,
-    channelName,
-    isMentioned,
-    isDM,
-    isReplyToBot,
-    message.channel.id,
-  );
-
-  if (!shouldRespond) return;
-
-  const session = new ChatSession(message.channel);
-  session.startTyping();
-  setTypingStatus(message.author.displayName);
-
-  const [replyChain, chatHistory, referencedMessage] = await Promise.all([
-    fetchReplyChain(message),
-    fetchChatHistory(message),
-    fetchReferencedMessage(message),
-  ]);
-
-  const combinedHistory = [...replyChain, ...chatHistory];
-  botLogger.debug(
-    {
-      replyChainLength: replyChain.length,
-      historyCount: chatHistory.length,
-    },
-    "Fetched message context",
-  );
-
-  const channel = "name" in message.channel ? message.channel : null;
-  setToolContext(message, channel as any, message.guild, referencedMessage);
-
-  await session.sendStatusEmbed(message);
-
-  // Cast channel - permission prompts work best in guild channels
-  // DMs will still work but permissions may auto-deny if context is missing
-  const guildChannel = message.channel as GuildTextBasedChannel;
-
-  try {
-    const reply = await chat({
-      userMessage: content,
-      username,
-      channelId: message.channel.id,
-      channel: guildChannel,
-      userId: message.author.id,
-      session,
-      chatHistory: combinedHistory,
-      messageId: message.id,
+  private setDefaultPresence() {
+    this.client.user?.setPresence({
+      activities: [{ name: "Serving...", type: ActivityType.Watching }],
     });
+  }
+
+  private setTypingStatus(username: string) {
+    this.client.user?.setActivity(`Assisting ${username}...`, {
+      type: ActivityType.Custom,
+      state: `Assisting ${username}...`,
+    });
+  }
+
+  // ---- Reply gating --------------------------------------------------------
+
+  private async computeResponseGate(message: Message): Promise<ResponseGate> {
+    const botUser = this.client.user;
+    const isMentioned = botUser ? message.mentions.has(botUser) : false;
+    const isDM = message.channel.isDMBased();
+
+    let isReplyToBot = false;
+    if (botUser && message.reference?.messageId) {
+      isReplyToBot = await message.channel.messages
+        .fetch(message.reference.messageId)
+        .then((msg) => msg.author.id === botUser.id)
+        .catch((error: unknown) => {
+          botLogger.debug(
+            {
+              error: (error as Error)?.message,
+              referencedMessageId: message.reference?.messageId,
+              channelId: message.channel.id,
+            },
+            "Could not fetch referenced message for reply-to-bot check",
+          );
+          return false;
+        });
+    }
+
+    return { isMentioned, isDM, isReplyToBot };
+  }
+
+  private async shouldBotRespond(
+    message: Message,
+    gate: ResponseGate,
+  ): Promise<boolean> {
+    const username = message.author.username;
+    const channelName = "name" in message.channel ? message.channel.name : "DM";
+
+    if (gate.isMentioned || gate.isDM || gate.isReplyToBot) {
+      botLogger.info(
+        { user: username, channel: channelName, ...gate },
+        "Replying to mention/DM/reply",
+      );
+      return true;
+    }
+
+    try {
+      const shouldRespond = await replyClassifier.shouldReply(
+        message.content.trim(),
+        this.client.user?.username ?? "Bot",
+        message.channel.id,
+      );
+      botLogger.debug(
+        {
+          user: username,
+          channel: channelName,
+          decision: shouldRespond ? "reply" : "skip",
+        },
+        "Reply classifier decision",
+      );
+      return shouldRespond;
+    } catch (error) {
+      botLogger.error(
+        { error: (error as Error)?.message, user: username },
+        "Reply classifier failed; skipping",
+      );
+      return false;
+    }
+  }
+
+  // ---- Chat handling -------------------------------------------------------
+
+  private async buildToolContext(message: Message): Promise<ToolContext> {
+    const referencedMessage = await fetchReferencedMessage(message);
+    const channel: TextChannel | null =
+      "name" in message.channel && "messages" in message.channel
+        ? (message.channel as TextChannel)
+        : null;
+
+    return {
+      message,
+      channel,
+      guild: message.guild,
+      referencedMessage,
+    };
+  }
+
+  private async runChat(
+    message: Message,
+    session: ChatSession,
+    toolCtx: ToolContext,
+  ): Promise<void> {
+    const username = message.author.username;
+    const guildChannel = message.channel as GuildTextBasedChannel;
+
+    const [replyChain, chatHistory] = await Promise.all([
+      fetchReplyChain(message),
+      fetchChatHistory(message),
+    ]);
+    const combinedHistory = [...replyChain, ...chatHistory];
+
+    botLogger.debug(
+      {
+        replyChainLength: replyChain.length,
+        historyCount: chatHistory.length,
+      },
+      "Fetched message context",
+    );
+
+    await session.sendStatusEmbed(message);
+
+    const reply = await runWithToolContext(toolCtx, () =>
+      chatService.chat({
+        userMessage: message.content.trim(),
+        username,
+        channelId: message.channel.id,
+        channel: guildChannel,
+        userId: message.author.id,
+        session,
+        chatHistory: combinedHistory,
+        messageId: message.id,
+      }),
+    );
+
     await session.deleteStatusEmbed();
 
     if (reply) {
       const sentChunks = await sendReplyChunks(message, reply, username);
-      for (const chunk of sentChunks) {
-        rememberMessage(
+      // Store the full assembled reply once, anchored to the first chunk's
+      // message ID, instead of writing one DB row per Discord chunk. The
+      // persistent CopilotSession already retains the full reply server-side;
+      // the DB copy exists for the auto-extractor and for restart fallback.
+      const anchorId = sentChunks[0]?.id;
+      if (anchorId) {
+        conversationContext.rememberMessage(
           message.channel.id,
           "Ruyi",
-          chunk.content,
+          reply,
           true,
-          chunk.id,
+          anchorId,
         );
       }
-    } else {
-      const usedSelfRespondingTool = session.usedSelfRespondingTool(
-        SELF_RESPONDING_TOOLS,
+      return;
+    }
+
+    if (!session.usedSelfRespondingTool(selfRespondingToolNames)) {
+      botLogger.warn(
+        {
+          user: username,
+          channelId: message.channel.id,
+          messageId: message.id,
+        },
+        "Chat returned empty reply and no self-responding tool was used",
       );
-      if (!usedSelfRespondingTool) {
-        await message.reply("I was unable to generate a response.");
+      try {
+        await message.reply(
+          "Forgive me, my lord — your humble servant could not produce a reply this time. Please try again in a moment.",
+        );
+      } catch (replyError) {
+        botLogger.error(
+          {
+            error: (replyError as Error).message,
+            channelId: message.channel.id,
+          },
+          "Failed to send empty-reply notice",
+        );
       }
     }
-  } catch (error) {
-    const err = error as {
-      status?: number;
-      code?: number;
-      error?: { message?: string };
-    };
-    botLogger.error(
-      {
-        status: err?.status || err?.code,
-        error: err?.error?.message,
-        user: username,
-      },
-      "Failed to generate reply",
-    );
-    await session.deleteStatusEmbed();
-    await message.reply(getErrorMessage(error));
-  } finally {
-    session.cleanup();
-    setDefaultPresence();
   }
-}
 
-async function registerSlashCommands() {
-  const token = Bun.env.DISCORD_TOKEN!;
-  const rest = new REST().setToken(token);
+  private async handleAIChat(message: Message): Promise<void> {
+    const gate = await this.computeResponseGate(message);
+    if (!(await this.shouldBotRespond(message, gate))) return;
 
-  try {
-    const commands = slashCommands.map((cmd) => cmd.toJSON());
-    await rest.put(Routes.applicationCommands(client.user!.id), {
-      body: commands,
-    });
-    botLogger.info({ count: commands.length }, "Registered slash commands");
-  } catch (error) {
-    botLogger.error({ error }, "Failed to register slash commands");
+    const session = new ChatSession(message.channel);
+    session.startTyping();
+    this.setTypingStatus(message.author.displayName);
+
+    const toolCtx = await this.buildToolContext(message);
+
+    try {
+      await this.runChat(message, session, toolCtx);
+    } catch (error) {
+      const err = error as {
+        status?: number;
+        code?: number;
+        error?: { message?: string };
+        message?: string;
+        stack?: string;
+        name?: string;
+      };
+      botLogger.error(
+        {
+          status: err?.status ?? err?.code,
+          name: err?.name,
+          error: err?.error?.message ?? err?.message,
+          stack: err?.stack,
+          user: message.author.username,
+          channelId: message.channel.id,
+          messageId: message.id,
+        },
+        "Failed to generate reply",
+      );
+      await session.deleteStatusEmbed();
+      try {
+        await message.reply(getErrorMessage(error));
+      } catch (replyError) {
+        botLogger.error(
+          {
+            error: (replyError as Error).message,
+            channelId: message.channel.id,
+          },
+          "Failed to send error reply to user",
+        );
+      }
+    } finally {
+      session.cleanup();
+      this.setDefaultPresence();
+    }
   }
-}
 
-export function registerEvents() {
-  client.once(Events.ClientReady, async (readyClient) => {
-    botLogger.info({ tag: readyClient.user.tag }, "Bot logged in");
-    setDefaultPresence();
-    await registerSlashCommands();
-    startMessageSync(client);
-  });
+  // ---- Slash command registration -----------------------------------------
 
-  client.on(Events.InteractionCreate, async (interaction) => {
+  private async registerSlashCommands() {
+    const rest = new REST().setToken(env.DISCORD_TOKEN);
+    try {
+      const commands = slashCommands.map((cmd) => cmd.toJSON());
+      await rest.put(Routes.applicationCommands(this.client.user!.id), {
+        body: commands,
+      });
+      botLogger.info({ count: commands.length }, "Registered slash commands");
+    } catch (error) {
+      botLogger.error({ error }, "Failed to register slash commands");
+    }
+  }
+
+  private readonly dispatchInteraction = async (
+    interaction: Interaction,
+  ): Promise<void> => {
     if (interaction.isChatInputCommand()) {
       await handleSlashCommand(interaction);
-    } else if (interaction.isStringSelectMenu()) {
-      if (interaction.customId === "smithery_select_server") {
-        await handleSmitherySelect(interaction);
-      }
-    } else if (interaction.isButton()) {
-      if (interaction.customId === "smithery_enter_code") {
-        await handleSmitheryCodeButton(interaction);
-      }
-    } else if (interaction.isModalSubmit()) {
-      if (interaction.customId === "smithery_code_modal") {
-        await handleSmitheryModal(interaction);
-      }
+    } else if (
+      interaction.isStringSelectMenu() &&
+      interaction.customId === "smithery_select_server"
+    ) {
+      await handleSmitherySelect(interaction);
+    } else if (
+      interaction.isButton() &&
+      interaction.customId === "smithery_enter_code"
+    ) {
+      await handleSmitheryCodeButton(interaction);
+    } else if (
+      interaction.isModalSubmit() &&
+      interaction.customId === "smithery_code_modal"
+    ) {
+      await handleSmitheryModal(interaction);
     }
-  });
+  };
 
-  client.on(Events.MessageCreate, async (message) => {
-    if (message.author.bot) return;
-    if (await handleCommands(message)) return;
-    await handleAIChat(message);
-  });
+  registerEvents() {
+    this.client.once(Events.ClientReady, async (readyClient) => {
+      botLogger.info({ tag: readyClient.user.tag }, "Bot logged in");
+      this.setDefaultPresence();
+      await this.registerSlashCommands();
+      messageSyncService.start(this.client);
+    });
 
-  client.on(Events.MessageDelete, async (message) => {
-    if (message.id && message.channelId) {
-      await deleteMessageFromDb(message.channelId, message.id);
-    }
-  });
-}
+    this.client.on(Events.InteractionCreate, this.dispatchInteraction);
 
-export function startBot() {
-  const token = Bun.env.DISCORD_TOKEN;
-  if (!token) {
-    botLogger.fatal("DISCORD_TOKEN environment variable is not set!");
-    process.exit(1);
+    this.client.on(Events.MessageCreate, async (message) => {
+      if (message.author.bot) return;
+      if (await handleCommands(message)) return;
+      await this.handleAIChat(message);
+    });
+
+    this.client.on(Events.MessageDelete, async (message) => {
+      if (message.id && message.channelId) {
+        await messageSyncService.deleteMessage(message.channelId, message.id);
+      }
+    });
   }
-  botLogger.info("Starting bot...");
-  return client.login(token);
+
+  start() {
+    botLogger.info("Starting bot...");
+    return this.client.login(env.DISCORD_TOKEN);
+  }
 }
+
+export const ruyiBot = new RuyiBot();

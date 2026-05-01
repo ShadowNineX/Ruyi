@@ -1,4 +1,5 @@
 import { MCPServer } from "./base";
+import { env } from "../env";
 
 /**
  * GitHub MCP server configuration.
@@ -18,11 +19,11 @@ export class GitHubMCPServer extends MCPServer {
   protected readonly url = "https://api.githubcopilot.com/mcp/";
 
   isEnabled(): boolean {
-    return !!Bun.env.GITHUB_TOKEN;
+    return !!env.GITHUB_TOKEN;
   }
 
   protected getHeaders(): Record<string, string> | undefined {
-    const token = Bun.env.GITHUB_TOKEN;
+    const token = env.GITHUB_TOKEN;
     return token ? { Authorization: `Bearer ${token}` } : undefined;
   }
 }

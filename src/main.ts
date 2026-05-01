@@ -1,16 +1,17 @@
 import { connectDB } from "./db";
-import { loadConfig } from "./config";
+import { configManager } from "./config";
 import {
-  loadLastInteractions,
-  initializeCopilotClient,
-  loadPersistedSessions,
+  copilotClientManager,
+  sessionManager,
+  conversationContext,
   shutdownCopilotClient,
 } from "./ai";
-import { registerEvents, startBot } from "./bot";
+import { ruyiBot } from "./bot";
 import { allTools } from "./tools";
-import { logMcpServersHealth } from "./mcp";
+import { mcpRegistry } from "./mcp";
 import { SmitheryMCPServer } from "./mcp/smithery";
-import { initializeMcpTools, closeMcpConnections } from "./mcp/client";
+import { mcpConnectionManager } from "./mcp/client";
+import { logger, botLogger } from "./logger";
 
 // Connect to MongoDB first (needed for Smithery tokens)
 await connectDB();
@@ -18,64 +19,70 @@ await connectDB();
 // Initialize Smithery tokens from database
 const smitheryStatus = await SmitheryMCPServer.initializeTokens();
 if (!smitheryStatus.brave && !smitheryStatus.youtube) {
-  console.log("⚠️  No Smithery tokens found. Run /smithery to authorize.");
+  logger.warn("No Smithery tokens found. Run /smithery to authorize.");
 } else {
-  const authorized = [];
+  const authorized: string[] = [];
   if (smitheryStatus.brave) authorized.push("Brave");
   if (smitheryStatus.youtube) authorized.push("YouTube");
-  console.log(`✅ Smithery tokens loaded: ${authorized.join(", ")}`);
+  logger.info({ authorized }, "Smithery tokens loaded");
 }
 
 // Log MCP server status with health check
-await logMcpServersHealth();
+await mcpRegistry.logHealth();
 
 // Initialize MCP tools via wrapper (connects to Smithery servers)
-const mcpTools = await initializeMcpTools();
+const mcpTools = await mcpConnectionManager.initialize();
 
-// Combine all tools
-const allAvailableTools = [...allTools, ...mcpTools];
-
-// Log registered tools
-console.log("\n" + "=".repeat(60));
-console.log("REGISTERED TOOLS");
-console.log("=".repeat(60));
-for (const tool of allTools) {
-  console.log(`  • ${tool.name}`);
-}
-if (mcpTools.length > 0) {
-  console.log("\nMCP Tools:");
-  for (const tool of mcpTools) {
-    console.log(`  • ${tool.name} (MCP)`);
-  }
-}
-console.log(
-  `\nTotal: ${allAvailableTools.length} tools (${allTools.length} local + ${mcpTools.length} MCP)`,
+logger.info(
+  {
+    local: allTools.map((t) => t.name),
+    mcp: mcpTools.map((t) => t.name),
+    total: allTools.length + mcpTools.length,
+  },
+  "Tools registered",
 );
-console.log("=".repeat(60));
 
 // Load config and conversation cache from DB
-await loadConfig();
-await loadLastInteractions();
+await configManager.load();
+await conversationContext.loadLastInteractions();
 
 // Initialize the CopilotClient and load persisted sessions
-await initializeCopilotClient();
-await loadPersistedSessions();
+await copilotClientManager.initialize();
+await sessionManager.loadPersisted();
 
 // Start the bot
-registerEvents();
-startBot();
+ruyiBot.registerEvents();
+ruyiBot.start();
 
 // Graceful shutdown handling
-process.on("SIGINT", async () => {
-  console.log("\nReceived SIGINT, shutting down gracefully...");
-  await closeMcpConnections();
+async function shutdown(signal: string): Promise<void> {
+  botLogger.info({ signal }, "Shutting down gracefully");
+  await mcpConnectionManager.closeAll();
   await shutdownCopilotClient();
   process.exit(0);
+}
+
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+
+// Catch-all safety nets so async failures don't disappear silently.
+process.on("unhandledRejection", (reason) => {
+  const err = reason as Error;
+  logger.error(
+    {
+      error: err?.message ?? String(reason),
+      stack: err?.stack,
+      name: err?.name,
+    },
+    "Unhandled promise rejection",
+  );
 });
 
-process.on("SIGTERM", async () => {
-  console.log("\nReceived SIGTERM, shutting down gracefully...");
-  await closeMcpConnections();
-  await shutdownCopilotClient();
-  process.exit(0);
+process.on("uncaughtException", (error) => {
+  logger.fatal(
+    { error: error.message, stack: error.stack, name: error.name },
+    "Uncaught exception — shutting down",
+  );
+  // Best-effort cleanup, then exit.
+  void shutdown("uncaughtException").catch(() => process.exit(1));
 });

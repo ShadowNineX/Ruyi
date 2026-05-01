@@ -1,7 +1,7 @@
 import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
-import { getToolContext } from "../utils/types";
+import { toolContextManager } from "../utils/types";
 
 export const userInfoTool = defineTool("get_user_info", {
   description:
@@ -10,7 +10,7 @@ export const userInfoTool = defineTool("get_user_info", {
     username: z.string().describe("Username to look up"),
   }),
   handler: async ({ username }) => {
-    const { guild } = getToolContext();
+    const { guild } = toolContextManager.get();
     if (!guild) {
       toolLogger.warn("get_user_info called without guild context");
       return { error: "Not in a server" };

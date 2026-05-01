@@ -4,7 +4,7 @@ import {
   MessageFlags,
   type ChatInputCommandInteraction,
 } from "discord.js";
-import { getPrefix, setPrefix } from "../config";
+import { configManager } from "../config";
 import { botLogger } from "../logger";
 
 export const prefixCommand = new SlashCommandBuilder()
@@ -26,14 +26,14 @@ export async function handlePrefixCommand(
 
   if (!newPrefix) {
     await interaction.reply({
-      content: `Current prefix: \`${getPrefix()}\``,
+      content: `Current prefix: \`${configManager.getPrefix()}\``,
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
-  const oldPrefix = getPrefix();
-  setPrefix(newPrefix);
+  const oldPrefix = configManager.getPrefix();
+  configManager.setPrefix(newPrefix);
 
   botLogger.info(
     { oldPrefix, newPrefix, user: interaction.user.username },

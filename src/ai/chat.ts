@@ -2,16 +2,15 @@ import type { SessionEvent } from "@github/copilot-sdk";
 import type { GuildTextBasedChannel } from "discord.js";
 import { allTools } from "../tools";
 import { aiLogger } from "../logger";
-import { getMcpServerForTool } from "../mcp";
+import { mcpRegistry } from "../mcp";
+import { env } from "../env";
+import { CHAT_TIMEOUT_MS } from "../constants";
 import type { ChatSession } from "../utils/chatSession";
 import { systemPrompt } from "./prompt";
-import { getOrCreateSession, invalidateSession } from "./session";
-import {
-  rememberMessage,
-  buildDynamicContext,
-  type ChatMessage,
-} from "./context";
-import { setPermissionContext, clearPermissionContext } from "./permissions";
+import { sessionManager } from "./session";
+import { conversationContext, type ChatMessage } from "./context";
+import { permissionManager } from "./permissions";
+import { autoExtractFacts } from "./extraction";
 
 export interface ChatOptions {
   userMessage: string;
@@ -24,94 +23,163 @@ export interface ChatOptions {
   messageId?: string;
 }
 
-// Main chat function with tool usage - uses persistent CopilotClient sessions
-export async function chat(options: ChatOptions): Promise<string | null> {
-  const {
-    userMessage,
-    username,
-    channelId,
-    channel,
-    userId,
-    session,
-    chatHistory = [],
-    messageId,
-  } = options;
+const INTERNAL_SDK_TOOLS = new Set(["report_intent", "report_progress"]);
 
-  // Set permission context so the permission handler can prompt the user
-  setPermissionContext(channelId, { channel, userId });
+function formatToolDisplayName(
+  toolName: string,
+  isLocal: boolean,
+  mcpServer: string | null | undefined,
+): string {
+  if (isLocal) return toolName;
+  if (mcpServer) return `${mcpServer}:${toolName}`;
+  return `mcp:${toolName}`;
+}
 
-  // Build dynamic context to prepend to the user message
-  // This includes current user, time, memories, and conversation history
-  const dynamicContext = await buildDynamicContext(
-    username,
-    channelId,
-    chatHistory,
-  );
-
-  // Prepend context to the user message so the model has current info
-  const enrichedMessage = `${dynamicContext}\n\nUser message from ${username}:\n${userMessage}`;
-
-  // DEBUG: Print full prompt to console
-  console.log("\n" + "=".repeat(80));
-  console.log("SYSTEM PROMPT (set once on session creation):");
-  console.log("=".repeat(80));
-  console.log(systemPrompt);
-  console.log("\n" + "=".repeat(80));
-  console.log("ENRICHED USER MESSAGE (sent with each message):");
-  console.log("=".repeat(80));
-  console.log(enrichedMessage);
-  console.log("=".repeat(80) + "\n");
-
-  // DEBUG: Log exactly what we're sending
-  aiLogger.info(
-    {
+export class ChatService {
+  async chat(options: ChatOptions): Promise<string | null> {
+    const {
       userMessage,
       username,
-      contextLength: dynamicContext.length,
-      historyCount: chatHistory.length,
-    },
-    "DEBUG: Chat input",
-  );
+      channelId,
+      channel,
+      userId,
+      session,
+      chatHistory = [],
+      messageId,
+    } = options;
 
-  rememberMessage(channelId, username, userMessage, false, messageId);
-  session.onThinking();
+    permissionManager.setContext(channelId, { channel, userId });
 
-  try {
-    // Get or create a persistent session for this channel
-    // Pass the base system prompt for new sessions
-    const copilotSession = await getOrCreateSession(channelId, systemPrompt);
-
-    // DEBUG: Log the tools being passed
-    aiLogger.info(
-      {
-        channelId,
-        sessionId: copilotSession.sessionId,
-        toolCount: allTools.length,
-      },
-      "DEBUG: Using persistent session",
+    const dynamicContext = await conversationContext.buildDynamicContext(
+      username,
+      channelId,
+      chatHistory,
     );
 
-    // Track tool names by call ID for execution_complete events
-    const toolCallMap = new Map<string, string>();
+    const enrichedMessage = `${dynamicContext}\n\nUser message from ${username}:\n${userMessage}`;
 
-    // Get registered tool names to identify local vs MCP tools
-    const registeredToolNames = new Set(allTools.map((t) => t.name));
+    if (env.DEBUG_PROMPTS) {
+      aiLogger.debug({ systemPrompt }, "system prompt (debug dump)");
+      aiLogger.debug({ enrichedMessage }, "enriched user message (debug dump)");
+    }
 
-    // SDK internal tools to filter out (these are not user-facing)
-    const internalTools = new Set(["report_intent", "report_progress"]);
+    aiLogger.info(
+      {
+        username,
+        contextLength: dynamicContext.length,
+        historyCount: chatHistory.length,
+        userMessagePreview: userMessage.slice(0, 80),
+      },
+      "Chat input received",
+    );
 
-    // Set up event handlers for tool tracking and typing indicator
-    // Note: We set up handlers for each message since the session persists
-    const unsubscribe = copilotSession.on((event: SessionEvent) => {
-      // DEBUG: Log ALL events to see what the SDK is doing
-      aiLogger.debug(
-        {
-          eventType: event.type,
-          eventData: JSON.stringify(event.data).slice(0, 200),
-        },
-        "DEBUG: Session event received",
+    conversationContext.rememberMessage(
+      channelId,
+      username,
+      userMessage,
+      false,
+      messageId,
+    );
+
+    // c.ai-style long-term memory: every N user turns, run a background
+    // extraction pass to harvest durable facts. Best-effort; never blocks.
+    const { shouldExtract } = conversationContext.trackUserMessage(
+      channelId,
+      username,
+    );
+    if (shouldExtract) {
+      conversationContext.markExtracted(channelId, username);
+      void autoExtractFacts(username, channelId).catch((error) =>
+        aiLogger.warn(
+          { error: (error as Error).message, username, channelId },
+          "Background fact extraction crashed",
+        ),
+      );
+    }
+
+    session.onThinking();
+
+    try {
+      const copilotSession = await sessionManager.getOrCreate(
+        channelId,
+        systemPrompt,
       );
 
+      aiLogger.debug(
+        {
+          channelId,
+          sessionId: copilotSession.sessionId,
+          toolCount: allTools.length,
+        },
+        "Using persistent Copilot session",
+      );
+
+      const unsubscribe = this.attachToolEventListener(copilotSession, session);
+
+      const result = await copilotSession.sendAndWait(
+        { prompt: enrichedMessage },
+        CHAT_TIMEOUT_MS,
+      );
+      const finalContent = result?.data.content ?? null;
+
+      unsubscribe();
+
+      aiLogger.info(
+        {
+          responseLength: finalContent?.length ?? 0,
+          preview: finalContent?.slice(0, 200) ?? null,
+        },
+        "Chat response generated",
+      );
+
+      session.onComplete();
+
+      if (!finalContent) {
+        aiLogger.warn(
+          { username, channelId },
+          "Chat request returned empty response from model",
+        );
+      }
+
+      permissionManager.clearContext(channelId);
+
+      return finalContent;
+    } catch (error) {
+      const err = error as Error & { status?: number; code?: number };
+      aiLogger.error(
+        {
+          error: err.message,
+          stack: err.stack,
+          name: err.name,
+          status: err.status ?? err.code,
+          username,
+          channelId,
+        },
+        "Chat request failed",
+      );
+
+      await sessionManager.invalidate(channelId);
+      permissionManager.clearContext(channelId);
+      session.onComplete();
+      // Re-throw so the caller can surface a meaningful error to the user
+      // via getErrorMessage() instead of a generic "no response" string.
+      throw error;
+    }
+  }
+
+  /**
+   * Subscribe to tool execution events on a Copilot session and forward
+   * them to the Discord-side `ChatSession` for status-embed updates.
+   * Returns the unsubscribe function.
+   */
+  private attachToolEventListener(
+    copilotSession: { on: (cb: (event: SessionEvent) => void) => () => void },
+    session: ChatSession,
+  ): () => void {
+    const toolCallMap = new Map<string, string>();
+    const registeredToolNames = new Set(allTools.map((t) => t.name));
+
+    return copilotSession.on((event: SessionEvent) => {
       if (event.type === "tool.execution_start") {
         const data = event.data as {
           toolName: string;
@@ -119,24 +187,15 @@ export async function chat(options: ChatOptions): Promise<string | null> {
           arguments?: unknown;
         };
 
-        // Skip SDK internal tools (like report_intent, report_progress)
-        if (internalTools.has(data.toolName)) {
-          aiLogger.debug({ tool: data.toolName }, "Skipping internal SDK tool");
-          return;
-        }
+        if (INTERNAL_SDK_TOOLS.has(data.toolName)) return;
 
-        // Determine if this is a local tool or MCP tool
         const isLocalTool = registeredToolNames.has(data.toolName);
-        const mcpServer = getMcpServerForTool(data.toolName);
-
-        let displayName: string;
-        if (isLocalTool) {
-          displayName = data.toolName;
-        } else if (mcpServer) {
-          displayName = `${mcpServer}:${data.toolName}`;
-        } else {
-          displayName = `mcp:${data.toolName}`;
-        }
+        const mcpServer = mcpRegistry.getServerForTool(data.toolName);
+        const displayName = formatToolDisplayName(
+          data.toolName,
+          isLocalTool,
+          mcpServer,
+        );
 
         toolCallMap.set(data.toolCallId, displayName);
         aiLogger.info(
@@ -153,8 +212,6 @@ export async function chat(options: ChatOptions): Promise<string | null> {
       } else if (event.type === "tool.execution_complete") {
         const data = event.data as { toolCallId: string };
         const displayName = toolCallMap.get(data.toolCallId);
-
-        // Skip if we didn't track this tool (internal SDK tool)
         if (!displayName) return;
 
         toolCallMap.delete(data.toolCallId);
@@ -163,52 +220,7 @@ export async function chat(options: ChatOptions): Promise<string | null> {
         session.onThinking();
       }
     });
-
-    // Send message and wait for completion - returns the final assistant message
-    // Use 5 minute timeout (300000ms) for tool calls that may take longer (e.g., web search)
-    const result = await copilotSession.sendAndWait(
-      { prompt: enrichedMessage },
-      300000,
-    );
-    const finalContent = result?.data.content ?? null;
-
-    // Unsubscribe from events after this message is done
-    unsubscribe();
-
-    // DEBUG: Log the response
-    aiLogger.info(
-      {
-        responseLength: finalContent?.length ?? 0,
-        responseText: finalContent?.slice(0, 500) ?? "null",
-      },
-      "DEBUG: Chat response",
-    );
-
-    session.onComplete();
-
-    // DON'T destroy the session - keep it alive for future messages
-    // Session will be cleaned up on shutdown or if it becomes invalid
-
-    if (!finalContent) aiLogger.warn("Chat request returned empty response");
-
-    // Clear permission context after chat completes
-    clearPermissionContext(channelId);
-
-    return finalContent;
-  } catch (error) {
-    const err = error as Error;
-    aiLogger.error(
-      { error: err.message, stack: err.stack, name: err.name },
-      "Chat request failed",
-    );
-
-    // If the session errored, invalidate it so a fresh one is created next time
-    await invalidateSession(channelId);
-
-    // Clear permission context on error too
-    clearPermissionContext(channelId);
-
-    session.onComplete();
-    return null;
   }
 }
+
+export const chatService = new ChatService();

@@ -1,7 +1,7 @@
 import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
-import { resolveTargetMessage, formatError } from "../utils/types";
+import { toolContextManager, formatError } from "../utils/types";
 
 export const pinTool = defineTool("manage_pin", {
   description:
@@ -18,7 +18,10 @@ export const pinTool = defineTool("manage_pin", {
       ),
   }),
   handler: async ({ action, message_id }) => {
-    const result = await resolveTargetMessage(message_id, "pin");
+    const result = await toolContextManager.resolveTargetMessage(
+      message_id,
+      "pin",
+    );
     if (!result.success) {
       return { error: result.error };
     }

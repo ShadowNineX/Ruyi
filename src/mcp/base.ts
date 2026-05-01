@@ -58,7 +58,7 @@ export abstract class MCPServer {
   /**
    * Check if a tool name belongs to this MCP server.
    */
-  ownssTool(toolName: string): boolean {
+  ownsTool(toolName: string): boolean {
     return toolName.toLowerCase().startsWith(this.toolPrefix.toLowerCase());
   }
 
@@ -173,25 +173,33 @@ export abstract class MCPServer {
     let transport: StreamableHTTPClientTransport | null = null;
 
     try {
-      // If we have OAuth tokens, use an authProvider
-      // Otherwise fall back to custom fetch with headers
+      // If we have OAuth tokens, use an authProvider.
+      // Otherwise inject static auth headers via a custom fetch wrapper.
       if (tokens) {
         const authProvider = this.createAuthProvider(tokens);
         transport = new StreamableHTTPClientTransport(serverUrl, {
           authProvider,
         });
       } else {
-        // Legacy: use custom fetch with headers
         const headers = this.getHeaders() ?? {};
         const authFetch = async (
-          input: RequestInfo | URL,
+          input: Request | string | URL,
           init?: RequestInit,
         ): Promise<Response> => {
+          // Normalize init.headers — may be a Headers instance (not spreadable as a plain object)
+          let existingHeaders: Record<string, string> = {};
+          if (init?.headers instanceof Headers) {
+            init.headers.forEach((value, key) => {
+              existingHeaders[key] = value;
+            });
+          } else if (init?.headers) {
+            existingHeaders = init.headers as Record<string, string>;
+          }
           const newInit = {
             ...init,
             headers: {
               ...headers,
-              ...(init?.headers as Record<string, string>),
+              ...existingHeaders,
             },
           };
           return fetch(input, newInit);

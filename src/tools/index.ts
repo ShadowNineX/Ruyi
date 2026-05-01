@@ -1,6 +1,3 @@
-// Re-export context management
-export { setToolContext } from "../utils/types";
-
 // Re-export all tools
 export { calculatorTool } from "./calc";
 export { channelInfoTool } from "./channel";
@@ -61,3 +58,15 @@ export const allTools = [
   auditLogTool,
   lastfmTool,
 ] as const;
+
+/**
+ * Tools that produce their own visible Discord output (embed, image, etc.)
+ * and therefore make a missing assistant text reply non-fatal.
+ *
+ * Centralized here so `bot.ts` doesn't have to know about specific tool
+ * names. To mark a new tool as self-responding, add its name to this set.
+ */
+export const selfRespondingToolNames: ReadonlySet<string> = new Set([
+  "send_embed",
+  "generate_image",
+]);

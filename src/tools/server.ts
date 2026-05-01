@@ -1,13 +1,13 @@
 import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
-import { getToolContext } from "../utils/types";
+import { toolContextManager } from "../utils/types";
 
 export const serverInfoTool = defineTool("get_server_info", {
   description: "Get information about the current Discord server",
   parameters: z.object({}),
   handler: async () => {
-    const { guild } = getToolContext();
+    const { guild } = toolContextManager.get();
     if (!guild) {
       toolLogger.warn("get_server_info called without guild context");
       return { error: "Not in a server" };

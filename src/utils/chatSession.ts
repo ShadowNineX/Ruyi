@@ -1,4 +1,5 @@
 import { EmbedBuilder, type Message, type TextBasedChannel } from "discord.js";
+import { botLogger } from "../logger";
 
 export type SessionStatus = "thinking" | "tool" | "complete" | "error";
 
@@ -87,10 +88,20 @@ export class ChatSession {
   startTyping(): void {
     if (this.typingInterval) return;
     if ("sendTyping" in this.channel) {
-      this.channel.sendTyping().catch(() => {});
+      this.channel.sendTyping().catch((error: unknown) => {
+        botLogger.debug(
+          { error: (error as Error)?.message },
+          "sendTyping failed (initial)",
+        );
+      });
       this.typingInterval = setInterval(() => {
         if ("sendTyping" in this.channel) {
-          this.channel.sendTyping().catch(() => {});
+          this.channel.sendTyping().catch((error: unknown) => {
+            botLogger.debug(
+              { error: (error as Error)?.message },
+              "sendTyping failed (periodic)",
+            );
+          });
         }
       }, 8000);
     }
@@ -190,7 +201,7 @@ export class ChatSession {
   }
 
   /** Check if a self-responding tool was used */
-  usedSelfRespondingTool(selfRespondingTools: Set<string>): boolean {
+  usedSelfRespondingTool(selfRespondingTools: ReadonlySet<string>): boolean {
     return [...this.state.toolCounts.keys()].some((t) =>
       selfRespondingTools.has(t),
     );

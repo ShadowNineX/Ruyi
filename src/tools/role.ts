@@ -2,7 +2,7 @@ import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import type { ColorResolvable, Guild, Role, GuildMember } from "discord.js";
 import { toolLogger } from "../logger";
-import { getToolContext } from "../utils/types";
+import { toolContextManager } from "../utils/types";
 
 function parseColor(
   color: string | undefined | null,
@@ -178,7 +178,7 @@ export const manageRoleTool = defineTool("manage_role", {
       ),
   }),
   handler: async ({ action, role_name, new_name, color, username }) => {
-    const { guild } = getToolContext();
+    const { guild } = toolContextManager.get();
     if (!guild) {
       toolLogger.warn("manage_role called without guild context");
       return { error: "Not in a server" };
