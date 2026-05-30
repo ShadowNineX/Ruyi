@@ -31,6 +31,41 @@ export interface MCPHealthCheckResult {
   tools?: string[];
 }
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function getErrorStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+
+  const value =
+    "status" in error
+      ? (error as { status?: unknown }).status
+      : (error as { code?: unknown }).code;
+
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
+
+  return undefined;
+}
+
+function isAuthError(error: unknown): boolean {
+  const status = getErrorStatus(error);
+  if (status === 401 || status === 403) return true;
+
+  const message = getErrorMessage(error).toLowerCase();
+  return (
+    message.includes("401") ||
+    message.includes("403") ||
+    message.includes("unauthorized") ||
+    message.includes("invalid_token") ||
+    message.includes("invalid token")
+  );
+}
+
 /**
  * Base class for MCP server configurations.
  * Extend this class to add new MCP servers.
@@ -54,6 +89,12 @@ export abstract class MCPServer {
   /** Called when the server rejects stored credentials. */
   protected async handleAuthFailure(_error: string): Promise<void> {
     // Base MCP servers may not have credentials to clear.
+  }
+
+  async handleConnectionFailure(error: unknown): Promise<boolean> {
+    if (!isAuthError(error)) return false;
+    await this.handleAuthFailure(getErrorMessage(error));
+    return true;
   }
 
   /**
@@ -131,8 +172,7 @@ export abstract class MCPServer {
       }
     } catch (error) {
       result.responseTimeMs = Math.round(performance.now() - startTime);
-      result.error =
-        error instanceof Error ? error.message : "Connection failed";
+      result.error = getErrorMessage(error);
     }
 
     return result;
@@ -156,7 +196,7 @@ export abstract class MCPServer {
 
       return { success: true, tools };
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      const errorMsg = getErrorMessage(error);
 
       aiLogger.debug(
         { error: errorMsg },
@@ -164,12 +204,7 @@ export abstract class MCPServer {
       );
 
       // Check if it's an auth error (server is reachable but credentials are wrong)
-      if (
-        errorMsg.includes("401") ||
-        errorMsg.includes("403") ||
-        errorMsg.includes("Unauthorized")
-      ) {
-        await this.handleAuthFailure(errorMsg);
+      if (await this.handleConnectionFailure(error)) {
         return {
           success: false,
           reachable: true,

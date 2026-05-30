@@ -133,6 +133,10 @@ export class MCPConnectionManager {
       this.tools = await this.refreshToolCache();
 
       for (const [server, error] of this.connectedServers.errors) {
+        const sourceServer = mcpRegistry.servers.find(
+          (candidate) => candidate.name === server.name,
+        );
+        await sourceServer?.handleConnectionFailure(error);
         aiLogger.warn(
           { server: server.name, error: error.message },
           "MCP server failed to connect",
