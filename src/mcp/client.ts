@@ -17,10 +17,40 @@ type AuthenticatedFetch = (
   input: Parameters<typeof fetch>[0],
   init?: Parameters<typeof fetch>[1],
 ) => Promise<Response>;
+type MCPToolList = Awaited<
+  ReturnType<MCPServerStreamableHttp["listTools"]>
+>;
+type MCPTool = MCPToolList[number];
 
 const HeaderTupleSchema = z.tuple([z.string(), z.string()]);
 const HeaderEntriesSchema = z.array(HeaderTupleSchema);
 const HeaderRecordSchema = z.record(z.string(), z.string());
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sanitizeMcpSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeMcpSchema);
+  if (!isRecord(value)) return value;
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (key === "format") continue;
+    sanitized[key] = sanitizeMcpSchema(nestedValue);
+  }
+  return sanitized;
+}
+
+class SanitizedMCPServerStreamableHttp extends MCPServerStreamableHttp {
+  override async listTools(): Promise<MCPTool[]> {
+    const tools = await super.listTools();
+    return tools.map((tool) => ({
+      ...tool,
+      inputSchema: sanitizeMcpSchema(tool.inputSchema) as MCPTool["inputSchema"],
+    }));
+  }
+}
 
 function normalizeHeaders(headers: unknown): Record<string, string> {
   if (!headers) return {};
@@ -83,7 +113,7 @@ export class MCPConnectionManager {
       },
     };
 
-    return new MCPServerStreamableHttp(options);
+    return new SanitizedMCPServerStreamableHttp(options);
   }
 
   private async refreshToolCache(): Promise<MCPToolInfo[]> {
