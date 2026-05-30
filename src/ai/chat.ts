@@ -1,4 +1,9 @@
-import { Agent, type RunToolApprovalItem, type Tool } from "@openai/agents";
+import {
+  Agent,
+  type RunStreamEvent,
+  type RunToolApprovalItem,
+  type Tool,
+} from "@openai/agents";
 import type { GuildTextBasedChannel } from "discord.js";
 import { allTools } from "../tools";
 import { aiLogger } from "../logger";
@@ -27,7 +32,7 @@ export interface ChatOptions {
   messageId?: string;
 }
 
-interface StreamLike extends AsyncIterable<unknown> {
+interface StreamLike extends AsyncIterable<RunStreamEvent> {
   completed: Promise<void>;
   error: unknown;
 }
@@ -63,6 +68,22 @@ function parseArguments(value: unknown): Record<string, unknown> {
 
 function getLifecycleToolArgs(toolCall: unknown): Record<string, unknown> {
   return parseArguments(asRecord(toolCall)?.arguments);
+}
+
+function rawEventType(event: RunStreamEvent): string | null {
+  if (event.type !== "raw_model_stream_event") return null;
+  const type = asRecord(event.data)?.type;
+  return typeof type === "string" ? type : null;
+}
+
+function isTextDeltaEvent(event: RunStreamEvent): boolean {
+  const type = rawEventType(event);
+  return type === "response.output_text.delta" || type === "response.refusal.delta";
+}
+
+function isTextDoneEvent(event: RunStreamEvent): boolean {
+  const type = rawEventType(event);
+  return type === "response.output_text.done" || type === "response.refusal.done";
 }
 
 function formatToolDisplayName(
@@ -166,7 +187,7 @@ export class ChatService {
       );
 
       let stream = await runner.run(agent, enrichedMessage, runOptions);
-      await this.drainStream(stream);
+      await this.drainStream(stream, session);
 
       let approvalCycles = 0;
       while (stream.interruptions.length > 0) {
@@ -185,7 +206,7 @@ export class ChatService {
         session.onThinking();
 
         stream = await runner.run(agent, stream.state, runOptions);
-        await this.drainStream(stream);
+        await this.drainStream(stream, session);
       }
 
       const finalOutput = stream.finalOutput;
@@ -258,12 +279,21 @@ export class ChatService {
     return agent;
   }
 
-  private async drainStream(stream: StreamLike): Promise<void> {
-    for await (const _event of stream) {
+  private async drainStream(
+    stream: StreamLike,
+    session: ChatSession,
+  ): Promise<void> {
+    for await (const event of stream) {
       // Consuming the stream lets the SDK execute tool calls and surface
-      // lifecycle hooks; tool UI updates happen through agent_tool_* events.
+      // lifecycle hooks; Discord typing is only shown while text is emitted.
+      if (isTextDeltaEvent(event)) {
+        session.onTextGenerationStart();
+      } else if (isTextDoneEvent(event)) {
+        session.onTextGenerationEnd();
+      }
     }
 
+    session.onTextGenerationEnd();
     await stream.completed;
     if (stream.error) throw stream.error;
   }

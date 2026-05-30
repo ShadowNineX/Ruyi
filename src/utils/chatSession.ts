@@ -175,11 +175,23 @@ export class ChatSession {
     }
   }
 
-  /** Called when the AI starts thinking/generating */
+  /** Called when the AI is preparing a response, but not streaming text yet. */
   onThinking(): void {
     this.state.status = "thinking";
     this.state.currentTool = undefined;
+    this.stopTyping();
+  }
+
+  /** Called when the SDK is actively streaming assistant text. */
+  onTextGenerationStart(): void {
+    this.state.status = "thinking";
+    this.state.currentTool = undefined;
     this.startTyping();
+  }
+
+  /** Called when the current assistant text stream finishes. */
+  onTextGenerationEnd(): void {
+    this.stopTyping();
   }
 
   /** Called when a tool starts executing */

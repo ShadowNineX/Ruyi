@@ -226,7 +226,6 @@ export class RuyiBot {
     if (!(await this.shouldBotRespond(message, gate))) return;
 
     const session = new ChatSession(message.channel);
-    session.startTyping();
     this.setTypingStatus(message.author.displayName);
 
     const toolCtx = this.buildToolContext(message, referencedMessage);
