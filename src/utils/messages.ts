@@ -259,11 +259,18 @@ export function getErrorMessage(error: unknown): string {
     code?: number;
     error?: { message?: string };
     message?: string;
+    name?: string;
   };
   const status = err?.status || err?.code;
   const errorMsg = err?.error?.message || err?.message;
   const normalizedMessage = errorMsg?.toLowerCase() ?? "";
 
+  if (
+    err?.name === "ChatTurnTimeoutError" ||
+    normalizedMessage.includes("timed out")
+  ) {
+    return "Forgive me, my lord — that request took too long, so I stopped it before it could leave my systems in an uncertain state. Please try again in a moment.";
+  }
   if (status === 402) {
     return "Apologies, but I've run out of credits to process requests. Please try again later.";
   }

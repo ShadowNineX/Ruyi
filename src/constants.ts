@@ -6,6 +6,8 @@
 export const CHAT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 export const CLASSIFIER_TIMEOUT_MS = 30 * 1000;
 export const PERMISSION_TIMEOUT_MS = 60 * 1000;
+export const CHAT_TURN_TIMEOUT_MS =
+  CHAT_TIMEOUT_MS + PERMISSION_TIMEOUT_MS + 15 * 1000;
 export const CHAT_TYPING_INTERVAL_MS = 8 * 1000;
 export const CHAT_STATUS_UPDATE_INTERVAL_MS = 3 * 1000;
 

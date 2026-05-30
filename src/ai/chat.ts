@@ -38,6 +38,7 @@ export interface ChatOptions {
   session: ChatSession;
   chatHistory?: ChatMessage[];
   messageId?: string;
+  signal?: AbortSignal;
 }
 
 interface StreamLike extends AsyncIterable<RunStreamEvent> {
@@ -97,6 +98,13 @@ function formatToolDisplayName(
   return `mcp:${toolName}`;
 }
 
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  const reason: unknown = signal.reason;
+  if (reason instanceof Error) throw reason;
+  throw new Error("Chat request was aborted");
+}
+
 export class ChatService {
   async chat(options: ChatOptions): Promise<string | null> {
     const {
@@ -108,64 +116,88 @@ export class ChatService {
       session,
       chatHistory = [],
       messageId,
+      signal,
     } = options;
 
     permissionManager.setContext(channelId, { channel, userId });
 
-    const dynamicContext = await conversationContext.buildDynamicContext(
-      username,
-      channelId,
-      chatHistory,
-    );
-
-    const enrichedMessage = `${dynamicContext}\n\nUser message from ${username}:\n${userMessage}`;
-
-    if (env.DEBUG_PROMPTS) {
-      aiLogger.debug({ systemPrompt }, "system prompt (debug dump)");
-      aiLogger.debug({ enrichedMessage }, "enriched user message (debug dump)");
-    }
-
-    aiLogger.info(
-      {
-        username,
-        contextLength: dynamicContext.length,
-        historyCount: chatHistory.length,
-        userMessagePreview: userMessage.slice(0, 80),
-      },
-      "Chat input received",
-    );
-
-    conversationContext.rememberMessage(
-      channelId,
-      username,
-      userMessage,
-      false,
-      messageId,
-    );
-
-    const { shouldExtract } = conversationContext.trackUserMessage(
-      channelId,
-      username,
-    );
-    if (shouldExtract) {
-      conversationContext.markExtracted(channelId, username);
-      void autoExtractFacts(username, channelId).catch((error) =>
-        aiLogger.warn(
-          { error: (error as Error).message, username, channelId },
-          "Background fact extraction crashed",
-        ),
-      );
-    }
-
     const abortController = new AbortController();
+    const abortFromParent = (): void => {
+      const reason: unknown = signal?.reason;
+      if (reason instanceof Error) {
+        abortController.abort(reason);
+      } else {
+        abortController.abort();
+      }
+    };
+
+    if (signal?.aborted) {
+      abortFromParent();
+    } else {
+      signal?.addEventListener("abort", abortFromParent, { once: true });
+    }
+
     const timeout = setTimeout(() => abortController.abort(), CHAT_TIMEOUT_MS);
     session.onThinking();
 
     try {
+      throwIfAborted(signal);
+
+      const dynamicContext = await conversationContext.buildDynamicContext(
+        username,
+        channelId,
+        chatHistory,
+      );
+      throwIfAborted(signal);
+
+      const enrichedMessage = `${dynamicContext}\n\nUser message from ${username}:\n${userMessage}`;
+
+      if (env.DEBUG_PROMPTS) {
+        aiLogger.debug({ systemPrompt }, "system prompt (debug dump)");
+        aiLogger.debug(
+          { enrichedMessage },
+          "enriched user message (debug dump)",
+        );
+      }
+
+      aiLogger.info(
+        {
+          username,
+          contextLength: dynamicContext.length,
+          historyCount: chatHistory.length,
+          userMessagePreview: userMessage.slice(0, 80),
+        },
+        "Chat input received",
+      );
+
+      conversationContext.rememberMessage(
+        channelId,
+        username,
+        userMessage,
+        false,
+        messageId,
+      );
+
+      const { shouldExtract } = conversationContext.trackUserMessage(
+        channelId,
+        username,
+      );
+      if (shouldExtract) {
+        conversationContext.markExtracted(channelId, username);
+        void autoExtractFacts(username, channelId).catch((error) =>
+          aiLogger.warn(
+            { error: (error as Error).message, username, channelId },
+            "Background fact extraction crashed",
+          ),
+        );
+      }
+
       const agentSession = await sessionManager.getOrCreate(
         channelId,
         messageId,
       );
+      throwIfAborted(signal);
+
       const agentSessionId = await agentSession.getSessionId();
       const agent = this.createAgent(session);
       const runner = agentsRuntimeManager.getRunner();
@@ -253,6 +285,7 @@ export class ChatService {
       throw error;
     } finally {
       clearTimeout(timeout);
+      signal?.removeEventListener("abort", abortFromParent);
       permissionManager.clearContext(channelId);
     }
   }

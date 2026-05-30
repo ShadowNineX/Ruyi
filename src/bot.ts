@@ -35,6 +35,7 @@ import {
   getErrorMessage,
 } from "./utils/messages";
 import { messageSyncService } from "./services/messageSync";
+import { CHAT_TURN_TIMEOUT_MS } from "./constants";
 
 interface ResponseGate {
   isMentioned: boolean;
@@ -48,6 +49,8 @@ interface PresenceActivity {
 }
 
 export class RuyiBot {
+  private activePresenceSession: symbol | null = null;
+
   readonly client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -196,7 +199,10 @@ export class RuyiBot {
     message: Message,
     session: ChatSession,
     toolCtx: ToolContext,
+    signal: AbortSignal,
   ): Promise<void> {
+    this.throwIfAborted(signal);
+
     const username = message.author.username;
     const guildChannel = message.channel as GuildTextBasedChannel;
 
@@ -204,6 +210,8 @@ export class RuyiBot {
       fetchReplyChain(message, toolCtx.referencedMessage),
       fetchChatHistory(message),
     ]);
+    this.throwIfAborted(signal);
+
     const combinedHistory = [...replyChain, ...chatHistory];
 
     botLogger.debug(
@@ -215,6 +223,7 @@ export class RuyiBot {
     );
 
     await session.sendStatusEmbed(message);
+    this.throwIfAborted(signal);
 
     const reply = await runWithToolContext(toolCtx, () =>
       chatService.chat({
@@ -226,8 +235,10 @@ export class RuyiBot {
         session,
         chatHistory: combinedHistory,
         messageId: message.id,
+        signal,
       }),
     );
+    this.throwIfAborted(signal);
 
     await session.deleteStatusEmbed();
 
@@ -265,13 +276,67 @@ export class RuyiBot {
     }
   }
 
+  private createChatTurnTimeoutError(): Error {
+    const timeoutSeconds = Math.round(CHAT_TURN_TIMEOUT_MS / 1000);
+    const error = new Error(
+      `Chat turn timed out after ${timeoutSeconds} seconds`,
+    );
+    error.name = "ChatTurnTimeoutError";
+    return error;
+  }
+
+  private throwIfAborted(signal: AbortSignal): void {
+    if (!signal.aborted) return;
+    const reason: unknown = signal.reason;
+    if (reason instanceof Error) throw reason;
+    throw this.createChatTurnTimeoutError();
+  }
+
+  private async runChatWithWatchdog(
+    message: Message,
+    session: ChatSession,
+    toolCtx: ToolContext,
+  ): Promise<void> {
+    const abortController = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        const error = this.createChatTurnTimeoutError();
+        abortController.abort(error);
+        botLogger.warn(
+          {
+            user: message.author.username,
+            channelId: message.channel.id,
+            messageId: message.id,
+            timeoutMs: CHAT_TURN_TIMEOUT_MS,
+          },
+          "Chat turn watchdog timed out",
+        );
+        reject(error);
+      }, CHAT_TURN_TIMEOUT_MS);
+    });
+
+    try {
+      await Promise.race([
+        this.runChat(message, session, toolCtx, abortController.signal),
+        timeoutPromise,
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
   private async handleAIChat(message: Message): Promise<void> {
     const referencedMessage = await fetchReferencedMessage(message);
     const gate = this.computeResponseGate(message, referencedMessage);
     if (!(await this.shouldBotRespond(message, gate))) return;
 
     const displayName = message.author.displayName;
+    const presenceSession = Symbol(message.id);
+    this.activePresenceSession = presenceSession;
     const session = new ChatSession(message.channel, (state) => {
+      if (this.activePresenceSession !== presenceSession) return;
       this.setSessionPresence(displayName, state);
     });
     session.onThinking();
@@ -279,7 +344,7 @@ export class RuyiBot {
     const toolCtx = this.buildToolContext(message, referencedMessage);
 
     try {
-      await this.runChat(message, session, toolCtx);
+      await this.runChatWithWatchdog(message, session, toolCtx);
     } catch (error) {
       const err = error as {
         status?: number;
@@ -315,7 +380,10 @@ export class RuyiBot {
       }
     } finally {
       session.cleanup();
-      this.setDefaultPresence();
+      if (this.activePresenceSession === presenceSession) {
+        this.activePresenceSession = null;
+        this.setDefaultPresence();
+      }
     }
   }
 
