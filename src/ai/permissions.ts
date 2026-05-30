@@ -8,6 +8,8 @@ import {
   ComponentType,
   EmbedBuilder,
   type GuildTextBasedChannel,
+  type InteractionCollector,
+  type Message,
   MessageFlags,
 } from "discord.js";
 import { aiLogger } from "../logger";
@@ -66,6 +68,173 @@ function createPermissionEmbed(
     .setColor(color)
     .setFooter({ text: footer })
     .setTimestamp();
+}
+
+interface ApprovalPromptArgs {
+  approvalItem: RunToolApprovalItem;
+  channelId: string;
+  promptMessage: Message;
+  sessionId: string;
+  timeoutMs: number;
+  toolName: string;
+  userId: string;
+}
+
+interface ApprovalCollectorState {
+  settled: boolean;
+  resolve: (approved: boolean) => void;
+  collector: InteractionCollector<ButtonInteraction>;
+}
+
+async function replyToUnauthorizedClick(
+  interaction: ButtonInteraction,
+  args: ApprovalPromptArgs,
+): Promise<void> {
+  await interaction
+    .reply({
+      content: "Only the user who requested this action can respond.",
+      flags: MessageFlags.Ephemeral,
+    })
+    .catch((replyError: unknown) => {
+      aiLogger.debug(
+        {
+          error: (replyError as Error)?.message,
+          channelId: args.channelId,
+          sessionId: args.sessionId,
+          tool: args.toolName,
+        },
+        "Failed to reply to unauthorized approval click",
+      );
+    });
+}
+
+async function settleApprovalFromInteraction(
+  interaction: ButtonInteraction,
+  args: ApprovalPromptArgs,
+  state: ApprovalCollectorState,
+): Promise<void> {
+  const approved = interaction.customId.startsWith("perm_approve");
+  const resultEmbed = createPermissionEmbed(
+    approved
+      ? `Permission Granted: ${args.toolName}`
+      : `Permission Denied: ${args.toolName}`,
+    args.approvalItem,
+    approved ? 0x00aa55 : 0xcc3333,
+    `Decided by ${interaction.user.username}`,
+  );
+
+  try {
+    await interaction.update({
+      embeds: [resultEmbed],
+      components: [],
+    });
+    state.settled = true;
+    state.collector.stop(approved ? "approved" : "denied");
+
+    aiLogger.info(
+      {
+        channelId: args.channelId,
+        sessionId: args.sessionId,
+        tool: args.toolName,
+        approved,
+      },
+      "User responded to tool approval request",
+    );
+
+    state.resolve(approved);
+  } catch (error) {
+    state.settled = true;
+    state.collector.stop("update_failed");
+    aiLogger.error(
+      {
+        channelId: args.channelId,
+        sessionId: args.sessionId,
+        tool: args.toolName,
+        error: (error as Error).message,
+      },
+      "Failed to update tool approval prompt",
+    );
+    state.resolve(false);
+  }
+}
+
+function handleApprovalCollect(
+  interaction: ButtonInteraction,
+  args: ApprovalPromptArgs,
+  state: ApprovalCollectorState,
+): void {
+  if (interaction.user.id !== args.userId) {
+    void replyToUnauthorizedClick(interaction, args);
+    return;
+  }
+
+  void settleApprovalFromInteraction(interaction, args, state);
+}
+
+function handleApprovalEnd(
+  reason: string,
+  args: ApprovalPromptArgs,
+  state: ApprovalCollectorState,
+): void {
+  if (state.settled) return;
+  state.settled = true;
+
+  const timeoutEmbed = createPermissionEmbed(
+    `Permission Expired: ${args.toolName}`,
+    args.approvalItem,
+    0x95a5a6,
+    "Request timed out",
+  );
+
+  void args.promptMessage
+    .edit({
+      embeds: [timeoutEmbed],
+      components: [],
+    })
+    .catch((editError: unknown) => {
+      aiLogger.debug(
+        {
+          error: (editError as Error)?.message,
+          channelId: args.channelId,
+          sessionId: args.sessionId,
+          tool: args.toolName,
+        },
+        "Failed to edit timed-out tool approval prompt",
+      );
+    });
+
+  aiLogger.warn(
+    {
+      channelId: args.channelId,
+      sessionId: args.sessionId,
+      tool: args.toolName,
+      reason,
+    },
+    "Tool approval request ended without approval",
+  );
+
+  state.resolve(false);
+}
+
+function waitForApproval(args: ApprovalPromptArgs): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const collector = args.promptMessage.createMessageComponentCollector({
+      componentType: ComponentType.Button,
+      time: args.timeoutMs,
+    });
+    const state: ApprovalCollectorState = {
+      settled: false,
+      resolve,
+      collector,
+    };
+
+    collector.on("collect", (interaction) => {
+      handleApprovalCollect(interaction, args, state);
+    });
+    collector.on("end", (_collected, reason) => {
+      handleApprovalEnd(reason, args, state);
+    });
+  });
 }
 
 export class PermissionManager {
@@ -128,116 +297,14 @@ export class PermissionManager {
         "Tool approval prompt sent, waiting for user response",
       );
 
-      return await new Promise<boolean>((resolve) => {
-        let settled = false;
-        const collector = promptMessage.createMessageComponentCollector({
-          componentType: ComponentType.Button,
-          time: timeoutMs,
-        });
-
-        collector.on("collect", (interaction: ButtonInteraction) => {
-          void (async () => {
-            if (interaction.user.id !== userId) {
-              await interaction
-                .reply({
-                  content: "Only the user who requested this action can respond.",
-                  flags: MessageFlags.Ephemeral,
-                })
-                .catch((replyError: unknown) => {
-                  aiLogger.debug(
-                    {
-                      error: (replyError as Error)?.message,
-                      channelId,
-                      sessionId,
-                      tool: toolName,
-                    },
-                    "Failed to reply to unauthorized approval click",
-                  );
-                });
-              return;
-            }
-
-            const approved = interaction.customId.startsWith("perm_approve");
-            const resultEmbed = createPermissionEmbed(
-              approved
-                ? `Permission Granted: ${toolName}`
-                : `Permission Denied: ${toolName}`,
-              approvalItem,
-              approved ? 0x00aa55 : 0xcc3333,
-              `Decided by ${interaction.user.username}`,
-            );
-
-            try {
-              await interaction.update({
-                embeds: [resultEmbed],
-                components: [],
-              });
-              settled = true;
-              collector.stop(approved ? "approved" : "denied");
-
-              aiLogger.info(
-                { channelId, sessionId, tool: toolName, approved },
-                "User responded to tool approval request",
-              );
-
-              resolve(approved);
-            } catch (error) {
-              settled = true;
-              collector.stop("update_failed");
-              aiLogger.error(
-                {
-                  channelId,
-                  sessionId,
-                  tool: toolName,
-                  error: (error as Error).message,
-                },
-                "Failed to update tool approval prompt",
-              );
-              resolve(false);
-            }
-          })();
-        });
-
-        collector.on("end", (_collected, reason) => {
-          if (settled) return;
-          settled = true;
-
-          const timeoutEmbed = createPermissionEmbed(
-            `Permission Expired: ${toolName}`,
-            approvalItem,
-            0x95a5a6,
-            "Request timed out",
-          );
-
-          void promptMessage
-            .edit({
-              embeds: [timeoutEmbed],
-              components: [],
-            })
-            .catch((editError: unknown) => {
-              aiLogger.debug(
-                {
-                  error: (editError as Error)?.message,
-                  channelId,
-                  sessionId,
-                  tool: toolName,
-                },
-                "Failed to edit timed-out tool approval prompt",
-              );
-            });
-
-          aiLogger.warn(
-            {
-              channelId,
-              sessionId,
-              tool: toolName,
-              reason,
-            },
-            "Tool approval request ended without approval",
-          );
-
-          resolve(false);
-        });
+      return await waitForApproval({
+        approvalItem,
+        channelId,
+        promptMessage,
+        sessionId,
+        timeoutMs,
+        toolName,
+        userId,
       });
     } catch (error) {
       const err = error as Error;
