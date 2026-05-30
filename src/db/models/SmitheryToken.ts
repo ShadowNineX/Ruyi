@@ -71,7 +71,7 @@ export async function saveSmitheryTokens(
       tokenType: tokens.tokenType ?? "Bearer",
       expiresAt,
     },
-    { upsert: true, new: true },
+    { upsert: true, returnDocument: "after" },
   );
 
   return result;
