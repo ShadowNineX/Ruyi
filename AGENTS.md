@@ -7,7 +7,7 @@ Ruyi is a Discord bot (Nine Sols themed AI companion) built on Bun + TypeScript 
 - Install: `bun install`
 - Dev (watch): `bun run dev` (alias for `bun run --watch src/main.ts`)
 - Type-check: `bunx tsc --noEmit` (no `build` script; Bun runs TS directly)
-- Required env: `DISCORD_TOKEN`, `OPENAI_API_KEY`. Optional: `MONGO_URI`, `MODEL_NAME` (default `gpt-5.4-mini`), `LOG_LEVEL`, `GITHUB_TOKEN`, `LASTFM_API_KEY`, `SMITHERY_ACCESS_TOKEN`, `DEBUG_PROMPTS`.
+- Required env: `DISCORD_TOKEN`, `OPENAI_API_KEY`. Optional: `MONGO_URI`, `MODEL_NAME` (default `gpt-5.4-mini`), `LOG_LEVEL`, `GITHUB_TOKEN`, `LASTFM_API_KEY`, `OPENAI_ADMIN_KEY` (`/credits` organization costs), `SMITHERY_ACCESS_TOKEN`, `DEBUG_PROMPTS`.
 - All env access goes through [src/env.ts](src/env.ts) (zod-validated, fail-fast at startup). Do **not** read `Bun.env` directly.
 
 ## Architecture (boot → reply)
@@ -43,7 +43,7 @@ Ruyi is a Discord bot (Nine Sols themed AI companion) built on Bun + TypeScript 
 ## Commands
 
 - Message commands use a Mongo-cached prefix from [src/config.ts](src/config.ts). Currently only `!ping` in [src/commands/](src/commands/).
-- Slash commands registered at startup from [src/slashCommands/](src/slashCommands/): `/prefix`, `/smithery`, `/memories`. Add new ones to the `slashCommands` array and the `handleSlashCommand` switch in [src/slashCommands/index.ts](src/slashCommands/index.ts).
+- Slash commands registered at startup from [src/slashCommands/](src/slashCommands/): `/prefix`, `/credits`, `/smithery`, `/memories`. Add new ones to the `slashCommands` array and the `handleSlashCommand` switch in [src/slashCommands/index.ts](src/slashCommands/index.ts).
 
 ## Logging & error handling
 

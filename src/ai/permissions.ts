@@ -33,7 +33,7 @@ function formatArguments(rawArguments: string | undefined): string {
   if (!rawArguments) return "";
 
   try {
-    const parsed = JSON.parse(rawArguments) as unknown;
+    const parsed: unknown = JSON.parse(rawArguments);
     return JSON.stringify(parsed, null, 2);
   } catch (error) {
     aiLogger.debug(

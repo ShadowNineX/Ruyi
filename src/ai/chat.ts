@@ -5,6 +5,7 @@ import {
   type Tool,
 } from "@openai/agents";
 import type { GuildTextBasedChannel } from "discord.js";
+import { z } from "zod";
 import { allTools } from "../tools";
 import { aiLogger } from "../logger";
 import { mcpRegistry } from "../mcp";
@@ -20,6 +21,13 @@ import { permissionManager } from "./permissions";
 import { autoExtractFacts } from "./extraction";
 
 const LOCAL_TOOL_NAMES = new Set(allTools.map((tool) => tool.name));
+const UnknownRecordSchema = z.record(z.string(), z.unknown());
+const ToolCallSchema = z.looseObject({
+    arguments: z.unknown().optional(),
+  });
+const RawStreamEventSchema = z.looseObject({
+    type: z.string(),
+  });
 
 export interface ChatOptions {
   userMessage: string;
@@ -42,19 +50,12 @@ interface ApprovalState {
   reject: (item: RunToolApprovalItem, options?: { message?: string }) => void;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
 function parseArguments(value: unknown): Record<string, unknown> {
   if (!value) return {};
   if (typeof value === "string") {
     try {
-      const parsed = JSON.parse(value) as unknown;
-      return asRecord(parsed) ?? {};
+      const parsed: unknown = JSON.parse(value);
+      return UnknownRecordSchema.safeParse(parsed).data ?? {};
     } catch (error) {
       aiLogger.debug(
         { error: (error as Error).message },
@@ -63,17 +64,17 @@ function parseArguments(value: unknown): Record<string, unknown> {
       return {};
     }
   }
-  return asRecord(value) ?? {};
+  return UnknownRecordSchema.safeParse(value).data ?? {};
 }
 
 function getLifecycleToolArgs(toolCall: unknown): Record<string, unknown> {
-  return parseArguments(asRecord(toolCall)?.arguments);
+  const parsed = ToolCallSchema.safeParse(toolCall);
+  return parseArguments(parsed.success ? parsed.data.arguments : undefined);
 }
 
 function rawEventType(event: RunStreamEvent): string | null {
   if (event.type !== "raw_model_stream_event") return null;
-  const type = asRecord(event.data)?.type;
-  return typeof type === "string" ? type : null;
+  return RawStreamEventSchema.safeParse(event.data).data?.type ?? null;
 }
 
 function isTextDeltaEvent(event: RunStreamEvent): boolean {

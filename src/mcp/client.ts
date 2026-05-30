@@ -4,6 +4,7 @@ import {
   type MCPServer as AgentsMCPServer,
   type MCPServers,
 } from "@openai/agents";
+import { z } from "zod";
 import { aiLogger, toolLogger } from "../logger";
 import { mcpRegistry, type MCPServer as RuyiMCPServer } from "./index";
 
@@ -17,6 +18,10 @@ type AuthenticatedFetch = (
   init?: Parameters<typeof fetch>[1],
 ) => Promise<Response>;
 
+const HeaderTupleSchema = z.tuple([z.string(), z.string()]);
+const HeaderEntriesSchema = z.array(HeaderTupleSchema);
+const HeaderRecordSchema = z.record(z.string(), z.string());
+
 function normalizeHeaders(headers: unknown): Record<string, string> {
   if (!headers) return {};
 
@@ -28,27 +33,11 @@ function normalizeHeaders(headers: unknown): Record<string, string> {
     return normalized;
   }
 
-  if (Array.isArray(headers)) {
-    const normalized: Record<string, string> = {};
-    for (const entry of headers) {
-      if (
-        Array.isArray(entry) &&
-        typeof entry[0] === "string" &&
-        typeof entry[1] === "string"
-      ) {
-        normalized[entry[0]] = entry[1];
-      }
-    }
-    return normalized;
-  }
+  const entries = HeaderEntriesSchema.safeParse(headers);
+  if (entries.success) return Object.fromEntries(entries.data);
 
-  if (typeof headers === "object") {
-    const normalized: Record<string, string> = {};
-    for (const [key, value] of Object.entries(headers)) {
-      if (typeof value === "string") normalized[key] = value;
-    }
-    return normalized;
-  }
+  const record = HeaderRecordSchema.safeParse(headers);
+  if (record.success) return record.data;
 
   return {};
 }
