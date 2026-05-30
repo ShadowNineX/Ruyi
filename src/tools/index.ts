@@ -6,7 +6,11 @@ export { userInfoTool } from "./user";
 export { manageRoleTool } from "./role";
 export { reactionTool } from "./reaction";
 export { pinTool } from "./pin";
-export { searchMessagesTool, deleteMessagesTool } from "./message";
+export {
+  searchMessagesTool,
+  deleteMessagesTool,
+  editBotMessageTool,
+} from "./message";
 export { embedTool } from "./embed";
 export { generateImageTool } from "./image";
 export {
@@ -26,7 +30,11 @@ import { userInfoTool } from "./user";
 import { manageRoleTool } from "./role";
 import { reactionTool } from "./reaction";
 import { pinTool } from "./pin";
-import { searchMessagesTool, deleteMessagesTool } from "./message";
+import {
+  searchMessagesTool,
+  deleteMessagesTool,
+  editBotMessageTool,
+} from "./message";
 import { embedTool } from "./embed";
 import { generateImageTool } from "./image";
 import {
@@ -50,6 +58,7 @@ export const allTools = [
   pinTool,
   searchMessagesTool,
   deleteMessagesTool,
+  editBotMessageTool,
   embedTool,
   generateImageTool,
   memoryStoreTool,
@@ -70,4 +79,5 @@ export const allTools = [
 export const selfRespondingToolNames: ReadonlySet<string> = new Set([
   "send_embed",
   "generate_image",
+  "edit_bot_message",
 ]);

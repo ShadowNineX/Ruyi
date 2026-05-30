@@ -19,6 +19,8 @@ interface FoundMessage {
   reactions?: ReactionInfo[];
 }
 
+type BotMessageTarget = "last" | "replied";
+
 // Helper: Check if author matches filter
 function matchesAuthor(msg: Message, authorFilter: string): boolean {
   const authorLower = authorFilter.toLowerCase();
@@ -153,7 +155,7 @@ async function searchChannel(
 export const searchMessagesTool = tool({
   name: "search_messages",
   description:
-    "Search for messages in Discord. Can search current channel, a specific channel, or across the entire server. Returns message IDs, content, reactions, and URLs. Use the returned message ID with manage_reaction or delete_messages.",
+    "Search for messages in Discord. Can search current channel, a specific channel, or across the entire server. Returns message IDs, content, reactions, and URLs. Use the returned message ID with manage_reaction, edit_bot_message, or delete_messages.",
   parameters: z.object({
     query: z
       .string()
@@ -242,7 +244,7 @@ export const searchMessagesTool = tool({
         total: allResults.length,
         hint:
           allResults.length > 0
-            ? "Use manage_reaction with the message ID to add/remove reactions, or delete_messages to remove them"
+            ? "Use manage_reaction with the message ID to add/remove reactions, edit_bot_message to edit the bot's own messages, or delete_messages to remove them"
             : "No messages found matching your criteria",
       };
     } catch (error) {
@@ -277,6 +279,93 @@ async function fetchMessagesByIds(
   }
   return messages;
 }
+
+async function fetchLastBotMessage(channel: TextChannel): Promise<Message | null> {
+  const botUserId = channel.client.user?.id;
+  if (!botUserId) return null;
+
+  const messages = await channel.messages.fetch({ limit: 50 });
+  return messages.find((message) => message.author.id === botUserId) ?? null;
+}
+
+async function resolveBotMessageToEdit(
+  channel: TextChannel,
+  messageId: string | null,
+): Promise<Message | string> {
+  const normalized = messageId?.trim() || "last";
+  let targetMessage: Message | null;
+
+  if (normalized === "last") {
+    targetMessage = await fetchLastBotMessage(channel);
+  } else if (normalized === "replied") {
+    targetMessage = toolContextManager.get().referencedMessage;
+  } else {
+    targetMessage = await channel.messages.fetch(normalized);
+  }
+
+  if (!targetMessage) return "Could not find the target bot message";
+  if (targetMessage.author.id !== channel.client.user?.id) {
+    return "I can only edit my own messages";
+  }
+  if (!targetMessage.editable) {
+    return "That bot message is not editable";
+  }
+
+  return targetMessage;
+}
+
+export const editBotMessageTool = tool({
+  name: "edit_bot_message",
+  description:
+    'Edit one of the bot\'s own previous Discord messages. Use message_id="last" or null for the latest bot message in this channel, "replied" for the message the user replied to, or a message ID from search_messages. Cannot edit user messages.',
+  parameters: z.object({
+    message_id: z
+      .string()
+      .nullable()
+      .describe(
+        'The bot message to edit. Use "last" or null for the latest bot message in this channel, "replied" for the message the user replied to, or an exact message ID.',
+      ),
+    content: z
+      .string()
+      .min(1)
+      .max(2000)
+      .describe("The new Discord message content, max 2000 characters."),
+  }),
+  execute: async ({ message_id, content }) => {
+    const ctx = toolContextManager.get();
+
+    if (!ctx.channel || !("messages" in ctx.channel)) {
+      return { error: "No valid channel context for editing messages" };
+    }
+
+    try {
+      const target = await resolveBotMessageToEdit(ctx.channel, message_id);
+      if (typeof target === "string") return { error: target };
+
+      const edited = await target.edit(content);
+      toolLogger.info(
+        { messageId: edited.id, channelId: edited.channel.id },
+        "Edited bot message",
+      );
+
+      return {
+        success: true,
+        action: "edited",
+        messageId: edited.id,
+        messageUrl: edited.url,
+        content: truncateContent(edited.content, 200),
+      };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      toolLogger.error(
+        { error: errorMessage, message_id },
+        "Failed to edit bot message",
+      );
+      return { error: "Failed to edit bot message", details: errorMessage };
+    }
+  },
+});
 
 // Helper: Fetch and filter recent messages
 async function fetchFilteredMessages(

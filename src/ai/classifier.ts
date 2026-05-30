@@ -24,6 +24,15 @@ const MESSAGE_TARGET_WORDS = [
   "history",
 ] as const;
 const MEMORY_WORDS = ["memory", "memories"] as const;
+const BOT_REPLY_WORDS = [
+  "message",
+  "reply",
+  "replies",
+  "response",
+  "answer",
+  "that",
+  "last",
+] as const;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
@@ -114,6 +123,9 @@ const DIRECT_ACTION_RULES: ReadonlyArray<(text: string) => boolean> = [
       "remove",
     ]) &&
     containsAnyWord(text, ["role"]),
+  (text) =>
+    startsWithAnyWord(text, ["edit", "revise", "correct", "fix", "replace"]) &&
+    containsAnyWord(text, BOT_REPLY_WORDS),
   (text) =>
     startsWithAnyWord(text, ["send", "make", "create"]) &&
     containsAnyWord(text, ["embed"]),
