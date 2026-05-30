@@ -10,7 +10,7 @@ import {
   type GuildTextBasedChannel,
   type TextChannel,
 } from "discord.js";
-import { chatService, replyClassifier } from "./ai";
+import { chatService, replyClassifier, sessionManager } from "./ai";
 import { runWithToolContext, type ToolContext } from "./utils/types";
 import { env } from "./env";
 import { selfRespondingToolNames } from "./tools";
@@ -232,7 +232,11 @@ export class RuyiBot {
     await session.deleteStatusEmbed();
 
     if (reply) {
-      await sendReplyChunks(message, reply, username);
+      const sentChunks = await sendReplyChunks(message, reply, username);
+      await sessionManager.recordAssistantMessages(
+        message.channel.id,
+        sentChunks.map((chunk) => chunk.id),
+      );
       return;
     }
 

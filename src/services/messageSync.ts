@@ -5,6 +5,7 @@ import type {
   ThreadChannel,
 } from "discord.js";
 import { Conversation, type IConversation } from "../db/models";
+import { sessionManager } from "../ai/session";
 import { syncLogger } from "../logger";
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
@@ -143,6 +144,11 @@ async function syncConversation(
       { channelId },
       { $pull: { messages: { messageId: { $in: deletedIds } } } },
     );
+    await sessionManager.invalidate(channelId);
+    syncLogger.info(
+      { channelId },
+      "Invalidated agent session after archived Discord messages were deleted",
+    );
   }
 
   return {
@@ -239,10 +245,24 @@ export class MessageSyncService {
         { channelId },
         { $pull: { messages: { messageId } } },
       );
+      const assistantDeleted =
+        await sessionManager.invalidateIfAssistantMessageDeleted(
+          channelId,
+          messageId,
+        );
+
       if (result.modifiedCount > 0) {
+        if (!assistantDeleted) {
+          await sessionManager.invalidate(channelId);
+        }
         syncLogger.info(
           { channelId, messageId },
-          "Deleted message from DB (event)",
+          "Deleted archived Discord message and invalidated agent session",
+        );
+      } else if (assistantDeleted) {
+        syncLogger.info(
+          { channelId, messageId },
+          "Deleted tracked assistant reply and invalidated agent session",
         );
       } else {
         syncLogger.debug(

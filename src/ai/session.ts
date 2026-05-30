@@ -608,6 +608,51 @@ export class SessionManager {
     aiLogger.debug({ channelId }, "Agent session invalidated");
   }
 
+  async recordAssistantMessages(
+    channelId: string,
+    messageIds: string[],
+  ): Promise<void> {
+    if (messageIds.length === 0) return;
+
+    await AgentSession.updateOne(
+      {
+        channelId,
+        isActive: true,
+        provider: "openai-agents",
+      },
+      {
+        $push: {
+          assistantMessageIds: {
+            $each: messageIds,
+            $slice: -100,
+          },
+        },
+        $set: { lastUsed: new Date() },
+      },
+    );
+  }
+
+  async invalidateIfAssistantMessageDeleted(
+    channelId: string,
+    messageId: string,
+  ): Promise<boolean> {
+    const session = await AgentSession.exists({
+      channelId,
+      isActive: true,
+      provider: "openai-agents",
+      assistantMessageIds: messageId,
+    });
+
+    if (!session) return false;
+
+    await this.invalidate(channelId);
+    aiLogger.info(
+      { channelId, messageId },
+      "Invalidated agent session because a tracked assistant reply was deleted",
+    );
+    return true;
+  }
+
   async destroyAll(): Promise<void> {
     this.activeSessions.clear();
   }

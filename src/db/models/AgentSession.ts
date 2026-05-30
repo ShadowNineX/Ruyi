@@ -15,6 +15,8 @@ export interface IAgentSession {
   summaryUpdatedAt?: Date;
   /** Persisted Agents SDK session history items */
   items: unknown[];
+  /** Discord message IDs for final assistant replies sent to the channel */
+  assistantMessageIds: string[];
   /** When this session was created */
   createdAt: Date;
   /** When this session was last used */
@@ -38,6 +40,7 @@ const AgentSessionSchema = new Schema<IAgentSession>({
   summary: { type: String },
   summaryUpdatedAt: { type: Date },
   items: { type: [Schema.Types.Mixed], default: [] },
+  assistantMessageIds: { type: [String], default: [] },
   createdAt: { type: Date, default: Date.now },
   lastUsed: { type: Date, default: Date.now },
   isActive: { type: Boolean, default: true },
