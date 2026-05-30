@@ -262,11 +262,18 @@ export function getErrorMessage(error: unknown): string {
   };
   const status = err?.status || err?.code;
   const errorMsg = err?.error?.message || err?.message;
+  const normalizedMessage = errorMsg?.toLowerCase() ?? "";
 
   if (status === 402) {
     return "Apologies, but I've run out of credits to process requests. Please try again later.";
   }
   if (status === 429) {
+    if (
+      normalizedMessage.includes("quota") ||
+      normalizedMessage.includes("billing")
+    ) {
+      return "Apologies, but the OpenAI project is out of API quota or has hit its billing limit. Please check the OpenAI billing and usage limits.";
+    }
     return "I'm receiving too many requests right now. Please wait a moment.";
   }
   if (status === 503 || status === 502) {
