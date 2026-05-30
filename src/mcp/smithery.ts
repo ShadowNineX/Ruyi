@@ -4,6 +4,7 @@ import {
   getSmitheryTokens,
   getAllSmitheryTokens,
   saveSmitheryTokens,
+  clearSmitheryTokens,
   isTokenExpired,
   type ISmitheryToken,
   type SmitheryServerId,
@@ -30,6 +31,20 @@ export abstract class SmitheryMCPServer extends MCPServer {
 
   protected get url(): string {
     return `https://server.smithery.ai/${this.slug}`;
+  }
+
+  private clearCachedToken(): void {
+    cachedTokens.delete(this.slug);
+    cacheLoadedAt.delete(this.slug);
+  }
+
+  protected override async handleAuthFailure(error: string): Promise<void> {
+    this.clearCachedToken();
+    await clearSmitheryTokens(this.slug);
+    aiLogger.warn(
+      { server: this.slug, error },
+      "Cleared invalid Smithery token; run /smithery to authorize again",
+    );
   }
 
   /**
@@ -75,6 +90,8 @@ export abstract class SmitheryMCPServer extends MCPServer {
       if (!response.ok) {
         const error = await response.text();
         aiLogger.error({ error, server: this.slug }, "Failed to refresh token");
+        this.clearCachedToken();
+        await clearSmitheryTokens(this.slug);
         return null;
       }
 
@@ -161,6 +178,10 @@ export abstract class SmitheryMCPServer extends MCPServer {
           tokens.refreshToken,
         );
         result[serverId] = !!refreshed;
+        if (!refreshed) {
+          cachedTokens.delete(serverId);
+          cacheLoadedAt.delete(serverId);
+        }
       }
     }
 

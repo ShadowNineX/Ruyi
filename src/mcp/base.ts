@@ -51,6 +51,11 @@ export abstract class MCPServer {
   /** Get the authorization headers for this server */
   protected abstract getHeaders(): Record<string, string> | undefined;
 
+  /** Called when the server rejects stored credentials. */
+  protected async handleAuthFailure(_error: string): Promise<void> {
+    // Base MCP servers may not have credentials to clear.
+  }
+
   /**
    * Check if a tool name belongs to this MCP server.
    */
@@ -164,6 +169,7 @@ export abstract class MCPServer {
         errorMsg.includes("403") ||
         errorMsg.includes("Unauthorized")
       ) {
+        await this.handleAuthFailure(errorMsg);
         return {
           success: false,
           reachable: true,
