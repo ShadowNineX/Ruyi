@@ -196,7 +196,7 @@ export class ChatService {
           throw new Error("Too many tool approval cycles in one chat turn");
         }
 
-        session.onComplete();
+        session.onApprovalPending();
         await this.resolveApprovals(
           channelId,
           agentSessionId,

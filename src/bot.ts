@@ -23,7 +23,10 @@ import {
   handleSmitheryCodeButton,
   handleSmitheryModal,
 } from "./slashCommands";
-import { ChatSession } from "./utils/chatSession";
+import {
+  ChatSession,
+  type SessionStatusSnapshot,
+} from "./utils/chatSession";
 import {
   fetchReplyChain,
   fetchChatHistory,
@@ -51,17 +54,37 @@ export class RuyiBot {
 
   // ---- Presence helpers ----------------------------------------------------
 
-  private setDefaultPresence() {
+  private setDefaultPresence(): void {
     this.client.user?.setPresence({
       activities: [{ name: "Serving...", type: ActivityType.Watching }],
     });
   }
 
-  private setTypingStatus(username: string) {
-    this.client.user?.setActivity(`Assisting ${username}...`, {
+  private setCustomPresence(state: string): void {
+    const displayState =
+      state.length > 128 ? `${state.slice(0, 125)}...` : state;
+
+    this.client.user?.setActivity(displayState, {
       type: ActivityType.Custom,
-      state: `Assisting ${username}...`,
+      state: displayState,
     });
+  }
+
+  private setSessionPresence(
+    username: string,
+    snapshot: SessionStatusSnapshot,
+  ): void {
+    const toolName = snapshot.currentTool ?? "a tool";
+    const states: Record<SessionStatusSnapshot["status"], string> = {
+      thinking: `Preparing a reply for ${username}...`,
+      generating: `Writing to ${username}...`,
+      tool: `Using ${toolName} for ${username}...`,
+      approval: `Awaiting approval from ${username}...`,
+      complete: `Finishing reply for ${username}...`,
+      error: "Recovering from an error...",
+    };
+
+    this.setCustomPresence(states[snapshot.status]);
   }
 
   // ---- Reply gating --------------------------------------------------------
@@ -225,8 +248,11 @@ export class RuyiBot {
     const gate = this.computeResponseGate(message, referencedMessage);
     if (!(await this.shouldBotRespond(message, gate))) return;
 
-    const session = new ChatSession(message.channel);
-    this.setTypingStatus(message.author.displayName);
+    const displayName = message.author.displayName;
+    const session = new ChatSession(message.channel, (state) => {
+      this.setSessionPresence(displayName, state);
+    });
+    session.onThinking();
 
     const toolCtx = this.buildToolContext(message, referencedMessage);
 

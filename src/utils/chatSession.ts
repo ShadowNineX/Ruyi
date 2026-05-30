@@ -9,8 +9,16 @@ export type SessionStatus =
   | "thinking"
   | "generating"
   | "tool"
+  | "approval"
   | "complete"
   | "error";
+
+export interface SessionStatusSnapshot {
+  status: SessionStatus;
+  currentTool?: string;
+}
+
+export type SessionStatusListener = (state: SessionStatusSnapshot) => void;
 
 interface StatusState {
   status: SessionStatus;
@@ -53,6 +61,9 @@ function buildStatusEmbed(state: StatusState): EmbedBuilder {
     case "tool":
       statusText = `Running: \`${state.currentTool}\``;
       break;
+    case "approval":
+      statusText = "Awaiting approval...";
+      break;
     case "complete":
       statusText = "Complete";
       break;
@@ -85,15 +96,37 @@ export class ChatSession {
   private typingInterval: ReturnType<typeof setInterval> | null = null;
   private updateInterval: ReturnType<typeof setInterval> | null = null;
   private statusMessage: Message | null = null;
+  private hasNotifiedStatus = false;
   private readonly channel: TextBasedChannel;
+  private readonly onStatusChange?: SessionStatusListener;
 
-  constructor(channel: TextBasedChannel) {
+  constructor(
+    channel: TextBasedChannel,
+    onStatusChange?: SessionStatusListener,
+  ) {
     this.channel = channel;
+    this.onStatusChange = onStatusChange;
     this.state = {
       status: "thinking",
       toolCounts: new Map(),
       startTime: Date.now(),
     };
+  }
+
+  private notifyStatusChange(): void {
+    this.hasNotifiedStatus = true;
+    this.onStatusChange?.({
+      status: this.state.status,
+      currentTool: this.state.currentTool,
+    });
+  }
+
+  private setStatus(status: SessionStatus, currentTool?: string): void {
+    const changed =
+      this.state.status !== status || this.state.currentTool !== currentTool;
+    this.state.status = status;
+    this.state.currentTool = currentTool;
+    if (changed || !this.hasNotifiedStatus) this.notifyStatusChange();
   }
 
   private sendTypingOnce(reason: "initial" | "periodic"): void {
@@ -185,15 +218,13 @@ export class ChatSession {
 
   /** Called when the AI is preparing a response, but not streaming text yet. */
   onThinking(): void {
-    this.state.status = "thinking";
-    this.state.currentTool = undefined;
+    this.setStatus("thinking");
     this.stopTyping();
   }
 
   /** Called when the SDK is actively streaming assistant text. */
   onTextGenerationStart(): void {
-    this.state.status = "generating";
-    this.state.currentTool = undefined;
+    this.setStatus("generating");
     this.startTyping();
     this.updateEmbed();
   }
@@ -205,8 +236,7 @@ export class ChatSession {
 
   /** Called when a tool starts executing */
   onToolStart(toolName: string, _args: Record<string, unknown>): void {
-    this.state.status = "tool";
-    this.state.currentTool = toolName;
+    this.setStatus("tool", toolName);
     this.stopTyping();
     this.updateEmbed();
   }
@@ -219,16 +249,22 @@ export class ChatSession {
     );
   }
 
+  /** Called when the SDK pauses for Discord-side tool approval. */
+  onApprovalPending(): void {
+    this.setStatus("approval");
+    this.stopTyping();
+    this.updateEmbed();
+  }
+
   /** Called when generation is complete */
   onComplete(): void {
-    this.state.status = "complete";
-    this.state.currentTool = undefined;
+    this.setStatus("complete");
     this.stopTyping();
   }
 
   /** Called on error */
   onError(): void {
-    this.state.status = "error";
+    this.setStatus("error");
     this.stopTyping();
   }
 
