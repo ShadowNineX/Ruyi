@@ -12,6 +12,7 @@ export {
   editBotMessageTool,
 } from "./message";
 export { embedTool } from "./embed";
+export { fetchUrlTool } from "./fetch";
 export { generateImageTool } from "./image";
 export {
   memoryStoreTool,
@@ -36,6 +37,7 @@ import {
   editBotMessageTool,
 } from "./message";
 import { embedTool } from "./embed";
+import { fetchUrlTool } from "./fetch";
 import { generateImageTool } from "./image";
 import {
   memoryStoreTool,
@@ -60,6 +62,7 @@ export const allTools = [
   deleteMessagesTool,
   editBotMessageTool,
   embedTool,
+  fetchUrlTool,
   generateImageTool,
   memoryStoreTool,
   memoryRecallTool,

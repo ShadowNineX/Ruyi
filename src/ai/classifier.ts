@@ -90,6 +90,10 @@ function containsAnyWord(text: string, words: readonly string[]): boolean {
   return words.some((word) => textWords.has(word));
 }
 
+function containsHttpUrl(text: string): boolean {
+  return text.includes("http://") || text.includes("https://");
+}
+
 const DIRECT_ACTION_RULES: ReadonlyArray<(text: string) => boolean> = [
   (text) => startsWithAnyWord(text, ["pin", "unpin"]),
   (text) =>
@@ -106,6 +110,9 @@ const DIRECT_ACTION_RULES: ReadonlyArray<(text: string) => boolean> = [
   (text) =>
     startsWithAnyWord(text, ["search", "find", "fetch"]) ||
     startsWithPhrase(text, "look up"),
+  (text) =>
+    startsWithAnyWord(text, ["read", "summarize", "inspect", "quote", "open"]) &&
+    containsHttpUrl(text),
   (text) => startsWithAnyWord(text, ["remember", "store", "forget"]),
   (text) =>
     startsWithAnyWord(text, ["show", "list", "recall"]) &&
