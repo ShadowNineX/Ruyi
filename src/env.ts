@@ -25,12 +25,12 @@ const OPENROUTER_KEY_PREFIX = "sk-or-v1-";
 const envSchema = z.object({
   // Required
   DISCORD_TOKEN: z.string().min(1, "DISCORD_TOKEN is required"),
-  MODEL_TOKEN: z
+  OPENAI_API_KEY: z
     .string()
-    .min(1, "MODEL_TOKEN is required")
+    .min(1, "OPENAI_API_KEY is required")
     .refine(
       (value) => !value.startsWith(OPENROUTER_KEY_PREFIX),
-      "MODEL_TOKEN must be a direct OpenAI API key, not an OpenRouter key",
+      "OPENAI_API_KEY must be a direct OpenAI API key, not an OpenRouter key",
     ),
 
   // Optional (with defaults)
@@ -51,7 +51,6 @@ const envSchema = z.object({
   GITHUB_TOKEN: z.string().optional(),
   LASTFM_API_KEY: z.string().optional(),
   SMITHERY_ACCESS_TOKEN: z.string().optional(),
-  PROVISIONING_KEY: z.string().optional(),
 
   // Debug toggles
   DEBUG_PROMPTS: z

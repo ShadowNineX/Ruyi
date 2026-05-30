@@ -9,7 +9,7 @@ export class AgentsRuntimeManager {
 
   getProviderConfig() {
     return {
-      apiKey: env.MODEL_TOKEN,
+      apiKey: env.OPENAI_API_KEY,
       useResponses: true,
       strictFeatureValidation: false,
     } as const;

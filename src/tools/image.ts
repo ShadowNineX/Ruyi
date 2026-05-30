@@ -24,7 +24,7 @@ interface ImageOutputDetails {
   format: OpenAIImageFormat;
 }
 
-const openai = new OpenAI({ apiKey: env.MODEL_TOKEN });
+const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
 const SUPPORTED_NATIVE_SIZES = new Set<OpenAIImageSize>([
   "auto",
   "1024x1024",
