@@ -5,7 +5,7 @@ export {
   type IConversation,
   type IConversationMessage,
 } from "./Conversation";
-export { CopilotSession, type ICopilotSession } from "./CopilotSession";
+export { AgentSession, type IAgentSession } from "./AgentSession";
 export {
   SmitheryToken,
   getSmitheryTokens,

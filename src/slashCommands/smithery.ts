@@ -38,7 +38,8 @@ const pendingFlows = new Map<
   }
 >();
 
-// Smithery OAuth configuration
+// Smithery OAuth configuration. The actual MCP connection uses the OpenAI
+// Agents SDK; this only handles the user-facing authorization dance.
 const REDIRECT_URL = "https://smithery.ai/oauth/callback";
 const CLIENT_METADATA: OAuthClientMetadata = {
   client_name: "Ruyi Discord Bot",
@@ -56,7 +57,7 @@ const SERVERS: Record<SmitheryServerId, { name: string; emoji: string }> = {
 };
 
 /**
- * OAuth provider that captures the authorization URL for manual flow
+ * OAuth provider that captures the authorization URL for manual Discord flow.
  */
 class SmitheryOAuthProvider implements OAuthClientProvider {
   private _tokens?: OAuthTokens;
@@ -89,7 +90,6 @@ class SmitheryOAuthProvider implements OAuthClientProvider {
   }
 
   async redirectToAuthorization(url: URL): Promise<void> {
-    // Capture the URL instead of redirecting
     this.capturedAuthUrl = url;
   }
 
@@ -193,50 +193,50 @@ export async function handleSmitherySelect(
   const serverUrl = `https://server.smithery.ai/${serverId}`;
 
   try {
-    // Create OAuth provider
     const provider = new SmitheryOAuthProvider();
-
-    // Start the OAuth flow - this will capture the auth URL
     const result = await auth(provider, { serverUrl });
 
-    if (result === "REDIRECT" && provider.capturedAuthUrl) {
-      // Store the pending flow
-      pendingFlows.set(userId, {
-        provider,
-        serverUrl,
-        serverId,
-        authUrl: provider.capturedAuthUrl,
-      });
-
-      const embed = new EmbedBuilder()
-        .setTitle(`${serverInfo.emoji} Authorize ${serverInfo.name}`)
-        .setDescription(
-          "**Step 1:** Click the link below to authorize with Smithery\n" +
-            "**Step 2:** After authorizing, you'll be redirected to a page with a code\n" +
-            "**Step 3:** Click the button below and paste the authorization code\n\n" +
-            `[🔗 Open Smithery Authorization](${provider.capturedAuthUrl.toString()})`,
-        )
-        .setColor(0xffa500)
-        .setFooter({
-          text: "The authorization code is in the URL after 'code='",
-        });
-
-      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId("smithery_enter_code")
-          .setLabel("Enter Authorization Code")
-          .setStyle(ButtonStyle.Success)
-          .setEmoji("📝"),
-      );
-
-      await interaction.editReply({
-        embeds: [embed],
-        components: [row],
-      });
-    } else if (result === "AUTHORIZED") {
-      // Already authorized
+    if (result === "AUTHORIZED") {
       await showSuccess(interaction, provider, serverId);
+      return;
     }
+
+    if (result !== "REDIRECT" || !provider.capturedAuthUrl) {
+      throw new Error("Authorization failed - unexpected result");
+    }
+
+    pendingFlows.set(userId, {
+      provider,
+      serverUrl,
+      serverId,
+      authUrl: provider.capturedAuthUrl,
+    });
+
+    const embed = new EmbedBuilder()
+      .setTitle(`${serverInfo.emoji} Authorize ${serverInfo.name}`)
+      .setDescription(
+        "**Step 1:** Click the link below to authorize with Smithery\n" +
+          "**Step 2:** After authorizing, you'll be redirected to a page with a code\n" +
+          "**Step 3:** Click the button below and paste the authorization code\n\n" +
+          `[🔗 Open Smithery Authorization](${provider.capturedAuthUrl.toString()})`,
+      )
+      .setColor(0xffa500)
+      .setFooter({
+        text: "The authorization code is in the URL after 'code='",
+      });
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("smithery_enter_code")
+        .setLabel("Enter Authorization Code")
+        .setStyle(ButtonStyle.Success)
+        .setEmoji("📝"),
+    );
+
+    await interaction.editReply({
+      embeds: [embed],
+      components: [row],
+    });
   } catch (error) {
     botLogger.error({ error, serverId }, "Failed to start Smithery OAuth");
     await interaction.editReply({
@@ -314,22 +314,17 @@ export async function handleSmitheryModal(
   }
 
   try {
-    // Exchange the code for tokens
     const result = await auth(pendingFlow.provider, {
       serverUrl: pendingFlow.serverUrl,
       authorizationCode: authCode,
     });
 
-    if (result === "AUTHORIZED") {
-      await showSuccess(
-        interaction,
-        pendingFlow.provider,
-        pendingFlow.serverId,
-      );
-      pendingFlows.delete(userId);
-    } else {
+    if (result !== "AUTHORIZED") {
       throw new Error("Authorization failed - unexpected result");
     }
+
+    await showSuccess(interaction, pendingFlow.provider, pendingFlow.serverId);
+    pendingFlows.delete(userId);
   } catch (error) {
     botLogger.error({ error }, "Failed to exchange Smithery auth code");
     await interaction.editReply({

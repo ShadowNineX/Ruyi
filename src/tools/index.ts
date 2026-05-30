@@ -37,8 +37,9 @@ import {
 } from "./memory";
 import { auditLogTool } from "./audit";
 import { lastfmTool } from "./lastfm";
+import type { Tool } from "@openai/agents";
 
-// Export all tools as an array for use with copilot-sdk
+// Export all tools as an array for use with the OpenAI Agents runtime
 export const allTools = [
   calculatorTool,
   channelInfoTool,
@@ -57,7 +58,7 @@ export const allTools = [
   searchConversationTool,
   auditLogTool,
   lastfmTool,
-] as const;
+] as const satisfies readonly Tool[];
 
 /**
  * Tools that produce their own visible Discord output (embed, image, etc.)

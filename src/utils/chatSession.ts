@@ -1,5 +1,9 @@
 import { EmbedBuilder, type Message, type TextBasedChannel } from "discord.js";
 import { botLogger } from "../logger";
+import {
+  CHAT_STATUS_UPDATE_INTERVAL_MS,
+  CHAT_TYPING_INTERVAL_MS,
+} from "../constants";
 
 export type SessionStatus = "thinking" | "tool" | "complete" | "error";
 
@@ -84,26 +88,25 @@ export class ChatSession {
     };
   }
 
+  private sendTypingOnce(reason: "initial" | "periodic"): void {
+    if (!("sendTyping" in this.channel)) return;
+
+    this.channel.sendTyping().catch((error: unknown) => {
+      botLogger.debug(
+        { error: (error as Error)?.message },
+        `sendTyping failed (${reason})`,
+      );
+    });
+  }
+
   /** Start the typing indicator */
   startTyping(): void {
     if (this.typingInterval) return;
     if ("sendTyping" in this.channel) {
-      this.channel.sendTyping().catch((error: unknown) => {
-        botLogger.debug(
-          { error: (error as Error)?.message },
-          "sendTyping failed (initial)",
-        );
-      });
+      this.sendTypingOnce("initial");
       this.typingInterval = setInterval(() => {
-        if ("sendTyping" in this.channel) {
-          this.channel.sendTyping().catch((error: unknown) => {
-            botLogger.debug(
-              { error: (error as Error)?.message },
-              "sendTyping failed (periodic)",
-            );
-          });
-        }
-      }, 8000);
+        this.sendTypingOnce("periodic");
+      }, CHAT_TYPING_INTERVAL_MS);
     }
   }
 
@@ -117,16 +120,27 @@ export class ChatSession {
 
   /** Create and send the status embed as a reply */
   async sendStatusEmbed(replyTo: Message): Promise<void> {
-    this.statusMessage = await replyTo.reply({
-      embeds: [buildStatusEmbed(this.state)],
-    });
+    try {
+      this.statusMessage = await replyTo.reply({
+        embeds: [buildStatusEmbed(this.state)],
+      });
+    } catch (error) {
+      botLogger.debug(
+        {
+          error: (error as Error)?.message,
+          channelId: replyTo.channel.id,
+          messageId: replyTo.id,
+        },
+        "Status embed send failed",
+      );
+      return;
+    }
 
-    // Start periodic updates
     this.updateInterval = setInterval(() => {
       if (this.state.status !== "complete" && this.state.status !== "error") {
         this.updateEmbed();
       }
-    }, 1000);
+    }, CHAT_STATUS_UPDATE_INTERVAL_MS);
   }
 
   /** Update the status embed */
@@ -134,8 +148,11 @@ export class ChatSession {
     if (!this.statusMessage) return;
     try {
       await this.statusMessage.edit({ embeds: [buildStatusEmbed(this.state)] });
-    } catch {
-      // Ignore edit failures
+    } catch (error) {
+      botLogger.debug(
+        { error: (error as Error)?.message },
+        "Status embed update failed",
+      );
     }
   }
 
@@ -148,8 +165,11 @@ export class ChatSession {
     if (this.statusMessage) {
       try {
         await this.statusMessage.delete();
-      } catch {
-        // Ignore delete failures
+      } catch (error) {
+        botLogger.debug(
+          { error: (error as Error)?.message },
+          "Status embed delete failed",
+        );
       }
       this.statusMessage = null;
     }
@@ -202,9 +222,10 @@ export class ChatSession {
 
   /** Check if a self-responding tool was used */
   usedSelfRespondingTool(selfRespondingTools: ReadonlySet<string>): boolean {
-    return [...this.state.toolCounts.keys()].some((t) =>
-      selfRespondingTools.has(t),
-    );
+    for (const toolName of this.state.toolCounts.keys()) {
+      if (selfRespondingTools.has(toolName)) return true;
+    }
+    return false;
   }
 
   /** Get current status */

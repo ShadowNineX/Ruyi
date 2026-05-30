@@ -1,15 +1,25 @@
-import { defineTool } from "@github/copilot-sdk";
+import { tool } from "@openai/agents";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { toolContextManager } from "../utils/types";
 
-export const userInfoTool = defineTool("get_user_info", {
+const USER_ID_REGEX = /^\d{17,20}$/;
+const USER_MENTION_REGEX = /^<@!?(\d{17,20})>$/;
+
+function normalizeUserLookup(query: string): string {
+  return USER_MENTION_REGEX.exec(query.trim())?.[1] ?? query.trim();
+}
+
+export const userInfoTool = tool({
+  name: "get_user_info",
   description:
     "Get information about a Discord user by username. The response includes Discord timestamp embeds (like <t:123456789:F>) for dates - use these EXACTLY as-is in your response so Discord renders them as interactive timestamps users can hover over.",
   parameters: z.object({
-    username: z.string().describe("Username to look up"),
+    username: z
+      .string()
+      .describe("Username, display name, mention, or Discord user ID to look up."),
   }),
-  handler: async ({ username }) => {
+  execute: async ({ username }) => {
     const { guild } = toolContextManager.get();
     if (!guild) {
       toolLogger.warn("get_user_info called without guild context");
@@ -17,11 +27,32 @@ export const userInfoTool = defineTool("get_user_info", {
     }
     toolLogger.debug({ username }, "Looking up user");
     try {
-      const members = await guild.members.fetch({ query: username, limit: 10 });
-      const member =
-        members.find(
-          (m) => m.user.username.toLowerCase() === username.toLowerCase(),
-        ) || members.first();
+      const lookup = normalizeUserLookup(username);
+      const lowerLookup = lookup.toLowerCase();
+
+      let member = USER_ID_REGEX.test(lookup)
+        ? await guild.members.fetch(lookup).catch((error: unknown) => {
+            toolLogger.debug(
+              { username, error: (error as Error).message },
+              "Could not fetch member by ID",
+            );
+            return null;
+          })
+        : null;
+
+      const members = member
+        ? null
+        : await guild.members.fetch({ query: lookup, limit: 10 });
+      member ??=
+        members?.find(
+          (m) =>
+            m.user.username.toLowerCase() === lowerLookup ||
+            m.displayName.toLowerCase() === lowerLookup ||
+            m.user.globalName?.toLowerCase() === lowerLookup,
+        ) ??
+        members?.first() ??
+        null;
+
       if (!member) {
         toolLogger.warn({ username }, "User not found");
         return { error: "User not found: " + username };

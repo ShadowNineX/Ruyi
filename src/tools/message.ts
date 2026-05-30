@@ -1,4 +1,4 @@
-import { defineTool } from "@github/copilot-sdk";
+import { tool } from "@openai/agents";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { toolContextManager, type ToolContext } from "../utils/types";
@@ -22,7 +22,11 @@ interface FoundMessage {
 // Helper: Check if author matches filter
 function matchesAuthor(msg: Message, authorFilter: string): boolean {
   const authorLower = authorFilter.toLowerCase();
-  return msg.author.username.toLowerCase().includes(authorLower);
+  return (
+    msg.author.username.toLowerCase().includes(authorLower) ||
+    (msg.member?.displayName.toLowerCase().includes(authorLower) ?? false) ||
+    (msg.author.globalName?.toLowerCase().includes(authorLower) ?? false)
+  );
 }
 
 // Helper: Check if content matches filter
@@ -40,6 +44,15 @@ function filterMessages(
   if (author) filtered = filtered.filter((m) => matchesAuthor(m, author));
   if (query) filtered = filtered.filter((m) => matchesContent(m, query));
   return filtered;
+}
+
+function clampLimit(value: number | null, fallback: number, max: number): number {
+  return Math.min(Math.max(Math.round(value ?? fallback), 1), max);
+}
+
+function truncateContent(content: string, maxLength: number): string {
+  if (content.length <= maxLength) return content;
+  return content.slice(0, maxLength - 3) + "...";
 }
 
 // Helper: Get channels to search
@@ -90,8 +103,7 @@ function buildFoundMessage(
   const result: FoundMessage = {
     id: msg.id,
     author: msg.author.username,
-    content:
-      msg.content.slice(0, 200) + (msg.content.length > 200 ? "..." : ""),
+    content: truncateContent(msg.content, 200),
     timestamp: Math.floor(msg.createdTimestamp / 1000),
     url: msg.url,
   };
@@ -138,7 +150,8 @@ async function searchChannel(
   return results;
 }
 
-export const searchMessagesTool = defineTool("search_messages", {
+export const searchMessagesTool = tool({
+  name: "search_messages",
   description:
     "Search for messages in Discord. Can search current channel, a specific channel, or across the entire server. Returns message IDs, content, reactions, and URLs. Use the returned message ID with manage_reaction or delete_messages.",
   parameters: z.object({
@@ -169,7 +182,7 @@ export const searchMessagesTool = defineTool("search_messages", {
       .nullable()
       .describe("Whether to include reaction details. Default true."),
   }),
-  handler: async ({
+  execute: async ({
     query,
     author,
     channel_name,
@@ -183,7 +196,7 @@ export const searchMessagesTool = defineTool("search_messages", {
       return { error: "Cannot search all channels outside of a server" };
     }
 
-    const searchLimit = Math.min(Math.max(limit ?? 10, 1), 100);
+    const searchLimit = clampLimit(limit, 10, 100);
     const showReactions = include_reactions !== false;
 
     try {
@@ -247,12 +260,19 @@ async function fetchMessagesByIds(
   messageIds: string[],
 ): Promise<Message[]> {
   const messages: Message[] = [];
-  for (const id of messageIds.slice(0, 100)) {
+  const uniqueIds = [...new Set(messageIds.map((id) => id.trim()))]
+    .filter(Boolean)
+    .slice(0, 100);
+
+  for (const id of uniqueIds) {
     try {
       const msg = await channel.messages.fetch(id);
       messages.push(msg);
-    } catch {
-      // Message not found, skip
+    } catch (error) {
+      toolLogger.debug(
+        { messageId: id, error: (error as Error).message },
+        "Could not fetch message for deletion",
+      );
     }
   }
   return messages;
@@ -265,10 +285,11 @@ async function fetchFilteredMessages(
   author: string | null,
   contains: string | null,
 ): Promise<Message[]> {
-  const fetchCount = Math.min(count * 2, 100);
+  const clampedCount = clampLimit(count, 10, 100);
+  const fetchCount = Math.min(clampedCount * 2, 100);
   const messages = await channel.messages.fetch({ limit: fetchCount });
   const filtered = filterMessages([...messages.values()], author, contains);
-  return filtered.slice(0, Math.min(count, 100));
+  return filtered.slice(0, clampedCount);
 }
 
 // Helper: Delete messages with bulk delete for recent, individual for old
@@ -298,15 +319,19 @@ async function performDeletion(
     try {
       await msg.delete();
       deletedCount++;
-    } catch {
-      // Failed to delete, continue
+    } catch (error) {
+      toolLogger.debug(
+        { messageId: msg.id, error: (error as Error).message },
+        "Could not delete old message",
+      );
     }
   }
 
   return deletedCount;
 }
 
-export const deleteMessagesTool = defineTool("delete_messages", {
+export const deleteMessagesTool = tool({
+  name: "delete_messages",
   description: `Delete messages from the current channel. Requires Manage Messages permission.
 
 HOW TO USE:
@@ -335,7 +360,8 @@ For "clean this channel" or "delete all messages" requests, use count=100.`,
       .nullable()
       .describe("Only delete messages containing this text."),
   }),
-  handler: async ({ message_ids, author, count, contains }) => {
+  needsApproval: true,
+  execute: async ({ message_ids, author, count, contains }) => {
     const ctx = toolContextManager.get();
 
     if (!ctx.channel || !("messages" in ctx.channel)) {

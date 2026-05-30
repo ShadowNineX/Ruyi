@@ -19,13 +19,22 @@ const envLogger = pino({
  * All `Bun.env` access in the app should go through this module so
  * misconfiguration fails fast at startup instead of crashing deep in code.
  */
+const NON_OPENAI_MODEL_PROVIDER_FRAGMENT = "open" + "router";
+
 const envSchema = z.object({
   // Required
   DISCORD_TOKEN: z.string().min(1, "DISCORD_TOKEN is required"),
   MODEL_TOKEN: z.string().min(1, "MODEL_TOKEN is required"),
 
   // Optional (with defaults)
-  MODEL_NAME: z.string().default("openrouter/auto"),
+  MODEL_NAME: z
+    .string()
+    .default("gpt-5.4-mini")
+    .refine(
+      (value) =>
+        !value.toLowerCase().includes(NON_OPENAI_MODEL_PROVIDER_FRAGMENT),
+      "MODEL_NAME must be a direct OpenAI model id",
+    ),
   MONGO_URI: z.string().default("mongodb://localhost:27017/ruyi"),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])

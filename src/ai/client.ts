@@ -1,59 +1,67 @@
-import { CopilotClient } from "@github/copilot-sdk";
+import { OpenAIProvider, Runner } from "@openai/agents";
 import { aiLogger } from "../logger";
 import { env } from "../env";
 
-export class CopilotClientManager {
-  private copilotClient: CopilotClient | null = null;
+export class AgentsRuntimeManager {
+  private provider: OpenAIProvider | null = null;
+  private runner: Runner | null = null;
   readonly model = env.MODEL_NAME;
 
   getProviderConfig() {
     return {
-      type: "openai" as const,
-      baseUrl: "https://openrouter.ai/api/v1",
       apiKey: env.MODEL_TOKEN,
-    };
+      useResponses: true,
+      strictFeatureValidation: false,
+    } as const;
   }
 
-  async initialize(): Promise<void> {
-    if (this.copilotClient?.getState() === "connected") {
-      aiLogger.info("CopilotClient already initialized");
+  initialize(): void {
+    if (this.runner) {
+      aiLogger.info("OpenAI Agents runtime already initialized");
       return;
     }
 
-    this.copilotClient = new CopilotClient({
-      autoStart: false,
-      autoRestart: true,
-      logLevel: "warning",
+    this.provider = new OpenAIProvider(this.getProviderConfig());
+    this.runner = new Runner({
+      model: this.model,
+      modelProvider: this.provider,
+      tracingDisabled: true,
+      traceIncludeSensitiveData: false,
+      workflowName: "Ruyi Discord chat",
+      toolNotFoundBehavior: "return_error_to_model",
     });
 
-    await this.copilotClient.start();
-    aiLogger.info("CopilotClient initialized and started");
+    aiLogger.info(
+      { model: this.model },
+      "OpenAI Agents runtime initialized",
+    );
   }
 
-  async getClient(): Promise<CopilotClient> {
-    if (this.copilotClient?.getState() !== "connected") {
-      await this.initialize();
+  getRunner(): Runner {
+    if (!this.runner) {
+      this.initialize();
     }
-    return this.copilotClient!;
+    return this.runner!;
   }
 
   async stop(): Promise<void> {
-    if (!this.copilotClient) return;
+    if (!this.provider) return;
 
     try {
-      await this.copilotClient.stop();
+      await this.provider.close();
     } catch (error) {
       aiLogger.warn(
         { error: (error as Error).message },
-        "Error stopping client",
+        "Error stopping OpenAI Agents provider",
       );
     }
-    this.copilotClient = null;
+    this.provider = null;
+    this.runner = null;
   }
 
   isConnected(): boolean {
-    return this.copilotClient?.getState() === "connected";
+    return this.runner !== null;
   }
 }
 
-export const copilotClientManager = new CopilotClientManager();
+export const agentsRuntimeManager = new AgentsRuntimeManager();

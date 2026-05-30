@@ -1,6 +1,5 @@
 import { MCPServer } from "./base";
 import { env } from "../env";
-import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import {
   getSmitheryTokens,
   getAllSmitheryTokens,
@@ -103,36 +102,6 @@ export abstract class SmitheryMCPServer extends MCPServer {
       aiLogger.error({ error, server: this.slug }, "Error refreshing token");
       return null;
     }
-  }
-
-  /**
-   * Get valid tokens, refreshing if necessary.
-   */
-  private async getValidTokens(): Promise<ISmitheryToken | null> {
-    const tokens = await this.loadTokens();
-    if (!tokens) return null;
-
-    // Check if token is expired and we have a refresh token
-    if (isTokenExpired(tokens) && tokens.refreshToken) {
-      return this.refreshAccessToken(tokens.refreshToken);
-    }
-
-    return tokens;
-  }
-
-  /**
-   * Get OAuth tokens for Smithery authentication.
-   */
-  protected override getOAuthTokens(): OAuthTokens | undefined {
-    // For sync access, use cached tokens for this server
-    const tokens = cachedTokens.get(this.slug);
-    if (!tokens) return undefined;
-
-    return {
-      access_token: tokens.accessToken,
-      token_type: tokens.tokenType,
-      refresh_token: tokens.refreshToken,
-    };
   }
 
   /**

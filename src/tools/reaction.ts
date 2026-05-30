@@ -1,4 +1,4 @@
-import { defineTool } from "@github/copilot-sdk";
+import { tool } from "@openai/agents";
 import { z } from "zod";
 import type { Message, MessageReaction } from "discord.js";
 import { toolLogger } from "../logger";
@@ -21,7 +21,8 @@ function findReaction(
   });
 }
 
-export const reactionTool = defineTool("manage_reaction", {
+export const reactionTool = tool({
+  name: "manage_reaction",
   description:
     "Add or remove emoji reactions on messages. Can target the current message, the message the user replied to, or any message by ID.",
   parameters: z.object({
@@ -40,7 +41,7 @@ export const reactionTool = defineTool("manage_reaction", {
         'The target message. Use "replied" to react to the message the user replied to. Use null to react to the user\'s current message. Use a message ID to react to any other message (use search_messages to find IDs).',
       ),
   }),
-  handler: async ({ action, emoji, message_id }) => {
+  execute: async ({ action, emoji, message_id }) => {
     const result = await toolContextManager.resolveTargetMessage(
       message_id,
       "reaction",
@@ -75,7 +76,10 @@ export const reactionTool = defineTool("manage_reaction", {
       }
 
       // Fetch fresh message to ensure we have latest reactions
-      const channel = ctx.channel!;
+      const channel = targetMessage.channel;
+      if (!("messages" in channel)) {
+        return { error: "Cannot access reactions in this channel type" };
+      }
       const freshMessage = await channel.messages.fetch(targetMessage.id);
       const reaction = findReaction(freshMessage, emoji);
 

@@ -1,4 +1,4 @@
-import { defineTool } from "@github/copilot-sdk";
+import { tool } from "@openai/agents";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { Memory, Conversation } from "../db/models";
@@ -15,6 +15,15 @@ function truncateValue(value: string, maxLength = 500): string {
   return value.slice(0, maxLength - 3) + "...";
 }
 
+function normalizeMemoryKey(key: string | null): string | null {
+  const trimmed = key?.trim();
+  return trimmed || null;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+}
+
 // Extracted action handlers for memoryStoreTool
 async function handleSaveMemory(
   key: string | null,
@@ -23,22 +32,30 @@ async function handleSaveMemory(
   username: string | null,
   pinned: boolean,
 ) {
-  if (!key || !value) {
+  const normalizedKey = normalizeMemoryKey(key);
+  const normalizedValue = value?.trim() ?? "";
+
+  if (!normalizedKey || !normalizedValue) {
     return { error: "Key and value are required for save" };
   }
   if (scope === "user" && !username) {
     return { error: "Username required for user-scoped memories" };
   }
 
-  const truncatedValue = truncateValue(value);
+  const truncatedValue = truncateValue(normalizedValue);
   const limit = scope === "global" ? 50 : 30;
   const query =
     scope === "global"
       ? { scope: "global" as const }
       : { scope: "user" as const, username };
-  const count = await Memory.countDocuments(query);
+  const filter = {
+    key: normalizedKey,
+    scope,
+    username: scope === "global" ? null : username,
+  };
+  const existing = await Memory.findOne(filter);
 
-  if (count >= limit) {
+  if (!existing && (await Memory.countDocuments(query)) >= limit) {
     // Evict oldest non-pinned entry first; pinned entries are protected.
     const oldest = await Memory.findOne({ ...query, pinned: false }).sort({
       updatedAt: 1,
@@ -47,9 +64,9 @@ async function handleSaveMemory(
   }
 
   await Memory.updateOne(
-    { key, scope, username: scope === "global" ? null : username },
+    filter,
     {
-      key,
+      key: normalizedKey,
       value: truncatedValue,
       scope,
       username: scope === "global" ? null : username,
@@ -62,7 +79,7 @@ async function handleSaveMemory(
 
   return {
     success: true,
-    message: `${pinned ? "Pinned" : "Remembered"} "${key}" for ${scope === "global" ? "everyone" : username}`,
+    message: `${pinned ? "Pinned" : "Remembered"} "${normalizedKey}" for ${scope === "global" ? "everyone" : username}`,
   };
 }
 
@@ -72,21 +89,25 @@ async function handlePinMemory(
   username: string | null,
   pinned: boolean,
 ) {
-  if (!key) return { error: "Key is required" };
+  const normalizedKey = normalizeMemoryKey(key);
+  if (!normalizedKey) return { error: "Key is required" };
   if (scope === "user" && !username) {
     return { error: "Username required for user-scoped memories" };
   }
   const filter =
     scope === "global"
-      ? { key, scope: "global" as const }
-      : { key, scope: "user" as const, username };
+      ? { key: normalizedKey, scope: "global" as const }
+      : { key: normalizedKey, scope: "user" as const, username };
   const result = await Memory.updateOne(filter, { $set: { pinned } });
   if (result.matchedCount === 0) {
-    return { success: false, message: `No memory found for "${key}"` };
+    return {
+      success: false,
+      message: `No memory found for "${normalizedKey}"`,
+    };
   }
   return {
     success: true,
-    message: `${pinned ? "Pinned" : "Unpinned"} "${key}"`,
+    message: `${pinned ? "Pinned" : "Unpinned"} "${normalizedKey}"`,
   };
 }
 
@@ -95,17 +116,18 @@ async function handleGetMemory(
   scope: "global" | "user",
   username: string | null,
 ) {
-  if (!key) {
+  const normalizedKey = normalizeMemoryKey(key);
+  if (!normalizedKey) {
     return { error: "Key is required for get" };
   }
   const query =
     scope === "global"
-      ? { key, scope: "global" as const }
-      : { key, scope: "user" as const, username };
+      ? { key: normalizedKey, scope: "global" as const }
+      : { key: normalizedKey, scope: "user" as const, username };
   const item = await Memory.findOne(query);
 
   if (!item) {
-    return { found: false, message: `No memory found for "${key}"` };
+    return { found: false, message: `No memory found for "${normalizedKey}"` };
   }
 
   return {
@@ -122,19 +144,20 @@ async function handleDeleteMemory(
   scope: "global" | "user",
   username: string | null,
 ) {
-  if (!key) {
+  const normalizedKey = normalizeMemoryKey(key);
+  if (!normalizedKey) {
     return { error: "Key is required for delete" };
   }
   const query =
     scope === "global"
-      ? { key, scope: "global" as const }
-      : { key, scope: "user" as const, username };
+      ? { key: normalizedKey, scope: "global" as const }
+      : { key: normalizedKey, scope: "user" as const, username };
   const result = await Memory.deleteOne(query);
 
   if (result.deletedCount > 0) {
-    return { success: true, message: `Forgot "${key}"` };
+    return { success: true, message: `Forgot "${normalizedKey}"` };
   }
-  return { success: false, message: `No memory found for "${key}"` };
+  return { success: false, message: `No memory found for "${normalizedKey}"` };
 }
 
 async function handleListMemories(username: string | null) {
@@ -176,7 +199,8 @@ async function handleListMemories(username: string | null) {
   return { count: memories.length, memories };
 }
 
-export const memoryStoreTool = defineTool("memory_store", {
+export const memoryStoreTool = tool({
+  name: "memory_store",
   description:
     "Store, retrieve, pin, or delete memories. PINNED memories are always loaded into context (treat them as the user's persona/core facts). Use 'pin' to mark an existing memory as pinned, 'unpin' to remove that flag. The username is automatically detected.",
   parameters: z.object({
@@ -205,7 +229,7 @@ export const memoryStoreTool = defineTool("memory_store", {
         "For 'save': whether to pin the memory so it always appears in context. Defaults to false.",
       ),
   }),
-  handler: async ({ action, key, value, scope, pinned }) => {
+  execute: async ({ action, key, value, scope, pinned }) => {
     const username = getContextUsername();
     toolLogger.info(
       { action, key, scope, username, pinned },
@@ -262,6 +286,7 @@ function collectMemoryLines(
   }
 
   lines.push(header);
+  length += header.length;
   for (const m of memories) {
     const marker = m.pinned ? "[PINNED] " : "";
     const line = `• ${marker}${m.key}: ${m.value}`;
@@ -276,13 +301,14 @@ function collectMemoryLines(
   return { lines, newLength: length };
 }
 
-export const memoryRecallTool = defineTool("memory_recall", {
+export const memoryRecallTool = tool({
+  name: "memory_recall",
   description:
     "Recall all stored memories for the current user. Use this when you need to remember what you know about the user. Username is automatically detected.",
   parameters: z.object({
     include_global: z.boolean().describe("Whether to include global memories."),
   }),
-  handler: async ({ include_global }) => {
+  execute: async ({ include_global }) => {
     const username = getContextUsername();
     toolLogger.info({ username, include_global }, "Recalling memories");
 
@@ -324,12 +350,16 @@ export const memoryRecallTool = defineTool("memory_recall", {
     }
 
     const result = { hasMemories: true, summary: allLines.join("\n") };
-    toolLogger.info({ result }, "Memory recall result");
+    toolLogger.info(
+      { username, include_global, lineCount: allLines.length },
+      "Memory recall complete",
+    );
     return result;
   },
 });
 
-export const searchMemoryTool = defineTool("search_memory", {
+export const searchMemoryTool = tool({
+  name: "search_memory",
   description:
     "Search through stored memories by keyword. Searches current user's memories by default.",
   parameters: z.object({
@@ -343,12 +373,12 @@ export const searchMemoryTool = defineTool("search_memory", {
         "Filter by scope: 'user' for current user only, 'global' for global only, 'all' or null for both.",
       ),
   }),
-  handler: async ({ query, scope }) => {
+  execute: async ({ query, scope }) => {
     const username = getContextUsername();
     toolLogger.info({ query, username, scope }, "Searching memories");
 
     try {
-      const regex = new RegExp(query, "i");
+      const regex = new RegExp(escapeRegExp(query), "i");
       let memoryQuery = Memory.find().or([{ key: regex }, { value: regex }]);
 
       if (scope === "global") {
@@ -405,7 +435,8 @@ function messageMatchesCriteria(
 ): boolean {
   const contentMatches = queryRegex.test(content);
   const authorMatches =
-    !authorFilter || new RegExp(authorFilter, "i").test(msgAuthor);
+    !authorFilter ||
+    msgAuthor.toLowerCase().includes(authorFilter.toLowerCase());
   return contentMatches && authorMatches;
 }
 
@@ -454,7 +485,8 @@ function extractMatchingMessages(
   return matches;
 }
 
-export const searchConversationTool = defineTool("search_conversation", {
+export const searchConversationTool = tool({
+  name: "search_conversation",
   description:
     "Search through past conversation history stored in the database. Use this to recall what was discussed previously.",
   parameters: z.object({
@@ -471,15 +503,15 @@ export const searchConversationTool = defineTool("search_conversation", {
       .nullable()
       .describe("Maximum results to return (default 20, max 50)."),
   }),
-  handler: async ({ query, author, channel_id, limit }) => {
+  execute: async ({ query, author, channel_id, limit }) => {
     toolLogger.info(
       { query, author, channel_id, limit },
       "Searching conversations",
     );
 
     try {
-      const maxLimit = Math.min(limit ?? 20, 50);
-      const regex = new RegExp(query, "i");
+      const maxLimit = Math.min(Math.max(Math.round(limit ?? 20), 1), 50);
+      const regex = new RegExp(escapeRegExp(query), "i");
 
       let conversationQuery = Conversation.find();
       if (channel_id) {

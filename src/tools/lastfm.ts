@@ -1,9 +1,10 @@
-import { defineTool } from "@github/copilot-sdk";
+import { tool } from "@openai/agents";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { lastFMClient, type Period } from "../lib/lastfm";
 
-export const lastfmTool = defineTool("lastfm", {
+export const lastfmTool = tool({
+  name: "lastfm",
   description:
     "Query Last.fm for music listening data. Can get recent scrobbles, now playing, user profile, and top artists/tracks/albums.",
   parameters: z.object({
@@ -27,9 +28,9 @@ export const lastfmTool = defineTool("lastfm", {
       .nullable()
       .describe("Number of results (default: 10, max: 50)."),
   }),
-  handler: async ({ action, username, period, limit }) => {
+  execute: async ({ action, username, period, limit }) => {
     try {
-      const effectiveLimit = Math.min(limit ?? 10, 50);
+      const effectiveLimit = Math.min(Math.max(Math.round(limit ?? 10), 1), 50);
       const effectivePeriod: Period = period ?? "overall";
 
       toolLogger.info(

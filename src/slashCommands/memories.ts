@@ -75,12 +75,22 @@ export const memoriesCommand = new SlashCommandBuilder()
   );
 
 function sanitizeKey(key: string): string {
-  return key
+  const normalized = key
     .toLowerCase()
     .trim()
-    .replaceAll(/[^a-z0-9_]+/g, "_")
-    .replaceAll(/^_+|_+$/g, "")
-    .slice(0, 64);
+    .replaceAll(/[^a-z0-9_]+/g, "_");
+
+  return trimEdgeUnderscores(normalized).slice(0, 64);
+}
+
+function trimEdgeUnderscores(value: string): string {
+  let start = 0;
+  let end = value.length;
+
+  while (start < end && value[start] === "_") start += 1;
+  while (end > start && value[end - 1] === "_") end -= 1;
+
+  return value.slice(start, end);
 }
 
 async function handleRemember(

@@ -1,18 +1,14 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import type {
-  OAuthClientInformation,
-  OAuthClientMetadata,
-  OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+import {
+  MCPServerStreamableHttp,
+  type MCPServer as AgentsMCPServer,
+} from "@openai/agents";
 import { aiLogger } from "../logger";
 
 /**
- * MCP server configuration type (matches SDK expectations)
+ * MCP server configuration used by the OpenAI Agents SDK wrapper.
  */
 export interface MCPServerConfig {
-  type: "sse";
+  type: "streamable_http";
   url: string;
   headers?: Record<string, string>;
   tools: string[];
@@ -76,7 +72,7 @@ export abstract class MCPServer {
 
     const headers = this.getHeaders();
     const config = {
-      type: "sse" as const,
+      type: "streamable_http" as const,
       url: this.url,
       headers,
       tools: ["*"],
@@ -89,7 +85,6 @@ export abstract class MCPServer {
         url: this.url,
         hasHeaders: !!headers,
         hasAuth: !!headers?.Authorization,
-        authPrefix: headers?.Authorization?.substring(0, 15) + "...",
       },
       "MCP server config generated",
     );
@@ -99,7 +94,7 @@ export abstract class MCPServer {
 
   /**
    * Perform a health check by connecting to the MCP server
-   * using the official MCP SDK client.
+   * using the OpenAI Agents SDK MCP server wrapper.
    */
   async checkHealth(): Promise<MCPHealthCheckResult> {
     const result: MCPHealthCheckResult = {
@@ -139,22 +134,7 @@ export abstract class MCPServer {
   }
 
   /**
-   * Get OAuth tokens for this server if available.
-   * Override in subclasses that support OAuth (e.g., Smithery).
-   */
-  protected getOAuthTokens(): OAuthTokens | undefined {
-    return undefined;
-  }
-
-  /**
-   * Public accessor for OAuth tokens (used by MCP client wrapper).
-   */
-  getTokens(): OAuthTokens | undefined {
-    return this.getOAuthTokens();
-  }
-
-  /**
-   * Connect to the MCP server using the official SDK and list tools.
+   * Connect to the MCP server through the OpenAI Agents SDK and list tools.
    */
   private async connectAndListTools(): Promise<{
     success: boolean;
@@ -162,73 +142,15 @@ export abstract class MCPServer {
     tools?: string[];
     error?: string;
   }> {
-    const serverUrl = new URL(this.url);
-    const tokens = this.getOAuthTokens();
-
-    const client = new Client(
-      { name: "ruyi-health-check", version: "1.0.0" },
-      { capabilities: {} },
-    );
-
-    let transport: StreamableHTTPClientTransport | null = null;
+    const server = this.createHealthCheckServer();
 
     try {
-      // If we have OAuth tokens, use an authProvider.
-      // Otherwise inject static auth headers via a custom fetch wrapper.
-      if (tokens) {
-        const authProvider = this.createAuthProvider(tokens);
-        transport = new StreamableHTTPClientTransport(serverUrl, {
-          authProvider,
-        });
-      } else {
-        const headers = this.getHeaders() ?? {};
-        const authFetch = async (
-          input: Request | string | URL,
-          init?: RequestInit,
-        ): Promise<Response> => {
-          // Normalize init.headers — may be a Headers instance (not spreadable as a plain object)
-          let existingHeaders: Record<string, string> = {};
-          if (init?.headers instanceof Headers) {
-            init.headers.forEach((value, key) => {
-              existingHeaders[key] = value;
-            });
-          } else if (init?.headers) {
-            existingHeaders = init.headers as Record<string, string>;
-          }
-          const newInit = {
-            ...init,
-            headers: {
-              ...headers,
-              ...existingHeaders,
-            },
-          };
-          return fetch(input, newInit);
-        };
-
-        transport = new StreamableHTTPClientTransport(serverUrl, {
-          fetch: authFetch,
-        });
-      }
-
-      await client.connect(transport);
-
-      // List tools
-      const toolsResult = await client.listTools();
-      const tools = toolsResult.tools.map((t) => t.name);
-
-      await transport.close();
+      await server.connect();
+      const toolsResult = await server.listTools();
+      const tools = toolsResult.map((tool) => tool.name);
 
       return { success: true, tools };
     } catch (error) {
-      // Close the failed transport
-      if (transport) {
-        try {
-          await transport.close();
-        } catch {
-          // Ignore close errors
-        }
-      }
-
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
 
       aiLogger.debug(
@@ -268,40 +190,68 @@ export abstract class MCPServer {
         reachable: false,
         error: `Connection failed: ${errorMsg}`,
       };
+    } finally {
+      await this.closeHealthCheckServer(server);
     }
   }
 
-  /**
-   * Create an OAuth provider with stored tokens.
-   */
-  private createAuthProvider(tokens: OAuthTokens): OAuthClientProvider {
-    const storedTokens = tokens;
-    return {
-      get redirectUrl(): string {
-        return "https://smithery.ai/oauth/callback";
-      },
-      get clientMetadata(): OAuthClientMetadata {
-        return {
-          client_name: "Ruyi Discord Bot",
-          redirect_uris: ["https://smithery.ai/oauth/callback"],
-          grant_types: ["authorization_code", "refresh_token"],
-          response_types: ["code"],
-          token_endpoint_auth_method: "none",
-        };
-      },
-      clientInformation(): OAuthClientInformation | undefined {
-        return undefined;
-      },
-      saveClientInformation: async () => {},
-      tokens(): OAuthTokens | undefined {
-        return storedTokens;
-      },
-      saveTokens: async () => {},
-      redirectToAuthorization: async () => {},
-      saveCodeVerifier: async () => {},
-      codeVerifier: async () => {
-        throw new Error("No code verifier");
-      },
-    };
+  private createHealthCheckServer(): AgentsMCPServer {
+    const config = this.getConfig();
+
+    return new MCPServerStreamableHttp({
+      url: this.url,
+      name: `${this.name}-health-check`,
+      cacheToolsList: false,
+      fetch: config?.headers
+        ? createAuthenticatedFetch(config.headers)
+        : undefined,
+    });
   }
+
+  private async closeHealthCheckServer(server: AgentsMCPServer): Promise<void> {
+    try {
+      await server.close();
+    } catch (error) {
+      aiLogger.debug(
+        { server: this.name, error: (error as Error).message },
+        "MCP health-check close failed",
+      );
+    }
+  }
+}
+
+function normalizeHeaders(headers: RequestInit["headers"]): Record<string, string> {
+  if (!headers) return {};
+
+  if (headers instanceof Headers) {
+    const normalized: Record<string, string> = {};
+    headers.forEach((value, key) => {
+      normalized[key] = value;
+    });
+    return normalized;
+  }
+
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers);
+  }
+
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof value === "string") normalized[key] = value;
+  }
+  return normalized;
+}
+
+function createAuthenticatedFetch(headers: Record<string, string>) {
+  return async (
+    input: Request | string | URL,
+    init?: RequestInit,
+  ): Promise<Response> =>
+    fetch(input, {
+      ...init,
+      headers: {
+        ...headers,
+        ...normalizeHeaders(init?.headers),
+      },
+    });
 }

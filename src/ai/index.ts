@@ -1,7 +1,7 @@
 // Main AI module - re-exports all public APIs
 
-// Client management
-export { copilotClientManager } from "./client";
+// Runtime management
+export { agentsRuntimeManager } from "./client";
 
 // Session management
 export { sessionManager } from "./session";
@@ -26,17 +26,17 @@ export { autoExtractFacts } from "./extraction";
 
 // Convenience shutdown
 import { sessionManager } from "./session";
-import { copilotClientManager } from "./client";
+import { agentsRuntimeManager } from "./client";
 import { aiLogger } from "../logger";
 
-export async function shutdownCopilotClient(): Promise<void> {
+export async function shutdownAgentsRuntime(): Promise<void> {
   aiLogger.info(
     { sessionCount: sessionManager.getActiveCount() },
-    "Shutting down Copilot client",
+    "Shutting down OpenAI Agents runtime",
   );
 
   await sessionManager.destroyAll();
-  await copilotClientManager.stop();
+  await agentsRuntimeManager.stop();
 
-  aiLogger.info("Copilot client shutdown complete");
+  aiLogger.info("OpenAI Agents runtime shutdown complete");
 }

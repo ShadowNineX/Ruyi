@@ -1,4 +1,5 @@
-import { CopilotClient, approveAll } from "@github/copilot-sdk";
+import { Agent } from "@openai/agents";
+import { z } from "zod";
 import { aiLogger } from "../logger";
 import { Memory } from "../db/models";
 import {
@@ -9,18 +10,23 @@ import {
   USER_MEMORY_CAP,
 } from "../constants";
 import { conversationContext } from "./context";
-import { copilotClientManager } from "./client";
+import { agentsRuntimeManager } from "./client";
 
-interface ExtractedFact {
-  key: string;
-  value: string;
-}
+const ExtractedFactSchema = z.object({
+  key: z.string(),
+  value: z.string(),
+});
+
+const ExtractionOutputSchema = z.object({
+  facts: z.array(ExtractedFactSchema).max(AUTO_EXTRACT_MAX_FACTS),
+});
+
+type ExtractedFact = z.infer<typeof ExtractedFactSchema>;
 
 const EXTRACTION_SYSTEM_PROMPT = `You extract durable personal facts about a Discord user from chat history.
 
-OUTPUT FORMAT:
-Return ONLY a JSON array (no prose, no code fences) of objects: [{"key":"snake_case_key","value":"short fact"}]
-Return [] if there are no durable, non-trivial facts.
+OUTPUT:
+Return structured output with a facts array. Use an empty array if there are no durable, non-trivial facts.
 
 RULES:
 - Extract at most ${AUTO_EXTRACT_MAX_FACTS} facts.
@@ -31,49 +37,24 @@ RULES:
 - If a fact restates something already in "Existing memories", SKIP it.
 - If unsure whether something is durable, SKIP it. Quality > quantity.
 
-Example output: [{"key":"favorite_color","value":"deep blue"},{"key":"occupation","value":"frontend engineer at a startup"}]`;
+Example output shape: {"facts":[{"key":"favorite_color","value":"deep blue"},{"key":"occupation","value":"frontend engineer at a startup"}]}`;
 
-const FENCE_REGEX = /```(?:json)?\s*([\s\S]*?)```/i;
+function trimEdgeUnderscores(value: string): string {
+  let start = 0;
+  let end = value.length;
 
-function tryParseJsonArray(raw: string): ExtractedFact[] {
-  // Tolerate code fences and surrounding prose.
-  const trimmed = raw.trim();
-  const fenceMatch = FENCE_REGEX.exec(trimmed);
-  const candidate = fenceMatch?.[1]?.trim() ?? trimmed;
+  while (start < end && value[start] === "_") start += 1;
+  while (end > start && value[end - 1] === "_") end -= 1;
 
-  // Find first '[' and last ']' to be lenient.
-  const start = candidate.indexOf("[");
-  const end = candidate.lastIndexOf("]");
-  if (start === -1 || end === -1 || end <= start) return [];
-
-  const slice = candidate.slice(start, end + 1);
-  try {
-    const parsed = JSON.parse(slice);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(
-        (f): f is ExtractedFact =>
-          typeof f === "object" &&
-          f !== null &&
-          typeof (f as ExtractedFact).key === "string" &&
-          typeof (f as ExtractedFact).value === "string",
-      )
-      .slice(0, AUTO_EXTRACT_MAX_FACTS);
-  } catch (error) {
-    aiLogger.debug(
-      { error: (error as Error).message, slice: slice.slice(0, 200) },
-      "Failed to parse extraction output",
-    );
-    return [];
-  }
+  return value.slice(start, end);
 }
 
 function sanitizeKey(key: string): string {
-  return key
+  const normalized = key
     .toLowerCase()
-    .replaceAll(/[^a-z0-9_]+/g, "_")
-    .replaceAll(/^_+|_+$/g, "")
-    .slice(0, 64);
+    .replaceAll(/[^a-z0-9_]+/g, "_");
+
+  return trimEdgeUnderscores(normalized).slice(0, 64);
 }
 
 function truncateValue(value: string): string {
@@ -87,6 +68,11 @@ async function storeFact(username: string, fact: ExtractedFact): Promise<void> {
   const value = truncateValue(fact.value.trim());
   if (!value) return;
 
+  // Don't overwrite a pinned fact with the same key, and don't evict another
+  // memory if this extraction will be skipped anyway.
+  const existing = await Memory.findOne({ scope: "user", username, key });
+  if (existing?.pinned) return;
+
   // Evict oldest non-pinned, non-auto-pinned memory if at cap.
   const count = await Memory.countDocuments({ scope: "user", username });
   if (count >= USER_MEMORY_CAP) {
@@ -97,10 +83,6 @@ async function storeFact(username: string, fact: ExtractedFact): Promise<void> {
     }).sort({ updatedAt: 1 });
     if (oldest) await oldest.deleteOne();
   }
-
-  // Don't overwrite a pinned fact with the same key.
-  const existing = await Memory.findOne({ scope: "user", username, key });
-  if (existing?.pinned) return;
 
   await Memory.updateOne(
     { key, scope: "user", username },
@@ -158,39 +140,31 @@ export async function autoExtractFacts(
 Chat history:
 ${history}
 
-Extract durable facts about ${username} as JSON. Return [] if nothing new.`;
+Extract durable facts about ${username}. Return an empty facts array if nothing new.`;
 
-  let client: CopilotClient | null = null;
+  const abortController = new AbortController();
+  const timeout = setTimeout(
+    () => abortController.abort(),
+    AUTO_EXTRACT_TIMEOUT_MS,
+  );
+
   try {
-    client = new CopilotClient({
-      autoStart: true,
-      autoRestart: false,
-      logLevel: "warning",
-    });
-    await client.start();
-
-    const session = await client.createSession({
-      model: copilotClientManager.model,
-      provider: copilotClientManager.getProviderConfig(),
-      systemMessage: { mode: "replace", content: EXTRACTION_SYSTEM_PROMPT },
-      streaming: true,
-      infiniteSessions: { enabled: false },
-      onPermissionRequest: approveAll,
+    const agent = new Agent({
+      name: "Ruyi memory extractor",
+      instructions: EXTRACTION_SYSTEM_PROMPT,
+      model: agentsRuntimeManager.model,
+      outputType: ExtractionOutputSchema,
     });
 
-    const result = await session.sendAndWait(
-      { prompt: userPrompt },
-      AUTO_EXTRACT_TIMEOUT_MS,
-    );
-    const raw = result?.data.content ?? "";
+    const result = await agentsRuntimeManager.getRunner().run(agent, userPrompt, {
+      maxTurns: 1,
+      signal: abortController.signal,
+    });
 
-    await session.disconnect();
-    await client.stop();
-    client = null;
-
-    const facts = tryParseJsonArray(raw);
+    const facts =
+      result.finalOutput?.facts.slice(0, AUTO_EXTRACT_MAX_FACTS) ?? [];
     aiLogger.info(
-      { username, channelId, count: facts.length, raw: raw.slice(0, 200) },
+      { username, channelId, count: facts.length },
       "Auto-extraction completed",
     );
 
@@ -206,13 +180,16 @@ Extract durable facts about ${username} as JSON. Return [] if nothing new.`;
     }
   } catch (error) {
     aiLogger.warn(
-      { error: (error as Error).message, username, channelId },
+      {
+        error: (error as Error).message,
+        stack: (error as Error).stack,
+        name: (error as Error).name,
+        username,
+        channelId,
+      },
       "Auto-extraction failed",
     );
-    try {
-      await client?.stop();
-    } catch {
-      // ignore cleanup
-    }
+  } finally {
+    clearTimeout(timeout);
   }
 }

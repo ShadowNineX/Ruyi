@@ -1,100 +1,56 @@
-import type {
-  PermissionRequest,
-  PermissionRequestResult,
-  PermissionHandler,
-} from "@github/copilot-sdk";
+import { randomUUID } from "node:crypto";
+import type { RunToolApprovalItem } from "@openai/agents";
 import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  type GuildTextBasedChannel,
   type ButtonInteraction,
   ComponentType,
   EmbedBuilder,
+  type GuildTextBasedChannel,
 } from "discord.js";
 import { aiLogger } from "../logger";
 import { PERMISSION_TIMEOUT_MS } from "../constants";
-
-// Re-export SDK types for convenience
-export type {
-  PermissionRequest,
-  PermissionRequestResult,
-  PermissionHandler,
-} from "@github/copilot-sdk";
 
 export interface PermissionContext {
   channel: GuildTextBasedChannel;
   userId: string;
 }
 
-/** Mirrors the internal SDK PermissionRequestUrl shape (not publicly exported). */
-interface UrlPermissionRequest {
-  kind: "url";
-  url: string;
-  intention: string;
-  toolCallId?: string;
+function truncate(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 3)}...`;
 }
 
-/** Mirrors the internal SDK PermissionRequestCustomTool shape (not publicly exported). */
-interface CustomToolPermissionRequest {
-  kind: "custom-tool";
-  toolName: string;
-  toolDescription: string;
-  args?: Record<string, unknown>;
-  toolCallId?: string;
+function getToolName(approvalItem: RunToolApprovalItem): string {
+  return approvalItem.name ?? approvalItem.toolName ?? "unknown_tool";
 }
 
-function getPermissionDescription(request: PermissionRequest): string {
-  switch (request.kind) {
-    case "shell":
-      return "Execute a shell command";
-    case "write":
-      return "Write to a file";
-    case "read":
-      return "Read a file";
-    case "mcp":
-      return "Use an MCP tool";
-    case "url": {
-      const req = request as UrlPermissionRequest;
-      const parts = [req.url];
-      if (req.intention) parts.push(`Reason: ${req.intention}`);
-      return parts.join("\n");
-    }
-    case "custom-tool": {
-      const req = request as CustomToolPermissionRequest;
-      const suffix = req.toolDescription ? `: ${req.toolDescription}` : "";
-      return "Use tool `" + req.toolName + "`" + suffix;
-    }
-    case "memory":
-      return "Access memory";
-    case "hook":
-      return "Run a hook";
-    default:
-      return `Permission request: ${request.kind}`;
+function formatArguments(rawArguments: string | undefined): string {
+  if (!rawArguments) return "";
+
+  try {
+    const parsed = JSON.parse(rawArguments) as unknown;
+    return JSON.stringify(parsed, null, 2);
+  } catch (error) {
+    aiLogger.debug(
+      { error: (error as Error).message },
+      "Tool approval arguments were not JSON",
+    );
+    return rawArguments;
   }
 }
 
-function getPermissionLabel(request: PermissionRequest): string {
-  if (request.kind === "custom-tool")
-    return (request as CustomToolPermissionRequest).toolName;
-  return request.kind.toUpperCase();
-}
+function getPermissionDescription(approvalItem: RunToolApprovalItem): string {
+  const toolName = getToolName(approvalItem);
+  const formattedArgs = formatArguments(approvalItem.arguments);
+  const lines = [`Tool: \`${toolName}\``];
 
-function getPermissionColor(kind: string): number {
-  switch (kind) {
-    case "shell":
-      return 0xff6b6b;
-    case "write":
-      return 0xffa500;
-    case "mcp":
-      return 0x9b59b6;
-    case "read":
-      return 0x3498db;
-    case "url":
-      return 0x2ecc71;
-    default:
-      return 0x95a5a6;
+  if (formattedArgs) {
+    lines.push("", "Arguments:", "```json", truncate(formattedArgs, 3000), "```");
   }
+
+  return truncate(lines.join("\n"), 3900);
 }
 
 export class PermissionManager {
@@ -108,43 +64,44 @@ export class PermissionManager {
     this.contexts.delete(channelId);
   }
 
-  async requestPermission(
+  async requestToolApproval(
     channelId: string,
-    request: PermissionRequest,
+    approvalItem: RunToolApprovalItem,
     sessionId: string,
     timeoutMs = PERMISSION_TIMEOUT_MS,
-  ): Promise<PermissionRequestResult> {
+  ): Promise<boolean> {
     const context = this.contexts.get(channelId);
+    const toolName = getToolName(approvalItem);
 
     if (!context) {
       aiLogger.warn(
-        { channelId, kind: request.kind },
-        "No permission context found, denying request",
+        { channelId, tool: toolName },
+        "No permission context found, denying tool approval request",
       );
-      return { kind: "user-not-available" };
+      return false;
     }
 
     const { channel, userId } = context;
 
     try {
       const embed = new EmbedBuilder()
-        .setTitle(`🔐 Permission Required: ${getPermissionLabel(request)}`)
-        .setDescription(getPermissionDescription(request))
-        .setColor(getPermissionColor(request.kind))
+        .setTitle(`Permission Required: ${toolName}`)
+        .setDescription(getPermissionDescription(approvalItem))
+        .setColor(0xffa500)
         .setFooter({
-          text: `Only the requesting user can respond • Expires in ${Math.round(timeoutMs / 1000)}s`,
+          text: `Only the requesting user can respond. Expires in ${Math.round(timeoutMs / 1000)}s`,
         })
         .setTimestamp();
 
-      const buttonId = request.toolCallId || String(Date.now());
+      const buttonId = randomUUID().slice(0, 12);
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(`perm_approve_${buttonId}`)
-          .setLabel("✅ Allow")
+          .setLabel("Allow")
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
           .setCustomId(`perm_deny_${buttonId}`)
-          .setLabel("❌ Deny")
+          .setLabel("Deny")
           .setStyle(ButtonStyle.Danger),
       );
 
@@ -154,8 +111,8 @@ export class PermissionManager {
       });
 
       aiLogger.info(
-        { channelId, sessionId, kind: request.kind, userId },
-        "Permission prompt sent, waiting for user response",
+        { channelId, sessionId, tool: toolName, userId },
+        "Tool approval prompt sent, waiting for user response",
       );
 
       try {
@@ -166,15 +123,14 @@ export class PermissionManager {
         });
 
         const approved = interaction.customId.startsWith("perm_approve");
-
         const resultEmbed = new EmbedBuilder()
           .setTitle(
             approved
-              ? `✅ Permission Granted: ${getPermissionLabel(request)}`
-              : `❌ Permission Denied: ${getPermissionLabel(request)}`,
+              ? `Permission Granted: ${toolName}`
+              : `Permission Denied: ${toolName}`,
           )
-          .setDescription(getPermissionDescription(request))
-          .setColor(approved ? 0x00ff00 : 0xff0000)
+          .setDescription(getPermissionDescription(approvalItem))
+          .setColor(approved ? 0x00aa55 : 0xcc3333)
           .setFooter({ text: `Decided by ${interaction.user.username}` })
           .setTimestamp();
 
@@ -184,15 +140,15 @@ export class PermissionManager {
         });
 
         aiLogger.info(
-          { channelId, sessionId, kind: request.kind, approved },
-          "User responded to permission request",
+          { channelId, sessionId, tool: toolName, approved },
+          "User responded to tool approval request",
         );
 
-        return approved ? { kind: "approve-once" } : { kind: "reject" };
-      } catch {
+        return approved;
+      } catch (error) {
         const timeoutEmbed = new EmbedBuilder()
-          .setTitle(`⏰ Permission Expired: ${request.kind.toUpperCase()}`)
-          .setDescription(getPermissionDescription(request))
+          .setTitle(`Permission Expired: ${toolName}`)
+          .setDescription(getPermissionDescription(approvalItem))
           .setColor(0x95a5a6)
           .setFooter({ text: "Request timed out" })
           .setTimestamp();
@@ -202,46 +158,45 @@ export class PermissionManager {
             embeds: [timeoutEmbed],
             components: [],
           })
-          .catch((error: unknown) => {
+          .catch((editError: unknown) => {
             aiLogger.debug(
               {
-                error: (error as Error)?.message,
+                error: (editError as Error)?.message,
                 channelId,
                 sessionId,
-                kind: request.kind,
+                tool: toolName,
               },
-              "Failed to edit timed-out permission prompt",
+              "Failed to edit timed-out tool approval prompt",
             );
           });
 
         aiLogger.warn(
-          { channelId, sessionId, kind: request.kind },
-          "Permission request timed out",
+          {
+            channelId,
+            sessionId,
+            tool: toolName,
+            error: (error as Error).message,
+          },
+          "Tool approval request timed out",
         );
 
-        return { kind: "user-not-available" };
+        return false;
       }
     } catch (error) {
+      const err = error as Error;
       aiLogger.error(
         {
           channelId,
           sessionId,
-          kind: request.kind,
-          error: (error as Error).message,
+          tool: toolName,
+          error: err.message,
+          stack: err.stack,
+          name: err.name,
         },
-        "Failed to send permission prompt",
+        "Failed to send tool approval prompt",
       );
-      return { kind: "user-not-available" };
+      return false;
     }
-  }
-
-  createHandler(channelId: string): PermissionHandler {
-    return async (
-      request: PermissionRequest,
-      invocation: { sessionId: string },
-    ): Promise<PermissionRequestResult> => {
-      return this.requestPermission(channelId, request, invocation.sessionId);
-    };
   }
 }
 

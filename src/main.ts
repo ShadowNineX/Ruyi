@@ -1,10 +1,10 @@
 import { connectDB } from "./db";
 import { configManager } from "./config";
 import {
-  copilotClientManager,
+  agentsRuntimeManager,
   sessionManager,
   conversationContext,
-  shutdownCopilotClient,
+  shutdownAgentsRuntime,
 } from "./ai";
 import { ruyiBot } from "./bot";
 import { allTools } from "./tools";
@@ -46,8 +46,8 @@ logger.info(
 await configManager.load();
 await conversationContext.loadLastInteractions();
 
-// Initialize the CopilotClient and load persisted sessions
-await copilotClientManager.initialize();
+// Initialize the OpenAI Agents runtime and inspect persisted sessions
+await agentsRuntimeManager.initialize();
 await sessionManager.loadPersisted();
 
 // Start the bot
@@ -58,7 +58,7 @@ ruyiBot.start();
 async function shutdown(signal: string): Promise<void> {
   botLogger.info({ signal }, "Shutting down gracefully");
   await mcpConnectionManager.closeAll();
-  await shutdownCopilotClient();
+  await shutdownAgentsRuntime();
   process.exit(0);
 }
 

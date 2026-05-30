@@ -66,28 +66,15 @@ export class RuyiBot {
 
   // ---- Reply gating --------------------------------------------------------
 
-  private async computeResponseGate(message: Message): Promise<ResponseGate> {
+  private computeResponseGate(
+    message: Message,
+    referencedMessage: Message | null,
+  ): ResponseGate {
     const botUser = this.client.user;
     const isMentioned = botUser ? message.mentions.has(botUser) : false;
     const isDM = message.channel.isDMBased();
-
-    let isReplyToBot = false;
-    if (botUser && message.reference?.messageId) {
-      isReplyToBot = await message.channel.messages
-        .fetch(message.reference.messageId)
-        .then((msg) => msg.author.id === botUser.id)
-        .catch((error: unknown) => {
-          botLogger.debug(
-            {
-              error: (error as Error)?.message,
-              referencedMessageId: message.reference?.messageId,
-              channelId: message.channel.id,
-            },
-            "Could not fetch referenced message for reply-to-bot check",
-          );
-          return false;
-        });
-    }
+    const isReplyToBot =
+      Boolean(botUser) && referencedMessage?.author.id === botUser?.id;
 
     return { isMentioned, isDM, isReplyToBot };
   }
@@ -133,8 +120,10 @@ export class RuyiBot {
 
   // ---- Chat handling -------------------------------------------------------
 
-  private async buildToolContext(message: Message): Promise<ToolContext> {
-    const referencedMessage = await fetchReferencedMessage(message);
+  private buildToolContext(
+    message: Message,
+    referencedMessage: Message | null,
+  ): ToolContext {
     const channel: TextChannel | null =
       "name" in message.channel && "messages" in message.channel
         ? (message.channel as TextChannel)
@@ -157,7 +146,7 @@ export class RuyiBot {
     const guildChannel = message.channel as GuildTextBasedChannel;
 
     const [replyChain, chatHistory] = await Promise.all([
-      fetchReplyChain(message),
+      fetchReplyChain(message, toolCtx.referencedMessage),
       fetchChatHistory(message),
     ]);
     const combinedHistory = [...replyChain, ...chatHistory];
@@ -191,11 +180,11 @@ export class RuyiBot {
       const sentChunks = await sendReplyChunks(message, reply, username);
       // Store the full assembled reply once, anchored to the first chunk's
       // message ID, instead of writing one DB row per Discord chunk. The
-      // persistent CopilotSession already retains the full reply server-side;
+      // persistent AgentSession already retains the full reply server-side;
       // the DB copy exists for the auto-extractor and for restart fallback.
       const anchorId = sentChunks[0]?.id;
       if (anchorId) {
-        conversationContext.rememberMessage(
+        await conversationContext.rememberMessage(
           message.channel.id,
           "Ruyi",
           reply,
@@ -232,14 +221,15 @@ export class RuyiBot {
   }
 
   private async handleAIChat(message: Message): Promise<void> {
-    const gate = await this.computeResponseGate(message);
+    const referencedMessage = await fetchReferencedMessage(message);
+    const gate = this.computeResponseGate(message, referencedMessage);
     if (!(await this.shouldBotRespond(message, gate))) return;
 
     const session = new ChatSession(message.channel);
     session.startTyping();
     this.setTypingStatus(message.author.displayName);
 
-    const toolCtx = await this.buildToolContext(message);
+    const toolCtx = this.buildToolContext(message, referencedMessage);
 
     try {
       await this.runChat(message, session, toolCtx);

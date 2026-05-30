@@ -1,4 +1,4 @@
-import { defineTool } from "@github/copilot-sdk";
+import { tool } from "@openai/agents";
 import { z } from "zod";
 import { AuditLogEvent, type GuildAuditLogsEntry } from "discord.js";
 import { toolLogger } from "../logger";
@@ -45,6 +45,23 @@ function getTargetType(target: unknown): string {
   if ("guild" in target) return "channel";
   if ("color" in target) return "role";
   return "other";
+}
+
+function truncateAuditValue(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") {
+    return value.length > 300 ? `${value.slice(0, 297)}...` : value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return value;
+
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized.length > 300
+      ? `${serialized.slice(0, 297)}...`
+      : serialized;
+  } catch {
+    return "[unserializable value]";
+  }
 }
 
 function formatTarget(entry: GuildAuditLogsEntry): {
@@ -105,7 +122,8 @@ const actionTypes = [
   "bot_add",
 ] as const;
 
-export const auditLogTool = defineTool("get_audit_log", {
+export const auditLogTool = tool({
+  name: "get_audit_log",
   description:
     "Search and view the Discord server audit log. Shows who did what actions like bans, kicks, role changes, message deletions, etc.",
   parameters: z.object({
@@ -123,7 +141,7 @@ export const auditLogTool = defineTool("get_audit_log", {
       .describe("Filter by the target of the action."),
     limit: z.number().nullable().describe("Maximum entries to return (1-50)."),
   }),
-  handler: async ({ action_type, user, target_user, limit }) => {
+  execute: async ({ action_type, user, target_user, limit }) => {
     const { guild } = toolContextManager.get();
 
     if (!guild) {
@@ -181,8 +199,8 @@ export const auditLogTool = defineTool("get_audit_log", {
           timestamp: Math.floor(entry.createdTimestamp / 1000),
           changes: entry.changes.map((c) => ({
             key: c.key,
-            old: c.old,
-            new: c.new,
+            old: truncateAuditValue(c.old),
+            new: truncateAuditValue(c.new),
           })),
         };
       });

@@ -12,6 +12,8 @@ const BATCH_SIZE = 10;
 const BATCH_DELAY_MS = 1000;
 
 type MessageableChannel = TextChannel | NewsChannel | ThreadChannel;
+type MessagePresence = "exists" | "deleted" | "unknown";
+type SyncConversation = Pick<IConversation, "channelId" | "messages">;
 
 function isMessageableChannel(channel: unknown): channel is MessageableChannel {
   return (
@@ -26,29 +28,44 @@ function isMessageableChannel(channel: unknown): channel is MessageableChannel {
 async function messageExists(
   channel: MessageableChannel,
   messageId: string,
-): Promise<boolean> {
+): Promise<MessagePresence> {
   try {
     await channel.messages.fetch(messageId);
-    return true;
-  } catch {
-    return false;
+    return "exists";
+  } catch (error) {
+    const code = (error as { code?: number | string }).code;
+    if (code === 10008) return "deleted";
+
+    syncLogger.debug(
+      {
+        error: (error as Error).message,
+        code,
+        channelId: channel.id,
+        messageId,
+      },
+      "Could not verify message during sync",
+    );
+    return "unknown";
   }
 }
 
 async function findDeletedMessages(
   channel: MessageableChannel,
   messageIds: string[],
-): Promise<string[]> {
+): Promise<{ deletedIds: string[]; skipped: number }> {
   const deleted: string[] = [];
+  let skipped = 0;
 
   for (const messageId of messageIds) {
-    const exists = await messageExists(channel, messageId);
-    if (!exists) {
+    const presence = await messageExists(channel, messageId);
+    if (presence === "deleted") {
       deleted.push(messageId);
+    } else if (presence === "unknown") {
+      skipped += 1;
     }
   }
 
-  return deleted;
+  return { deletedIds: deleted, skipped };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -57,7 +74,7 @@ function sleep(ms: number): Promise<void> {
 
 async function syncConversation(
   client: Client,
-  conversation: IConversation,
+  conversation: SyncConversation,
 ): Promise<{ channelId: string; deleted: number; skipped: number }> {
   const channelId = conversation.channelId;
   const messagesWithIds = conversation.messages.filter((m) => m.messageId);
@@ -91,18 +108,26 @@ async function syncConversation(
       return { channelId, deleted: 0, skipped: messagesWithIds.length };
     }
     channel = fetchedChannel;
-  } catch {
-    syncLogger.debug({ channelId }, "Could not fetch channel, skipping");
+  } catch (error) {
+    syncLogger.debug(
+      { channelId, error: (error as Error).message },
+      "Could not fetch channel, skipping",
+    );
     return { channelId, deleted: 0, skipped: messagesWithIds.length };
   }
 
   const messageIds = messagesWithIds.map((m) => m.messageId!);
   const deletedIds: string[] = [];
+  let skippedFetches = 0;
 
   for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
     const batch = messageIds.slice(i, i + BATCH_SIZE);
-    const deleted = await findDeletedMessages(channel, batch);
+    const { deletedIds: deleted, skipped } = await findDeletedMessages(
+      channel,
+      batch,
+    );
     deletedIds.push(...deleted);
+    skippedFetches += skipped;
 
     if (i + BATCH_SIZE < messageIds.length) {
       await sleep(BATCH_DELAY_MS);
@@ -120,18 +145,32 @@ async function syncConversation(
     );
   }
 
-  return { channelId, deleted: deletedIds.length, skipped: messagesWithoutIds };
+  return {
+    channelId,
+    deleted: deletedIds.length,
+    skipped: messagesWithoutIds + skippedFetches,
+  };
 }
 
 export class MessageSyncService {
   private syncInterval: ReturnType<typeof setInterval> | null = null;
+  private isRunning = false;
 
   private async runSync(client: Client): Promise<void> {
+    if (this.isRunning) {
+      syncLogger.warn("Message sync already in progress; skipping sweep");
+      return;
+    }
+
+    this.isRunning = true;
     const startTime = Date.now();
     syncLogger.info("Starting message sync sweep");
 
     try {
-      const conversations = await Conversation.find({});
+      const conversations = await Conversation.find(
+        {},
+        { channelId: 1, "messages.messageId": 1 },
+      ).lean<SyncConversation[]>();
       let totalDeleted = 0;
       let totalSkipped = 0;
       let channelsProcessed = 0;
@@ -159,6 +198,8 @@ export class MessageSyncService {
       );
     } catch (error) {
       syncLogger.error({ error }, "Message sync sweep failed");
+    } finally {
+      this.isRunning = false;
     }
   }
 
@@ -173,7 +214,7 @@ export class MessageSyncService {
       "Starting message sync service",
     );
 
-    this.runSync(client);
+    void this.runSync(client);
     this.syncInterval = setInterval(
       () => this.runSync(client),
       SYNC_INTERVAL_MS,

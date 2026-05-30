@@ -1,11 +1,12 @@
 import { DateTime } from "luxon";
-import { Conversation, Memory } from "../db/models";
+import { AgentSession, Conversation, Memory } from "../db/models";
 import type { IMemory } from "../db/models/Memory";
 import { aiLogger } from "../logger";
 import {
   AUTO_EXTRACT_COOLDOWN_MS,
   AUTO_EXTRACT_THRESHOLD,
   GLOBAL_CONTEXT_LIMIT,
+  CHANNEL_SUMMARY_CONTEXT_MAX_LEN,
   ONGOING_CONVERSATION_WINDOW_MS,
   PINNED_CONTEXT_LIMIT,
   RECENT_USER_MEMORY_LIMIT,
@@ -196,8 +197,31 @@ export class ConversationContext {
     }
   }
 
+  async fetchChannelSummary(channelId: string): Promise<string> {
+    try {
+      const session = await AgentSession.findOne(
+        {
+          channelId,
+          isActive: true,
+          provider: "openai-agents",
+        },
+        { summary: 1, _id: 0 },
+      );
+      const summary = session?.summary?.trim();
+      if (!summary) return "";
+
+      return `\n\nChannel summary (compacted older context):\n${summary.slice(
+        0,
+        CHANNEL_SUMMARY_CONTEXT_MAX_LEN,
+      )}`;
+    } catch (error) {
+      aiLogger.error({ error, channelId }, "Failed to fetch channel summary");
+      return "";
+    }
+  }
+
   buildConversationHistory(chatHistory: ChatMessage[]): string {
-    // The persistent CopilotSession already retains every turn we sent it,
+    // The persistent AgentSession already retains every turn we sent it,
     // so we deliberately do NOT re-inject the bot's own past replies here.
     // We only surface:
     //   - the reply chain the user explicitly cited (might be older or
@@ -238,7 +262,10 @@ export class ConversationContext {
     chatHistory: ChatMessage[],
   ): Promise<string> {
     const historyContext = this.buildConversationHistory(chatHistory);
-    const memoryContext = await this.fetchUserMemories(username);
+    const [memoryContext, channelSummary] = await Promise.all([
+      this.fetchUserMemories(username),
+      this.fetchChannelSummary(channelId),
+    ]);
     const currentTime = DateTime.now().toUnixInteger();
     const isOngoing = this.isOngoingConversation(channelId);
 
@@ -246,6 +273,7 @@ export class ConversationContext {
       `<context>`,
       `Current user: ${username}`,
       `CURRENT TIME: Unix ${currentTime} — Use <t:${currentTime}:t> for time, <t:${currentTime}:F> for full datetime, <t:${currentTime}:R> for relative`,
+      channelSummary ? `${channelSummary}` : null,
       historyContext ? `${historyContext}` : null,
       memoryContext ? `${memoryContext}` : null,
       `</context>`,

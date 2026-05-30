@@ -1,121 +1,522 @@
-import type { CopilotSession as SDKSession } from "@github/copilot-sdk";
-import { allTools } from "../tools";
+import {
+  Agent,
+  assistant,
+  user,
+  type AgentInputItem,
+  type OpenAIResponsesCompactionArgs,
+  type Session,
+} from "@openai/agents";
 import { aiLogger } from "../logger";
-import { CopilotSession as CopilotSessionModel } from "../db/models";
-import { mcpConnectionManager } from "../mcp/client";
-import { copilotClientManager } from "./client";
-import { permissionManager } from "./permissions";
+import { AgentSession, Conversation } from "../db/models";
+import type { IAgentSession } from "../db/models";
+import {
+  AGENT_SESSION_COMPACTION_ITEM_MAX_LEN,
+  AGENT_SESSION_COMPACTION_TIMEOUT_MS,
+  AGENT_SESSION_COMPACTION_TRIGGER_ITEMS,
+  AGENT_SESSION_ITEM_CAP,
+  AGENT_SESSION_RECENT_ITEM_KEEP,
+  AGENT_SESSION_SEED_MESSAGE_LIMIT,
+  AGENT_SESSION_SUMMARY_MAX_LEN,
+} from "../constants";
+import { agentsRuntimeManager } from "./client";
 import { systemPromptVersion } from "./prompt";
 
-export class SessionManager {
-  private readonly activeSessions = new Map<string, SDKSession>();
+const SUMMARY_SYSTEM_PROMPT = `You maintain Ruyi's compacted Discord channel memory.
 
-  /**
-   * Combined list of locally-defined tools and any MCP tools currently
-   * registered. Recomputed on each call so newly-connected MCP servers
-   * are picked up.
-   */
-  private getAllAvailableTools() {
-    const mcpTools = mcpConnectionManager.getTools();
-    return [...allTools, ...mcpTools];
+Return only the refreshed summary text. No preface, markdown heading, JSON, or code fence.
+
+Keep:
+- Durable facts, preferences, names, relationships, projects, and decisions.
+- Open threads, unresolved requests, promised follow-ups, and current tasks.
+- Important Discord context such as channels, message IDs, user names, URLs, permissions, and moderation actions.
+- Tool calls only when their outcome matters later: tool name, purpose, result, errors, IDs, URLs, files, or destructive/admin action taken.
+
+Prune:
+- Raw tool payloads, base64/blob data, long JSON, repeated search listings, transient call metadata, and routine successful tool chatter.
+- Passing moods, small talk with no future relevance, duplicate facts, and obsolete intermediate reasoning.
+
+Write in concise bullets or short paragraphs. Preserve enough context that a future assistant can answer follow-ups without seeing the old raw items.`;
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
   }
+  return value as Record<string, unknown>;
+}
+
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return value.slice(0, Math.max(0, maxLength - 3)) + "...";
+}
+
+function stringifyUnknown(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined) return "";
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "[unserializable value]";
+  }
+}
+
+function contentPartToText(part: unknown): string {
+  if (typeof part === "string") return part;
+
+  const record = asRecord(part);
+  if (!record) return stringifyUnknown(part);
+
+  if (typeof record.text === "string") return record.text;
+  if (typeof record.refusal === "string") return `[refusal] ${record.refusal}`;
+  if (typeof record.image === "string") return "[image]";
+
+  return stringifyUnknown(record);
+}
+
+function contentToText(content: unknown): string {
+  if (Array.isArray(content)) {
+    return content.map(contentPartToText).filter(Boolean).join(" ");
+  }
+  return stringifyUnknown(content);
+}
+
+function itemLabel(record: Record<string, unknown>): string {
+  if (typeof record.role === "string") return record.role;
+  if (typeof record.type === "string") return record.type;
+  return "item";
+}
+
+function itemBody(record: Record<string, unknown>): string {
+  const name = typeof record.name === "string" ? record.name : "unknown";
+
+  if (record.type === "function_call") {
+    return `${name} args=${truncateText(
+      stringifyUnknown(record.arguments),
+      500,
+    )}`;
+  }
+
+  if (record.type === "function_call_result") {
+    return `${name} output=${truncateText(
+      stringifyUnknown(record.output),
+      900,
+    )}`;
+  }
+
+  if ("content" in record) return contentToText(record.content);
+
+  return stringifyUnknown(record);
+}
+
+function formatItemForSummary(item: AgentInputItem, index: number): string {
+  const record = asRecord(item);
+  const body = record ? itemBody(record) : stringifyUnknown(item);
+  const label = record ? itemLabel(record) : "item";
+
+  return `${index}. ${label}: ${truncateText(
+    body,
+    AGENT_SESSION_COMPACTION_ITEM_MAX_LEN,
+  )}`;
+}
+
+function serializeItemsForSummary(items: AgentInputItem[]): string {
+  return items
+    .map((item, index) => formatItemForSummary(item, index + 1))
+    .join("\n");
+}
+
+function itemType(item: AgentInputItem): string | null {
+  const type = asRecord(item)?.type;
+  return typeof type === "string" ? type : null;
+}
+
+function callIdForItem(item: AgentInputItem): string | null {
+  const record = asRecord(item);
+  const callId = record?.callId ?? record?.call_id;
+  return typeof callId === "string" && callId.length > 0 ? callId : null;
+}
+
+function isFunctionCall(item: AgentInputItem): boolean {
+  return itemType(item) === "function_call";
+}
+
+function isFunctionCallResult(item: AgentInputItem): boolean {
+  return itemType(item) === "function_call_result";
+}
+
+function callIdsForItems(
+  items: AgentInputItem[],
+  predicate: (item: AgentInputItem) => boolean,
+): Set<string> {
+  const callIds = new Set<string>();
+
+  for (const item of items) {
+    const callId = callIdForItem(item);
+    if (callId && predicate(item)) callIds.add(callId);
+  }
+
+  return callIds;
+}
+
+function missingFunctionCallIds(
+  items: AgentInputItem[],
+  knownCallIds: Set<string>,
+): Set<string> {
+  const missingCallIds = new Set<string>();
+
+  for (const item of items) {
+    const callId = callIdForItem(item);
+    if (callId && isFunctionCallResult(item) && !knownCallIds.has(callId)) {
+      missingCallIds.add(callId);
+    }
+  }
+
+  return missingCallIds;
+}
+
+function moveStartBeforeMissingCalls(
+  items: AgentInputItem[],
+  start: number,
+  missingCallIds: Set<string>,
+): number {
+  while (missingCallIds.size > 0 && start > 0) {
+    start -= 1;
+    const item = items[start];
+    if (!item) continue;
+    const callId = callIdForItem(item);
+    if (!callId) continue;
+    if (isFunctionCall(item)) missingCallIds.delete(callId);
+    if (isFunctionCallResult(item)) missingCallIds.add(callId);
+  }
+
+  return start;
+}
+
+function retainedStartIndex(items: AgentInputItem[]): number {
+  const start = Math.max(0, items.length - AGENT_SESSION_RECENT_ITEM_KEEP);
+  const retainedItems = items.slice(start);
+  const retainedCallIds = callIdsForItems(retainedItems, isFunctionCall);
+  const missingCallIds = missingFunctionCallIds(retainedItems, retainedCallIds);
+
+  return moveStartBeforeMissingCalls(items, start, missingCallIds);
+}
+
+function buildSummaryPrompt(
+  existingSummary: string | null,
+  compactedItems: AgentInputItem[],
+): string {
+  const previousSummary = existingSummary
+    ? truncateText(existingSummary, AGENT_SESSION_SUMMARY_MAX_LEN)
+    : "(none)";
+
+  return `Previous compacted summary:
+${previousSummary}
+
+Older raw session items to fold into the summary:
+${serializeItemsForSummary(compactedItems)}
+
+Refresh the compacted channel summary. Keep it under ${AGENT_SESSION_SUMMARY_MAX_LEN} characters.`;
+}
+
+async function summarizeCompactedItems(
+  existingSummary: string | null,
+  compactedItems: AgentInputItem[],
+): Promise<string> {
+  const abortController = new AbortController();
+  const timeout = setTimeout(
+    () => abortController.abort(),
+    AGENT_SESSION_COMPACTION_TIMEOUT_MS,
+  );
+
+  try {
+    const agent = new Agent({
+      name: "Ruyi channel summarizer",
+      instructions: SUMMARY_SYSTEM_PROMPT,
+      model: agentsRuntimeManager.model,
+    });
+
+    const result = await agentsRuntimeManager
+      .getRunner()
+      .run(agent, buildSummaryPrompt(existingSummary, compactedItems), {
+        maxTurns: 1,
+        signal: abortController.signal,
+      });
+
+    const raw =
+      typeof result.finalOutput === "string" ? result.finalOutput.trim() : "";
+    if (!raw) throw new Error("Summary compaction returned empty output");
+
+    return truncateText(raw, AGENT_SESSION_SUMMARY_MAX_LEN);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+interface SessionCompactionResult {
+  items: AgentInputItem[];
+  summary: string;
+  compactedCount: number;
+}
+
+async function compactItemsIntoSummary(
+  items: AgentInputItem[],
+  existingSummary: string | null,
+): Promise<SessionCompactionResult | null> {
+  const start = retainedStartIndex(items);
+  if (start <= 0) return null;
+
+  const compactedItems = items.slice(0, start);
+  const retainedItems = items.slice(start);
+  const summary = await summarizeCompactedItems(
+    existingSummary,
+    compactedItems,
+  );
+
+  return {
+    items: retainedItems,
+    summary,
+    compactedCount: compactedItems.length,
+  };
+}
+
+class MongoAgentSession implements Session {
+  constructor(
+    private readonly channelId: string,
+    private readonly sessionId: string,
+    private items: AgentInputItem[],
+    private summary: string | null,
+  ) {}
+
+  async getSessionId(): Promise<string> {
+    return this.sessionId;
+  }
+
+  async getItems(limit?: number): Promise<AgentInputItem[]> {
+    if (limit === undefined) return [...this.items];
+    return this.items.slice(-limit);
+  }
+
+  async addItems(items: AgentInputItem[]): Promise<void> {
+    this.items = [...this.items, ...items];
+    await this.persist();
+  }
+
+  async popItem(): Promise<AgentInputItem | undefined> {
+    const item = this.items.pop();
+    await this.persist();
+    return item;
+  }
+
+  async clearSession(): Promise<void> {
+    this.items = [];
+    await this.persist();
+  }
+
+  async runCompaction(args?: OpenAIResponsesCompactionArgs): Promise<void> {
+    const shouldCompact =
+      args?.force === true ||
+      this.items.length > AGENT_SESSION_COMPACTION_TRIGGER_ITEMS;
+    if (!shouldCompact) {
+      return;
+    }
+
+    try {
+      const result = await compactItemsIntoSummary(this.items, this.summary);
+      if (!result) return;
+
+      this.summary = result.summary;
+      this.items = result.items;
+      await this.persistCompaction();
+
+      aiLogger.info(
+        {
+          channelId: this.channelId,
+          compactedCount: result.compactedCount,
+          retainedCount: result.items.length,
+          summaryLength: result.summary.length,
+        },
+        "Agent session compacted into channel summary",
+      );
+    } catch (error) {
+      await this.trimAfterFailedCompaction();
+      aiLogger.warn(
+        {
+          error: (error as Error).message,
+          stack: (error as Error).stack,
+          name: (error as Error).name,
+          channelId: this.channelId,
+          itemCount: this.items.length,
+        },
+        "Agent session compaction failed; retaining raw session items",
+      );
+    }
+  }
+
+  private async persist(): Promise<void> {
+    await AgentSession.updateOne(
+      { channelId: this.channelId },
+      {
+        $set: {
+          sessionId: this.sessionId,
+          provider: "openai-agents",
+          model: agentsRuntimeManager.model,
+          items: this.items,
+          lastUsed: new Date(),
+          isActive: true,
+          promptVersion: systemPromptVersion,
+        },
+        $setOnInsert: { createdAt: new Date() },
+      },
+      { upsert: true },
+    );
+  }
+
+  private async persistCompaction(): Promise<void> {
+    await AgentSession.updateOne(
+      { channelId: this.channelId },
+      {
+        $set: {
+          summary: this.summary ?? "",
+          summaryUpdatedAt: new Date(),
+          items: this.items,
+          lastUsed: new Date(),
+          model: agentsRuntimeManager.model,
+          promptVersion: systemPromptVersion,
+        },
+      },
+    );
+  }
+
+  private async trimAfterFailedCompaction(): Promise<void> {
+    if (this.items.length <= AGENT_SESSION_ITEM_CAP) return;
+
+    const originalCount = this.items.length;
+    this.items = this.items.slice(-AGENT_SESSION_ITEM_CAP);
+    await this.persist();
+
+    aiLogger.warn(
+      {
+        channelId: this.channelId,
+        originalCount,
+        retainedCount: this.items.length,
+      },
+      "Agent session exceeded hard cap after failed compaction; trimmed raw items",
+    );
+  }
+}
+
+function toAgentItems(doc: IAgentSession): AgentInputItem[] {
+  return doc.items as AgentInputItem[];
+}
+
+async function compactPersistedItemsIfNeeded(
+  channelId: string,
+  items: AgentInputItem[],
+  existingSummary: string | null,
+): Promise<{ items: AgentInputItem[]; summary: string | null }> {
+  if (items.length <= AGENT_SESSION_COMPACTION_TRIGGER_ITEMS) {
+    return { items, summary: existingSummary };
+  }
+
+  try {
+    const result = await compactItemsIntoSummary(items, existingSummary);
+    if (!result) return { items, summary: existingSummary };
+
+    await AgentSession.updateOne(
+      { channelId },
+      {
+        $set: {
+          items: result.items,
+          summary: result.summary,
+          summaryUpdatedAt: new Date(),
+          lastUsed: new Date(),
+          model: agentsRuntimeManager.model,
+          promptVersion: systemPromptVersion,
+        },
+      },
+    );
+
+    aiLogger.info(
+      {
+        channelId,
+        compactedCount: result.compactedCount,
+        retainedCount: result.items.length,
+        summaryLength: result.summary.length,
+      },
+      "Compacted loaded agent session before replay",
+    );
+
+    return { items: result.items, summary: result.summary };
+  } catch (error) {
+    aiLogger.warn(
+      {
+        error: (error as Error).message,
+        stack: (error as Error).stack,
+        name: (error as Error).name,
+        channelId,
+        itemCount: items.length,
+      },
+      "Failed to compact loaded agent session; using existing raw items",
+    );
+    return {
+      items: items.slice(-AGENT_SESSION_ITEM_CAP),
+      summary: existingSummary,
+    };
+  }
+}
+
+async function buildSeedItems(
+  channelId: string,
+  currentMessageId?: string,
+): Promise<AgentInputItem[]> {
+  const conversation = await Conversation.findOne({ channelId });
+  if (!conversation || conversation.messages.length === 0) return [];
+
+  const messages = conversation.messages
+    .filter((message) => message.messageId !== currentMessageId)
+    .slice(-AGENT_SESSION_SEED_MESSAGE_LIMIT);
+
+  return messages.map((message) => {
+    if (message.isBot) {
+      return assistant(message.content);
+    }
+    return user(`${message.author}: ${message.content}`);
+  });
+}
+
+export class SessionManager {
+  private readonly activeSessions = new Map<string, MongoAgentSession>();
 
   async loadPersisted(): Promise<void> {
     try {
-      const client = await copilotClientManager.getClient();
-      const persistedSessions = await CopilotSessionModel.find({
-        isActive: true,
-      });
-
-      const allAvailableTools = this.getAllAvailableTools();
-
+      const count = await AgentSession.countDocuments({ isActive: true });
       aiLogger.info(
-        { count: persistedSessions.length },
-        "Loading persisted sessions",
-      );
-
-      for (const persisted of persistedSessions) {
-        if (
-          persisted.promptVersion &&
-          persisted.promptVersion !== systemPromptVersion
-        ) {
-          aiLogger.info(
-            {
-              channelId: persisted.channelId,
-              sessionId: persisted.sessionId,
-              storedVersion: persisted.promptVersion,
-              currentVersion: systemPromptVersion,
-            },
-            "Skipping resume: system prompt changed since session was created",
-          );
-          await CopilotSessionModel.updateOne(
-            { channelId: persisted.channelId },
-            { $set: { isActive: false } },
-          );
-          continue;
-        }
-        try {
-          const session = await client.resumeSession(persisted.sessionId, {
-            tools: [...allAvailableTools],
-            provider: copilotClientManager.getProviderConfig(),
-            model: copilotClientManager.model,
-            onPermissionRequest: permissionManager.createHandler(
-              persisted.channelId,
-            ),
-          });
-
-          this.activeSessions.set(persisted.channelId, session);
-          aiLogger.debug(
-            {
-              channelId: persisted.channelId,
-              sessionId: persisted.sessionId,
-            },
-            "Resumed persisted session",
-          );
-        } catch (error) {
-          aiLogger.warn(
-            {
-              channelId: persisted.channelId,
-              sessionId: persisted.sessionId,
-              error: (error as Error).message,
-            },
-            "Failed to resume session, marking inactive",
-          );
-          await CopilotSessionModel.updateOne(
-            { channelId: persisted.channelId },
-            { $set: { isActive: false } },
-          );
-        }
-      }
-
-      aiLogger.info(
-        { activeCount: this.activeSessions.size },
-        "Session loading complete",
+        { count },
+        "Agent sessions are persisted in Mongo and will be loaded lazily",
       );
     } catch (error) {
-      aiLogger.error({ error }, "Failed to load persisted sessions");
+      aiLogger.error({ error }, "Failed to inspect persisted agent sessions");
     }
   }
 
   async getOrCreate(
     channelId: string,
-    systemMessage: string,
-  ): Promise<SDKSession> {
+    currentMessageId?: string,
+  ): Promise<MongoAgentSession> {
     const existingSession = this.activeSessions.get(channelId);
     if (existingSession) {
-      aiLogger.debug({ channelId }, "Using cached session");
-      await CopilotSessionModel.updateOne(
+      aiLogger.debug({ channelId }, "Using cached agent session");
+      await AgentSession.updateOne(
         { channelId },
         { $set: { lastUsed: new Date() } },
       );
       return existingSession;
     }
 
-    const client = await copilotClientManager.getClient();
-
-    const persistedSession = await CopilotSessionModel.findOne({
+    const persistedSession = await AgentSession.findOne({
       channelId,
       isActive: true,
+      provider: "openai-agents",
     });
 
     if (persistedSession) {
@@ -124,149 +525,93 @@ export class SessionManager {
         persistedSession.promptVersion === systemPromptVersion;
 
       if (versionMatches) {
-        try {
-          const allAvailableTools = this.getAllAvailableTools();
-
-          const session = await client.resumeSession(
-            persistedSession.sessionId,
-            {
-              tools: [...allAvailableTools],
-              provider: copilotClientManager.getProviderConfig(),
-              model: copilotClientManager.model,
-              onPermissionRequest: permissionManager.createHandler(channelId),
-            },
-          );
-
-          this.activeSessions.set(channelId, session);
-          await CopilotSessionModel.updateOne(
-            { channelId },
-            { $set: { lastUsed: new Date() } },
-          );
-
-          aiLogger.debug(
-            { channelId, sessionId: persistedSession.sessionId },
-            "Resumed session from DB",
-          );
-          return session;
-        } catch (error) {
-          aiLogger.warn(
-            { channelId, error: (error as Error).message },
-            "Failed to resume session, creating new one",
-          );
-          await CopilotSessionModel.updateOne(
-            { channelId },
-            { $set: { isActive: false } },
-          );
-        }
-      } else {
-        aiLogger.info(
-          {
-            channelId,
-            sessionId: persistedSession.sessionId,
-            storedVersion: persistedSession.promptVersion,
-            currentVersion: systemPromptVersion,
-          },
-          "System prompt changed; creating fresh session",
+        const compactedSession = await compactPersistedItemsIfNeeded(
+          channelId,
+          toAgentItems(persistedSession),
+          persistedSession.summary ?? null,
         );
-        await CopilotSessionModel.updateOne(
+        const session = new MongoAgentSession(
+          channelId,
+          persistedSession.sessionId,
+          compactedSession.items,
+          compactedSession.summary,
+        );
+        this.activeSessions.set(channelId, session);
+        await AgentSession.updateOne(
           { channelId },
-          { $set: { isActive: false } },
+          {
+            $set: {
+              lastUsed: new Date(),
+              model: agentsRuntimeManager.model,
+            },
+          },
         );
+
+        aiLogger.debug(
+          { channelId, sessionId: persistedSession.sessionId },
+          "Loaded agent session from Mongo",
+        );
+        return session;
       }
-    }
 
-    const sessionId = `ruyi-${channelId}-${Date.now()}`;
-
-    const allAvailableTools = this.getAllAvailableTools();
-    const mcpTools = allAvailableTools.slice(allTools.length);
-
-    const permissionHandler = permissionManager.createHandler(channelId);
-
-    const session = await client.createSession({
-      sessionId,
-      model: copilotClientManager.model,
-      provider: copilotClientManager.getProviderConfig(),
-      tools: [...allAvailableTools],
-      systemMessage: {
-        mode: "replace",
-        content: systemMessage,
-      },
-      streaming: false,
-      infiniteSessions: { enabled: true },
-      onPermissionRequest: permissionHandler,
-    });
-
-    if (mcpTools.length > 0) {
       aiLogger.info(
         {
           channelId,
-          mcpToolCount: mcpTools.length,
-          tools: mcpTools.map((t) => t.name),
+          sessionId: persistedSession.sessionId,
+          storedVersion: persistedSession.promptVersion,
+          currentVersion: systemPromptVersion,
         },
-        "Session created with MCP tools",
+        "System prompt changed; creating fresh agent session",
+      );
+      await AgentSession.updateOne(
+        { channelId },
+        { $set: { isActive: false } },
       );
     }
 
-    this.activeSessions.set(channelId, session);
+    const sessionId = `ruyi-${channelId}-${Date.now()}`;
+    const seedItems = await buildSeedItems(channelId, currentMessageId);
+    const session = new MongoAgentSession(channelId, sessionId, seedItems, null);
 
-    await CopilotSessionModel.findOneAndUpdate(
+    await AgentSession.findOneAndUpdate(
       { channelId },
       {
         $set: {
-          sessionId: session.sessionId,
+          sessionId,
+          provider: "openai-agents",
+          model: agentsRuntimeManager.model,
+          items: seedItems,
           lastUsed: new Date(),
           isActive: true,
           promptVersion: systemPromptVersion,
         },
-        $setOnInsert: {
-          createdAt: new Date(),
-        },
+        $setOnInsert: { createdAt: new Date() },
       },
       { upsert: true },
     );
 
+    this.activeSessions.set(channelId, session);
+
     aiLogger.info(
-      { channelId, sessionId: session.sessionId },
-      "Created new session",
+      { channelId, sessionId, seedCount: seedItems.length },
+      "Created new agent session",
     );
 
     return session;
   }
 
   async invalidate(channelId: string): Promise<void> {
-    const session = this.activeSessions.get(channelId);
-    if (session) {
-      try {
-        await session.disconnect();
-      } catch (error) {
-        aiLogger.warn(
-          { channelId, error: (error as Error).message },
-          "Error disconnecting session",
-        );
-      }
-      this.activeSessions.delete(channelId);
-    }
+    this.activeSessions.delete(channelId);
 
-    await CopilotSessionModel.updateOne(
+    await AgentSession.updateOne(
       { channelId },
       { $set: { isActive: false } },
     );
 
-    aiLogger.debug({ channelId }, "Session invalidated");
+    aiLogger.debug({ channelId }, "Agent session invalidated");
   }
 
   async destroyAll(): Promise<void> {
-    for (const [channelId, session] of this.activeSessions) {
-      try {
-        await session.disconnect();
-        aiLogger.debug({ channelId }, "Session disconnected on shutdown");
-      } catch (error) {
-        aiLogger.warn(
-          { channelId, error: (error as Error).message },
-          "Error disconnecting session on shutdown",
-        );
-      }
-    }
     this.activeSessions.clear();
   }
 

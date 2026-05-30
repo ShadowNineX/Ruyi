@@ -1,4 +1,4 @@
-import { defineTool } from "@github/copilot-sdk";
+import { tool } from "@openai/agents";
 import { z } from "zod";
 import { EmbedBuilder } from "discord.js";
 import { toolLogger } from "../logger";
@@ -23,11 +23,12 @@ const colorMap: Record<string, number> = {
 
 function parseColor(color: string | null): number {
   if (!color) return 0x9b59b6;
-  const namedColor = colorMap[color.toLowerCase()];
+  const normalized = color.trim().toLowerCase();
+  const namedColor = colorMap[normalized];
   if (namedColor !== undefined) return namedColor;
-  const hex = color.replace("#", "");
-  const parsed = Number.parseInt(hex, 16);
-  return Number.isNaN(parsed) ? 0x9b59b6 : parsed;
+  const hex = normalized.replace(/^#/, "");
+  if (!/^[\da-f]{6}$/i.test(hex)) return 0x9b59b6;
+  return Number.parseInt(hex, 16);
 }
 
 interface EmbedField {
@@ -188,7 +189,8 @@ function needsMultipleEmbeds(
   return tooManyFields || descriptionTooLong;
 }
 
-export const embedTool = defineTool("send_embed", {
+export const embedTool = tool({
+  name: "send_embed",
   description:
     "Send a beautifully formatted Discord embed message. Use this for tables, lists, structured data, audit logs, search results, or any content that benefits from rich formatting.",
   parameters: z.object({
@@ -214,7 +216,7 @@ export const embedTool = defineTool("send_embed", {
       .nullable()
       .describe("URL of a small image in top-right corner."),
   }),
-  handler: async ({ title, description, color, fields, footer, thumbnail }) => {
+  execute: async ({ title, description, color, fields, footer, thumbnail }) => {
     const ctx = toolContextManager.get();
 
     if (!ctx.channel) {

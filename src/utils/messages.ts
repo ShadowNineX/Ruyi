@@ -154,22 +154,25 @@ export async function sendReplyChunks(
 
 export async function fetchReplyChain(
   message: Message,
+  firstReferencedMessage?: Message | null,
   maxDepth = 10,
 ): Promise<ChatMessage[]> {
   const chain: ChatMessage[] = [];
-  let currentRef: { channelId: string; messageId: string } | null = message
-    .reference?.messageId
-    ? { channelId: message.channel.id, messageId: message.reference.messageId }
-    : null;
+  let currentMessage = firstReferencedMessage ?? null;
+  let currentRef: { messageId: string } | null =
+    !currentMessage && message.reference?.messageId
+      ? { messageId: message.reference.messageId }
+      : null;
   let depth = 0;
 
   if (!("messages" in message.channel)) return chain;
 
-  while (currentRef && depth < maxDepth) {
+  while ((currentMessage || currentRef) && depth < maxDepth) {
     try {
-      const referencedMessage = await message.channel.messages.fetch(
-        currentRef.messageId,
-      );
+      const referencedMessage =
+        currentMessage ??
+        (await message.channel.messages.fetch(currentRef!.messageId));
+
       chain.unshift({
         author: referencedMessage.author.username,
         content: referencedMessage.content.trim(),
@@ -177,11 +180,9 @@ export async function fetchReplyChain(
         isReplyContext: true,
       });
       currentRef = referencedMessage.reference?.messageId
-        ? {
-            channelId: referencedMessage.channel.id,
-            messageId: referencedMessage.reference.messageId,
-          }
+        ? { messageId: referencedMessage.reference.messageId }
         : null;
+      currentMessage = null;
       depth++;
     } catch (error) {
       botLogger.debug(
@@ -205,17 +206,29 @@ export async function fetchChatHistory(
   const chatHistory: ChatMessage[] = [];
   if (!("messages" in message.channel)) return chatHistory;
 
-  // Fetch 30 messages to give the model more context for avoiding repetition
-  const messages = await message.channel.messages.fetch({ limit: 30 });
-  const sorted = [...messages.values()].reverse();
-  for (const msg of sorted) {
-    if (msg.id === message.id) continue;
-    chatHistory.push({
-      author: msg.author.username,
-      content: msg.content.trim(),
-      isBot: msg.author.bot,
-    });
+  try {
+    const messages = await message.channel.messages.fetch({ limit: 30 });
+    const sorted = [...messages.values()].reverse();
+
+    for (const msg of sorted) {
+      if (msg.id === message.id) continue;
+      chatHistory.push({
+        author: msg.author.username,
+        content: msg.content.trim(),
+        isBot: msg.author.bot,
+      });
+    }
+  } catch (error) {
+    botLogger.debug(
+      {
+        error: (error as Error)?.message,
+        channelId: message.channel.id,
+        messageId: message.id,
+      },
+      "Could not fetch chat history",
+    );
   }
+
   return chatHistory;
 }
 
