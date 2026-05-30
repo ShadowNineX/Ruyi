@@ -215,10 +215,9 @@ export async function handleSmitherySelect(
     const embed = new EmbedBuilder()
       .setTitle(`${serverInfo.emoji} Authorize ${serverInfo.name}`)
       .setDescription(
-        "**Step 1:** Click the link below to authorize with Smithery\n" +
+        "**Step 1:** Open Smithery authorization\n" +
           "**Step 2:** After authorizing, you'll be redirected to a page with a code\n" +
-          "**Step 3:** Click the button below and paste the authorization code\n\n" +
-          `[🔗 Open Smithery Authorization](${provider.capturedAuthUrl.toString()})`,
+          "**Step 3:** Click Enter Authorization Code and paste the code",
       )
       .setColor(0xffa500)
       .setFooter({
@@ -227,10 +226,13 @@ export async function handleSmitherySelect(
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
+        .setLabel("Open Smithery")
+        .setStyle(ButtonStyle.Link)
+        .setURL(provider.capturedAuthUrl.toString()),
+      new ButtonBuilder()
         .setCustomId("smithery_enter_code")
         .setLabel("Enter Authorization Code")
         .setStyle(ButtonStyle.Success)
-        .setEmoji("📝"),
     );
 
     await interaction.editReply({

@@ -17,6 +17,13 @@ interface ImageSizeChoice {
   source: "image_size" | "aspect_ratio" | "default";
 }
 
+interface ImageOutputDetails {
+  size: OpenAIImageSize;
+  quality: OpenAIImageQuality;
+  background: OpenAIImageBackground;
+  format: OpenAIImageFormat;
+}
+
 const openai = new OpenAI({ apiKey: env.MODEL_TOKEN });
 const SUPPORTED_NATIVE_SIZES = new Set<OpenAIImageSize>([
   "auto",
@@ -188,16 +195,19 @@ async function sendImageToChannel(
   channel: { send: (options: unknown) => Promise<unknown> },
   imageBuffer: Buffer,
   prompt: string,
-  outputFormat: OpenAIImageFormat,
+  details: ImageOutputDetails,
 ): Promise<void> {
-  const fileName = `generated-image.${extensionForFormat(outputFormat)}`;
+  const fileName = `generated-image.${extensionForFormat(details.format)}`;
   const attachment = new AttachmentBuilder(imageBuffer, { name: fileName });
 
   const embed = new EmbedBuilder()
-    .setColor(0x9b59b6)
+    .setColor(0x5865f2)
     .setTitle("Generated Image")
     .setDescription(prompt.length > 200 ? `${prompt.slice(0, 197)}...` : prompt)
     .setImage(`attachment://${fileName}`)
+    .setFooter({
+      text: `${details.size} • ${details.quality} quality • ${details.background} background • ${details.format}`,
+    })
     .setTimestamp();
 
   await channel.send({ embeds: [embed], files: [attachment] });
@@ -311,7 +321,12 @@ export const generateImageTool = tool({
         return { error: "The image model did not return image data" };
       }
 
-      await sendImageToChannel(channel, imageBuffer, prompt, outputFormat);
+      await sendImageToChannel(channel, imageBuffer, prompt, {
+        size: sizeChoice.size,
+        quality: effectiveQuality,
+        background: effectiveBackground,
+        format: outputFormat,
+      });
 
       toolLogger.info(
         {

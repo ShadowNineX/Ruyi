@@ -1,4 +1,5 @@
 import {
+  EmbedBuilder,
   SlashCommandBuilder,
   MessageFlags,
   type ChatInputCommandInteraction,
@@ -6,6 +7,13 @@ import {
 import { Memory } from "../db/models";
 import { botLogger } from "../logger";
 import { MEMORY_VALUE_MAX_LEN, USER_MEMORY_CAP } from "../constants";
+
+const MEMORY_COLORS = {
+  success: 0x2ecc71,
+  neutral: 0x5865f2,
+  warning: 0xffaa00,
+  error: 0xcc3333,
+} as const;
 
 export const memoriesCommand = new SlashCommandBuilder()
   .setName("memories")
@@ -93,6 +101,30 @@ function trimEdgeUnderscores(value: string): string {
   return value.slice(start, end);
 }
 
+function buildMemoryEmbed(
+  title: string,
+  description: string,
+  color: number,
+): EmbedBuilder {
+  return new EmbedBuilder()
+    .setTitle(title)
+    .setDescription(description)
+    .setColor(color)
+    .setTimestamp();
+}
+
+async function replyWithMemoryEmbed(
+  interaction: ChatInputCommandInteraction,
+  title: string,
+  description: string,
+  color: number,
+): Promise<void> {
+  await interaction.reply({
+    embeds: [buildMemoryEmbed(title, description, color)],
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
 async function handleRemember(
   interaction: ChatInputCommandInteraction,
   username: string,
@@ -103,10 +135,12 @@ async function handleRemember(
 
   const key = sanitizeKey(rawKey);
   if (!key) {
-    await interaction.reply({
-      content: "Key must contain at least one alphanumeric character.",
-      flags: MessageFlags.Ephemeral,
-    });
+    await replyWithMemoryEmbed(
+      interaction,
+      "Memory Not Saved",
+      "Key must contain at least one alphanumeric character.",
+      MEMORY_COLORS.error,
+    );
     return;
   }
 
@@ -134,10 +168,12 @@ async function handleRemember(
     { upsert: true },
   );
 
-  await interaction.reply({
-    content: `${pinned ? "Pinned" : "Saved"}: \`${key}\` = ${value}`,
-    flags: MessageFlags.Ephemeral,
-  });
+  await replyWithMemoryEmbed(
+    interaction,
+    pinned ? "Memory Saved And Pinned" : "Memory Saved",
+    `\`${key}\`\n${value}`,
+    pinned ? MEMORY_COLORS.success : MEMORY_COLORS.neutral,
+  );
 }
 
 async function handleForget(
@@ -145,14 +181,25 @@ async function handleForget(
   username: string,
 ): Promise<void> {
   const key = sanitizeKey(interaction.options.getString("key", true));
+  if (!key) {
+    await replyWithMemoryEmbed(
+      interaction,
+      "Memory Not Found",
+      "Key must contain at least one alphanumeric character.",
+      MEMORY_COLORS.error,
+    );
+    return;
+  }
+
   const result = await Memory.deleteOne({ key, scope: "user", username });
-  await interaction.reply({
-    content:
-      result.deletedCount > 0
-        ? `Forgot \`${key}\`.`
-        : `No memory found for \`${key}\`.`,
-    flags: MessageFlags.Ephemeral,
-  });
+  await replyWithMemoryEmbed(
+    interaction,
+    result.deletedCount > 0 ? "Memory Forgotten" : "Memory Not Found",
+    result.deletedCount > 0
+      ? `Forgot \`${key}\`.`
+      : `No memory found for \`${key}\`.`,
+    result.deletedCount > 0 ? MEMORY_COLORS.success : MEMORY_COLORS.warning,
+  );
 }
 
 async function handleList(
@@ -165,10 +212,12 @@ async function handleList(
   });
 
   if (memories.length === 0) {
-    await interaction.reply({
-      content: "I don't remember anything about you yet.",
-      flags: MessageFlags.Ephemeral,
-    });
+    await replyWithMemoryEmbed(
+      interaction,
+      "No Memories Yet",
+      "I don't remember anything about you yet.",
+      MEMORY_COLORS.neutral,
+    );
     return;
   }
 
@@ -178,12 +227,21 @@ async function handleList(
     return `• ${marker}\`${m.key}\`: ${m.value}${sourceTag}`;
   });
 
-  let content = `**Memories about ${username}** (${memories.length}/${USER_MEMORY_CAP})\n${lines.join("\n")}`;
-  if (content.length > 1900) {
-    content = content.slice(0, 1900) + "\n... (truncated)";
+  let description = lines.join("\n");
+  if (description.length > 3900) {
+    description = description.slice(0, 3900) + "\n... (truncated)";
   }
 
-  await interaction.reply({ content, flags: MessageFlags.Ephemeral });
+  await interaction.reply({
+    embeds: [
+      buildMemoryEmbed(
+        `Memories About ${username}`,
+        description,
+        MEMORY_COLORS.neutral,
+      ).setFooter({ text: `${memories.length}/${USER_MEMORY_CAP} used` }),
+    ],
+    flags: MessageFlags.Ephemeral,
+  });
 }
 
 async function handlePinToggle(
@@ -192,19 +250,29 @@ async function handlePinToggle(
   pinned: boolean,
 ): Promise<void> {
   const key = sanitizeKey(interaction.options.getString("key", true));
+  if (!key) {
+    await replyWithMemoryEmbed(
+      interaction,
+      "Memory Not Found",
+      "Key must contain at least one alphanumeric character.",
+      MEMORY_COLORS.error,
+    );
+    return;
+  }
+
   const result = await Memory.updateOne(
     { key, scope: "user", username },
     { $set: { pinned } },
   );
   const verb = pinned ? "Pinned" : "Unpinned";
-  const content =
+  await replyWithMemoryEmbed(
+    interaction,
+    result.matchedCount > 0 ? `Memory ${verb}` : "Memory Not Found",
     result.matchedCount > 0
       ? `${verb} \`${key}\`.`
-      : `No memory found for \`${key}\`.`;
-  await interaction.reply({
-    content,
-    flags: MessageFlags.Ephemeral,
-  });
+      : `No memory found for \`${key}\`.`,
+    result.matchedCount > 0 ? MEMORY_COLORS.success : MEMORY_COLORS.warning,
+  );
 }
 
 export async function handleMemoriesCommand(
@@ -239,10 +307,12 @@ export async function handleMemoriesCommand(
       "/memories failed",
     );
     if (!interaction.replied) {
-      await interaction.reply({
-        content: "Something went wrong handling that.",
-        flags: MessageFlags.Ephemeral,
-      });
+      await replyWithMemoryEmbed(
+        interaction,
+        "Memory Command Failed",
+        "Something went wrong handling that.",
+        MEMORY_COLORS.error,
+      );
     }
   }
 }

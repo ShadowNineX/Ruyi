@@ -5,7 +5,12 @@ import {
   CHAT_TYPING_INTERVAL_MS,
 } from "../constants";
 
-export type SessionStatus = "thinking" | "tool" | "complete" | "error";
+export type SessionStatus =
+  | "thinking"
+  | "generating"
+  | "tool"
+  | "complete"
+  | "error";
 
 interface StatusState {
   status: SessionStatus;
@@ -40,7 +45,10 @@ function buildStatusEmbed(state: StatusState): EmbedBuilder {
   let statusText: string;
   switch (state.status) {
     case "thinking":
-      statusText = "Thinking...";
+      statusText = "Preparing response...";
+      break;
+    case "generating":
+      statusText = "Writing response...";
       break;
     case "tool":
       statusText = `Running: \`${state.currentTool}\``;
@@ -184,9 +192,10 @@ export class ChatSession {
 
   /** Called when the SDK is actively streaming assistant text. */
   onTextGenerationStart(): void {
-    this.state.status = "thinking";
+    this.state.status = "generating";
     this.state.currentTool = undefined;
     this.startTyping();
+    this.updateEmbed();
   }
 
   /** Called when the current assistant text stream finishes. */

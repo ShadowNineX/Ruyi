@@ -42,12 +42,51 @@ const MAX_FIELD_NAME = 256;
 const MAX_FIELD_VALUE = 1024;
 const MAX_DESCRIPTION = 4096;
 const MAX_FOOTER = 2048;
+const MAX_EMBED_TOTAL = 6000;
 
-function chunkFields(fields: EmbedField[]): EmbedField[][] {
+function truncateEmbedText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return value.slice(0, maxLength - 3) + "...";
+}
+
+function normalizeField(field: EmbedField): Required<EmbedField> {
+  return {
+    name: truncateEmbedText(field.name, MAX_FIELD_NAME) || "\u200b",
+    value: truncateEmbedText(field.value, MAX_FIELD_VALUE) || "\u200b",
+    inline: field.inline ?? false,
+  };
+}
+
+function fieldLength(field: Required<EmbedField>): number {
+  return field.name.length + field.value.length;
+}
+
+function chunkFields(fields: EmbedField[], baseLength = 0): EmbedField[][] {
   const chunks: EmbedField[][] = [];
-  for (let i = 0; i < fields.length; i += MAX_FIELDS_PER_EMBED) {
-    chunks.push(fields.slice(i, i + MAX_FIELDS_PER_EMBED));
+  let currentChunk: EmbedField[] = [];
+  let currentLength = baseLength;
+
+  for (const rawField of fields) {
+    const field = normalizeField(rawField);
+    const nextLength = currentLength + fieldLength(field);
+    const shouldStartNewChunk =
+      currentChunk.length >= MAX_FIELDS_PER_EMBED ||
+      (currentChunk.length > 0 && nextLength > MAX_EMBED_TOTAL);
+
+    if (shouldStartNewChunk) {
+      chunks.push(currentChunk);
+      currentChunk = [];
+      currentLength = baseLength;
+    }
+
+    currentChunk.push(field);
+    currentLength += fieldLength(field);
   }
+
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk);
+  }
+
   return chunks;
 }
 
@@ -89,22 +128,23 @@ interface EmbedConfig {
 function buildEmbed(config: EmbedConfig): EmbedBuilder {
   const embed = new EmbedBuilder().setColor(config.color);
 
-  if (config.title) embed.setTitle(config.title.slice(0, 256));
+  if (config.title) embed.setTitle(truncateEmbedText(config.title, 256));
   if (config.description)
-    embed.setDescription(config.description.slice(0, MAX_DESCRIPTION));
+    embed.setDescription(truncateEmbedText(config.description, MAX_DESCRIPTION));
 
   if (config.fields && config.fields.length > 0) {
     for (const field of config.fields.slice(0, MAX_FIELDS_PER_EMBED)) {
+      const normalized = normalizeField(field);
       embed.addFields({
-        name: field.name.slice(0, MAX_FIELD_NAME) || "\u200b",
-        value: field.value.slice(0, MAX_FIELD_VALUE) || "\u200b",
-        inline: field.inline ?? false,
+        name: normalized.name,
+        value: normalized.value,
+        inline: normalized.inline,
       });
     }
   }
 
   if (config.footer)
-    embed.setFooter({ text: config.footer.slice(0, MAX_FOOTER) });
+    embed.setFooter({ text: truncateEmbedText(config.footer, MAX_FOOTER) });
   if (config.thumbnail) embed.setThumbnail(config.thumbnail);
   if (config.showTimestamp) embed.setTimestamp();
 
@@ -133,43 +173,40 @@ function buildMultipleEmbeds(
     : [];
   const fieldChunks: EmbedField[][] =
     fields && fields.length > 0 ? chunkFields(fields) : [];
-  const totalParts = Math.max(descriptionChunks.length, fieldChunks.length, 1);
 
   let partIndex = 0;
 
   for (const descChunk of descriptionChunks) {
     const isFirst = partIndex === 0;
-    const isLast = partIndex === totalParts - 1;
-    const fieldsForThisPart =
-      partIndex === descriptionChunks.length - 1 && fieldChunks.length > 0
-        ? (fieldChunks.shift() ?? null)
-        : null;
+    const hasMoreParts =
+      partIndex < descriptionChunks.length - 1 || fieldChunks.length > 0;
 
     embeds.push(
       buildEmbed({
         color,
         title: getContinuationTitle(title, isFirst),
         description: descChunk,
-        fields: fieldsForThisPart,
-        footer: isLast ? footer : null,
+        fields: null,
+        footer: hasMoreParts ? null : footer,
         thumbnail: isFirst ? thumbnail : null,
-        showTimestamp: isLast,
+        showTimestamp: !hasMoreParts,
       }),
     );
     partIndex++;
   }
 
   for (const fieldChunk of fieldChunks) {
-    const isLast = partIndex === totalParts - 1;
+    const isFirst = partIndex === 0;
+    const isLast = partIndex === descriptionChunks.length + fieldChunks.length - 1;
 
     embeds.push(
       buildEmbed({
         color,
-        title: getContinuationTitle(title, false),
+        title: getContinuationTitle(title, isFirst),
         description: null,
         fields: fieldChunk,
         footer: isLast ? footer : null,
-        thumbnail: null,
+        thumbnail: isFirst ? thumbnail : null,
         showTimestamp: isLast,
       }),
     );
@@ -182,11 +219,21 @@ function buildMultipleEmbeds(
 function needsMultipleEmbeds(
   fields: EmbedField[] | null,
   description: string | null,
+  title: string | null,
+  footer: string | null,
 ): boolean {
   const tooManyFields = fields !== null && fields.length > MAX_FIELDS_PER_EMBED;
   const descriptionTooLong =
     description !== null && description.length > MAX_DESCRIPTION;
-  return tooManyFields || descriptionTooLong;
+  const totalLength =
+    (title?.length ?? 0) +
+    (description?.length ?? 0) +
+    (footer?.length ?? 0) +
+    (fields ?? [])
+      .map((field) => fieldLength(normalizeField(field)))
+      .reduce((sum, length) => sum + length, 0);
+
+  return tooManyFields || descriptionTooLong || totalLength > MAX_EMBED_TOTAL;
 }
 
 export const embedTool = tool({
@@ -233,7 +280,11 @@ export const embedTool = tool({
       const parsedColor = parseColor(color);
       let embeds: EmbedBuilder[];
 
-      if (needsMultipleEmbeds(fields, description)) {
+      if (!title && !description && (!fields || fields.length === 0) && !footer && !thumbnail) {
+        return { error: "Embed needs at least a title, description, field, footer, or thumbnail" };
+      }
+
+      if (needsMultipleEmbeds(fields, description, title, footer)) {
         embeds = buildMultipleEmbeds(
           parsedColor,
           title,
