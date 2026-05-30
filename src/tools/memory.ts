@@ -463,6 +463,7 @@ function extractMatchingMessages(
 
   for (const conv of conversations) {
     for (const msg of conv.messages) {
+      if (msg.isBot) continue;
       if (
         messageMatchesCriteria(
           msg.content,

@@ -36,6 +36,14 @@ export class ConversationContext {
     isBot: boolean,
     messageId?: string,
   ): Promise<void> {
+    if (isBot) {
+      aiLogger.debug(
+        { channelId, author, messageId },
+        "Skipping bot message for human conversation archive",
+      );
+      return;
+    }
+
     try {
       await Conversation.updateOne(
         { channelId },
@@ -58,12 +66,36 @@ export class ConversationContext {
     }
   }
 
+  async pruneLegacyBotMessages(): Promise<void> {
+    try {
+      const result = await Conversation.updateMany(
+        { "messages.isBot": true },
+        { $pull: { messages: { isBot: true } } },
+      );
+
+      if (result.modifiedCount > 0) {
+        aiLogger.info(
+          {
+            matched: result.matchedCount,
+            modified: result.modifiedCount,
+          },
+          "Pruned legacy bot messages from human conversation archive",
+        );
+      }
+    } catch (error) {
+      aiLogger.error(
+        { error: (error as Error).message },
+        "Failed to prune legacy bot messages from conversation archive",
+      );
+    }
+  }
+
   async getMemoryContext(channelId: string, limit = 20): Promise<string> {
     try {
       const conversation = await Conversation.findOne({ channelId });
       if (!conversation || conversation.messages.length === 0) return "";
 
-      const recent = conversation.messages.slice(-limit);
+      const recent = conversation.messages.filter((m) => !m.isBot).slice(-limit);
       return recent.map((m) => `${m.author}: ${m.content}`).join("\n");
     } catch (error) {
       aiLogger.error({ error }, "Failed to get memory context");

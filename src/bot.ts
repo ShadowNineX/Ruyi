@@ -10,7 +10,7 @@ import {
   type GuildTextBasedChannel,
   type TextChannel,
 } from "discord.js";
-import { chatService, replyClassifier, conversationContext } from "./ai";
+import { chatService, replyClassifier } from "./ai";
 import { runWithToolContext, type ToolContext } from "./utils/types";
 import { env } from "./env";
 import { selfRespondingToolNames } from "./tools";
@@ -232,21 +232,7 @@ export class RuyiBot {
     await session.deleteStatusEmbed();
 
     if (reply) {
-      const sentChunks = await sendReplyChunks(message, reply, username);
-      // Store the full assembled reply once, anchored to the first chunk's
-      // message ID, instead of writing one DB row per Discord chunk. The
-      // persistent AgentSession already retains the full reply server-side;
-      // the DB copy exists for the auto-extractor and for restart fallback.
-      const anchorId = sentChunks[0]?.id;
-      if (anchorId) {
-        await conversationContext.rememberMessage(
-          message.channel.id,
-          "Ruyi",
-          reply,
-          true,
-          anchorId,
-        );
-      }
+      await sendReplyChunks(message, reply, username);
       return;
     }
 

@@ -1,6 +1,5 @@
 import {
   Agent,
-  assistant,
   user,
   type AgentInputItem,
   type OpenAIResponsesCompactionArgs,
@@ -474,12 +473,10 @@ async function buildSeedItems(
 
   const messages = conversation.messages
     .filter((message) => message.messageId !== currentMessageId)
+    .filter((message) => !message.isBot)
     .slice(-AGENT_SESSION_SEED_MESSAGE_LIMIT);
 
   return messages.map((message) => {
-    if (message.isBot) {
-      return assistant(message.content);
-    }
     return user(`${message.author}: ${message.content}`);
   });
 }
