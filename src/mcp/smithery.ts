@@ -1,5 +1,4 @@
 import { MCPServer } from "./base";
-import { env } from "../env";
 import {
   getSmitheryTokens,
   getAllSmitheryTokens,
@@ -14,7 +13,6 @@ import { aiLogger } from "../logger";
 // Cache for tokens per server to avoid DB queries on every request
 const cachedTokens = new Map<SmitheryServerId, ISmitheryToken>();
 const cacheLoadedAt = new Map<SmitheryServerId, number>();
-const rejectedEnvTokens = new Set<string>();
 const CACHE_TTL_MS = 60 * 1000; // 1 minute cache
 
 /**
@@ -41,9 +39,6 @@ export abstract class SmitheryMCPServer extends MCPServer {
 
   protected override async handleAuthFailure(error: string): Promise<void> {
     this.clearCachedToken();
-    if (env.SMITHERY_ACCESS_TOKEN) {
-      rejectedEnvTokens.add(env.SMITHERY_ACCESS_TOKEN);
-    }
     await clearSmitheryTokens(this.slug);
     aiLogger.warn(
       { server: this.slug, error },
@@ -129,22 +124,12 @@ export abstract class SmitheryMCPServer extends MCPServer {
    * Check if tokens are available (sync check using cache or env fallback).
    */
   isEnabled(): boolean {
-    // Check cache for this server
-    if (cachedTokens.has(this.slug)) return true;
-    // Fallback to env for initial load before DB is checked
-    return Boolean(
-      env.SMITHERY_ACCESS_TOKEN &&
-        !rejectedEnvTokens.has(env.SMITHERY_ACCESS_TOKEN),
-    );
+    return cachedTokens.has(this.slug);
   }
 
   protected getHeaders(): Record<string, string> | undefined {
-    // Use cached token for this server, or env fallback
-    const token =
-      cachedTokens.get(this.slug)?.accessToken ?? env.SMITHERY_ACCESS_TOKEN;
-    return token && !rejectedEnvTokens.has(token)
-      ? { Authorization: `Bearer ${token}` }
-      : undefined;
+    const token = cachedTokens.get(this.slug)?.accessToken;
+    return token ? { Authorization: `Bearer ${token}` } : undefined;
   }
 
   /**

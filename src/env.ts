@@ -51,7 +51,6 @@ const envSchema = z.object({
   GITHUB_TOKEN: z.string().optional(),
   LASTFM_API_KEY: z.string().optional(),
   OPENAI_ADMIN_KEY: z.string().optional(),
-  SMITHERY_ACCESS_TOKEN: z.string().optional(),
 
   // Debug toggles
   DEBUG_PROMPTS: z
