@@ -1,4 +1,4 @@
-import { OpenAIProvider, Runner } from "@openai/agents";
+import { OpenAIProvider, Runner, setTracingDisabled } from "@openai/agents";
 import { aiLogger } from "../logger";
 import { env } from "../env";
 
@@ -21,6 +21,7 @@ export class AgentsRuntimeManager {
       return;
     }
 
+    setTracingDisabled(true);
     this.provider = new OpenAIProvider(this.getProviderConfig());
     this.runner = new Runner({
       model: this.model,

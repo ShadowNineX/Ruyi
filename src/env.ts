@@ -20,11 +20,18 @@ const envLogger = pino({
  * misconfiguration fails fast at startup instead of crashing deep in code.
  */
 const NON_OPENAI_MODEL_PROVIDER_FRAGMENT = "open" + "router";
+const OPENROUTER_KEY_PREFIX = "sk-or-v1-";
 
 const envSchema = z.object({
   // Required
   DISCORD_TOKEN: z.string().min(1, "DISCORD_TOKEN is required"),
-  MODEL_TOKEN: z.string().min(1, "MODEL_TOKEN is required"),
+  MODEL_TOKEN: z
+    .string()
+    .min(1, "MODEL_TOKEN is required")
+    .refine(
+      (value) => !value.startsWith(OPENROUTER_KEY_PREFIX),
+      "MODEL_TOKEN must be a direct OpenAI API key, not an OpenRouter key",
+    ),
 
   // Optional (with defaults)
   MODEL_NAME: z
