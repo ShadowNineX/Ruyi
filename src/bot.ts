@@ -42,6 +42,11 @@ interface ResponseGate {
   isReplyToBot: boolean;
 }
 
+interface PresenceActivity {
+  name: string;
+  type: ActivityType;
+}
+
 export class RuyiBot {
   readonly client = new Client({
     intents: [
@@ -55,19 +60,25 @@ export class RuyiBot {
   // ---- Presence helpers ----------------------------------------------------
 
   private setDefaultPresence(): void {
-    this.client.user?.setPresence({
-      activities: [{ name: "Serving...", type: ActivityType.Watching }],
+    this.setActivityPresence({
+      name: "over the pavilion",
+      type: ActivityType.Watching,
     });
   }
 
-  private setCustomPresence(state: string): void {
-    const displayState =
-      state.length > 128 ? `${state.slice(0, 125)}...` : state;
-
-    this.client.user?.setActivity(displayState, {
-      type: ActivityType.Custom,
-      state: displayState,
+  private setActivityPresence(activity: PresenceActivity): void {
+    this.client.user?.setPresence({
+      activities: [
+        {
+          name: this.truncateActivityName(activity.name),
+          type: activity.type,
+        },
+      ],
     });
+  }
+
+  private truncateActivityName(name: string): string {
+    return name.length > 128 ? `${name.slice(0, 125)}...` : name;
   }
 
   private setSessionPresence(
@@ -75,16 +86,37 @@ export class RuyiBot {
     snapshot: SessionStatusSnapshot,
   ): void {
     const toolName = snapshot.currentTool ?? "a tool";
-    const states: Record<SessionStatusSnapshot["status"], string> = {
-      thinking: `Preparing a reply for ${username}...`,
-      generating: `Writing to ${username}...`,
-      tool: `Using ${toolName} for ${username}...`,
-      approval: `Awaiting approval from ${username}...`,
-      complete: `Finishing reply for ${username}...`,
-      error: "Recovering from an error...",
+    const activities: Record<
+      SessionStatusSnapshot["status"],
+      PresenceActivity
+    > = {
+      thinking: {
+        name: `${username}'s request`,
+        type: ActivityType.Listening,
+      },
+      generating: {
+        name: `a reply for ${username}`,
+        type: ActivityType.Playing,
+      },
+      tool: {
+        name: `${toolName} for ${username}`,
+        type: ActivityType.Watching,
+      },
+      approval: {
+        name: `approval from ${username}`,
+        type: ActivityType.Watching,
+      },
+      complete: {
+        name: `the finished reply for ${username}`,
+        type: ActivityType.Watching,
+      },
+      error: {
+        name: "for recovery",
+        type: ActivityType.Watching,
+      },
     };
 
-    this.setCustomPresence(states[snapshot.status]);
+    this.setActivityPresence(activities[snapshot.status]);
   }
 
   // ---- Reply gating --------------------------------------------------------
