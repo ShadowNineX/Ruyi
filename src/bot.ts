@@ -35,7 +35,7 @@ import {
   getErrorMessage,
 } from "./utils/messages";
 import { messageSyncService } from "./services/messageSync";
-import { CHAT_TURN_TIMEOUT_MS } from "./constants";
+import { CHAT_TURN_TIMEOUT_MS, DISCORD_OPERATION_TIMEOUT_MS } from "./constants";
 
 interface ResponseGate {
   isMentioned: boolean;
@@ -50,6 +50,7 @@ interface PresenceActivity {
 
 export class RuyiBot {
   private activePresenceSession: symbol | null = null;
+  private readonly activeChatTurns = new Map<string, AbortController>();
 
   readonly client = new Client({
     intents: [
@@ -176,6 +177,10 @@ export class RuyiBot {
     }
   }
 
+  private isDirectResponseGate(gate: ResponseGate): boolean {
+    return gate.isMentioned || gate.isDM || gate.isReplyToBot;
+  }
+
   // ---- Chat handling -------------------------------------------------------
 
   private buildToolContext(
@@ -285,6 +290,12 @@ export class RuyiBot {
     return error;
   }
 
+  private createChatTurnSupersededError(): Error {
+    const error = new Error("Chat turn was superseded by a newer direct request");
+    error.name = "ChatTurnSupersededError";
+    return error;
+  }
+
   private throwIfAborted(signal: AbortSignal): void {
     if (!signal.aborted) return;
     const reason: unknown = signal.reason;
@@ -292,13 +303,103 @@ export class RuyiBot {
     throw this.createChatTurnTimeoutError();
   }
 
+  private getAbortError(signal: AbortSignal): Error {
+    const reason: unknown = signal.reason;
+    if (reason instanceof Error) return reason;
+    return new Error("Chat turn was aborted");
+  }
+
+  private abortActiveChatTurn(channelId: string, nextMessageId: string): void {
+    const activeController = this.activeChatTurns.get(channelId);
+    if (!activeController || activeController.signal.aborted) return;
+
+    activeController.abort(this.createChatTurnSupersededError());
+    botLogger.warn(
+      { channelId, nextMessageId },
+      "Aborted previous chat turn for newer direct request",
+    );
+  }
+
+  private async withOperationTimeout<T>(
+    operation: Promise<T>,
+    operationName: string,
+    context: Record<string, unknown>,
+  ): Promise<T | null> {
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const guardedOperation = operation.catch((error: unknown) => {
+      botLogger.error(
+        {
+          ...context,
+          error: (error as Error)?.message,
+          name: (error as Error)?.name,
+        },
+        `${operationName} failed`,
+      );
+      return null;
+    });
+
+    const timeoutPromise = new Promise<null>((resolve) => {
+      timeout = setTimeout(() => {
+        botLogger.warn(
+          { ...context, timeoutMs: DISCORD_OPERATION_TIMEOUT_MS },
+          `${operationName} timed out`,
+        );
+        resolve(null);
+      }, DISCORD_OPERATION_TIMEOUT_MS);
+    });
+
+    try {
+      return await Promise.race([guardedOperation, timeoutPromise]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
+  private async deleteStatusEmbedSafely(
+    session: ChatSession,
+    context: Record<string, unknown>,
+  ): Promise<void> {
+    await this.withOperationTimeout(
+      session.deleteStatusEmbed(),
+      "Status embed delete",
+      context,
+    );
+  }
+
+  private async replySafely(
+    message: Message,
+    content: string,
+    context: Record<string, unknown>,
+  ): Promise<void> {
+    await this.withOperationTimeout(
+      message.reply(content),
+      "Error reply send",
+      context,
+    );
+  }
+
+  private getAbortPromise(signal: AbortSignal): Promise<never> {
+    if (signal.aborted) return Promise.reject(this.getAbortError(signal));
+
+    return new Promise<never>((_resolve, reject) => {
+      signal.addEventListener(
+        "abort",
+        () => {
+          reject(this.getAbortError(signal));
+        },
+        { once: true },
+      );
+    });
+  }
+
   private async runChatWithWatchdog(
     message: Message,
     session: ChatSession,
     toolCtx: ToolContext,
+    abortController: AbortController,
   ): Promise<void> {
-    const abortController = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | null = null;
+    const signal = abortController.signal;
 
     const timeoutPromise = new Promise<never>((_resolve, reject) => {
       timeout = setTimeout(() => {
@@ -319,8 +420,9 @@ export class RuyiBot {
 
     try {
       await Promise.race([
-        this.runChat(message, session, toolCtx, abortController.signal),
+        this.runChat(message, session, toolCtx, signal),
         timeoutPromise,
+        this.getAbortPromise(signal),
       ]);
     } finally {
       if (timeout) clearTimeout(timeout);
@@ -328,12 +430,26 @@ export class RuyiBot {
   }
 
   private async handleAIChat(message: Message): Promise<void> {
-    const referencedMessage = await fetchReferencedMessage(message);
+    const referencedMessage =
+      (await this.withOperationTimeout(
+        fetchReferencedMessage(message),
+        "Referenced message fetch",
+        {
+          user: message.author.username,
+          channelId: message.channel.id,
+          messageId: message.id,
+        },
+      )) ?? null;
     const gate = this.computeResponseGate(message, referencedMessage);
     if (!(await this.shouldBotRespond(message, gate))) return;
+    if (this.isDirectResponseGate(gate)) {
+      this.abortActiveChatTurn(message.channel.id, message.id);
+    }
 
     const displayName = message.author.displayName;
     const presenceSession = Symbol(message.id);
+    const abortController = new AbortController();
+    this.activeChatTurns.set(message.channel.id, abortController);
     this.activePresenceSession = presenceSession;
     const session = new ChatSession(message.channel, (state) => {
       if (this.activePresenceSession !== presenceSession) return;
@@ -344,7 +460,12 @@ export class RuyiBot {
     const toolCtx = this.buildToolContext(message, referencedMessage);
 
     try {
-      await this.runChatWithWatchdog(message, session, toolCtx);
+      await this.runChatWithWatchdog(
+        message,
+        session,
+        toolCtx,
+        abortController,
+      );
     } catch (error) {
       const err = error as {
         status?: number;
@@ -354,31 +475,31 @@ export class RuyiBot {
         stack?: string;
         name?: string;
       };
-      botLogger.error(
-        {
-          status: err?.status ?? err?.code,
-          name: err?.name,
-          error: err?.error?.message ?? err?.message,
-          stack: err?.stack,
-          user: message.author.username,
-          channelId: message.channel.id,
-          messageId: message.id,
-        },
-        "Failed to generate reply",
-      );
-      await session.deleteStatusEmbed();
-      try {
-        await message.reply(getErrorMessage(error));
-      } catch (replyError) {
-        botLogger.error(
-          {
-            error: (replyError as Error).message,
-            channelId: message.channel.id,
-          },
-          "Failed to send error reply to user",
-        );
+      const isSuperseded = err?.name === "ChatTurnSupersededError";
+      const logPayload = {
+        status: err?.status ?? err?.code,
+        name: err?.name,
+        error: err?.error?.message ?? err?.message,
+        stack: err?.stack,
+        user: message.author.username,
+        channelId: message.channel.id,
+        messageId: message.id,
+      };
+
+      if (isSuperseded) {
+        botLogger.warn(logPayload, "Chat turn superseded");
+      } else {
+        botLogger.error(logPayload, "Failed to generate reply");
+      }
+
+      await this.deleteStatusEmbedSafely(session, logPayload);
+      if (!isSuperseded) {
+        await this.replySafely(message, getErrorMessage(error), logPayload);
       }
     } finally {
+      if (this.activeChatTurns.get(message.channel.id) === abortController) {
+        this.activeChatTurns.delete(message.channel.id);
+      }
       session.cleanup();
       if (this.activePresenceSession === presenceSession) {
         this.activePresenceSession = null;
@@ -386,6 +507,26 @@ export class RuyiBot {
       }
     }
   }
+
+  private readonly dispatchMessage = async (message: Message): Promise<void> => {
+    try {
+      if (message.author.bot) return;
+      if (await handleCommands(message)) return;
+      await this.handleAIChat(message);
+    } catch (error) {
+      botLogger.error(
+        {
+          error: (error as Error)?.message,
+          stack: (error as Error)?.stack,
+          name: (error as Error)?.name,
+          user: message.author.username,
+          channelId: message.channel.id,
+          messageId: message.id,
+        },
+        "Message dispatch failed",
+      );
+    }
+  };
 
   // ---- Slash command registration -----------------------------------------
 
@@ -435,10 +576,8 @@ export class RuyiBot {
 
     this.client.on(Events.InteractionCreate, this.dispatchInteraction);
 
-    this.client.on(Events.MessageCreate, async (message) => {
-      if (message.author.bot) return;
-      if (await handleCommands(message)) return;
-      await this.handleAIChat(message);
+    this.client.on(Events.MessageCreate, (message) => {
+      void this.dispatchMessage(message);
     });
 
     this.client.on(Events.MessageDelete, async (message) => {
