@@ -50,6 +50,9 @@ const CLIENT_METADATA: OAuthClientMetadata = {
   scope: "mcp:read mcp:write",
 };
 
+const DISCORD_BUTTON_URL_MAX_LENGTH = 512;
+const DISCORD_EMBED_DESCRIPTION_MAX_LENGTH = 4096;
+
 // Server info for display
 const SERVERS: Record<SmitheryServerId, { name: string; emoji: string }> = {
   brave: { name: "Brave Search", emoji: "🦁" },
@@ -165,6 +168,44 @@ export async function handleSmitheryCommand(
   });
 }
 
+function buildAuthorizationDescription(authUrl: string): string {
+  const description =
+    `**Step 1:** Open [Smithery authorization](${authUrl})\n` +
+    "**Step 2:** After authorizing, you'll be redirected to a page with a code\n" +
+    "**Step 3:** Click Enter Authorization Code and paste the code";
+
+  if (description.length <= DISCORD_EMBED_DESCRIPTION_MAX_LENGTH) {
+    return description;
+  }
+
+  return (
+    "**Step 1:** Copy the Smithery authorization URL from the bot logs\n" +
+    "**Step 2:** After authorizing, you'll be redirected to a page with a code\n" +
+    "**Step 3:** Click Enter Authorization Code and paste the code"
+  );
+}
+
+function addAuthorizationButtons(
+  row: ActionRowBuilder<ButtonBuilder>,
+  authUrl: string,
+): void {
+  if (authUrl.length <= DISCORD_BUTTON_URL_MAX_LENGTH) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setLabel("Open Smithery")
+        .setStyle(ButtonStyle.Link)
+        .setURL(authUrl),
+    );
+  }
+
+  row.addComponents(
+    new ButtonBuilder()
+      .setCustomId("smithery_enter_code")
+      .setLabel("Enter Authorization Code")
+      .setStyle(ButtonStyle.Success),
+  );
+}
+
 /**
  * Handle server selection from dropdown
  */
@@ -212,28 +253,17 @@ export async function handleSmitherySelect(
       authUrl: provider.capturedAuthUrl,
     });
 
+    const authUrl = provider.capturedAuthUrl.toString();
     const embed = new EmbedBuilder()
       .setTitle(`${serverInfo.emoji} Authorize ${serverInfo.name}`)
-      .setDescription(
-        "**Step 1:** Open Smithery authorization\n" +
-          "**Step 2:** After authorizing, you'll be redirected to a page with a code\n" +
-          "**Step 3:** Click Enter Authorization Code and paste the code",
-      )
+      .setDescription(buildAuthorizationDescription(authUrl))
       .setColor(0xffa500)
       .setFooter({
         text: "The authorization code is in the URL after 'code='",
       });
 
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setLabel("Open Smithery")
-        .setStyle(ButtonStyle.Link)
-        .setURL(provider.capturedAuthUrl.toString()),
-      new ButtonBuilder()
-        .setCustomId("smithery_enter_code")
-        .setLabel("Enter Authorization Code")
-        .setStyle(ButtonStyle.Success)
-    );
+    const row = new ActionRowBuilder<ButtonBuilder>();
+    addAuthorizationButtons(row, authUrl);
 
     await interaction.editReply({
       embeds: [embed],
