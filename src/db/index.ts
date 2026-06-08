@@ -13,13 +13,10 @@ function getMongoConnectOptions(uri: string): ConnectOptions {
     parsedUri.searchParams.get("tlsCAFile") ??
     parsedUri.searchParams.get("sslCAFile") ??
     undefined;
-  const tlsAllowInvalidHostnames =
-    parsedUri.searchParams.get("tlsAllowInvalidHostnames") === "true";
-
   return {
     ...(tlsEnabled ? { tls: true } : {}),
     ...(tlsCAFile ? { tlsCAFile } : {}),
-    ...(tlsAllowInvalidHostnames ? { tlsAllowInvalidHostnames: true } : {}),
+    ...(tlsEnabled ? { tlsAllowInvalidHostnames: true } : {}),
   };
 }
 
