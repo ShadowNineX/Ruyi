@@ -48,7 +48,7 @@ await conversationContext.pruneLegacyBotMessages();
 await conversationContext.loadLastInteractions();
 
 // Initialize the OpenAI Agents runtime and inspect persisted sessions
-await agentsRuntimeManager.initialize();
+agentsRuntimeManager.initialize();
 await sessionManager.loadPersisted();
 
 // Start the bot
