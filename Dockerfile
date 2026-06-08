@@ -12,5 +12,4 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json bun.lock tsconfig.json ./
 COPY src ./src
 
-USER bun
 CMD ["bun", "run", "src/main.ts"]
