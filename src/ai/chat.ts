@@ -20,7 +20,11 @@ import { systemPrompt } from "./prompt";
 import { sessionManager } from "./session";
 import { agentsRuntimeManager } from "./client";
 import { conversationContext, type ChatMessage } from "./context";
-import { permissionManager } from "./permissions";
+import {
+  getApprovalToolName,
+  permissionManager,
+  type PermissionResult,
+} from "./permissions";
 import { autoExtractFacts } from "./extraction";
 
 const LOCAL_TOOL_NAMES = new Set(allTools.map((tool) => tool.name));
@@ -74,8 +78,14 @@ interface StreamLike extends AsyncIterable<RunStreamEvent> {
 }
 
 interface ApprovalState {
-  approve: (item: RunToolApprovalItem) => void;
-  reject: (item: RunToolApprovalItem, options?: { message?: string }) => void;
+  approve: (
+    item: RunToolApprovalItem,
+    options?: { alwaysApprove?: boolean },
+  ) => void;
+  reject: (
+    item: RunToolApprovalItem,
+    options?: { alwaysReject?: boolean; message?: string },
+  ) => void;
 }
 
 interface TurnToolUsage {
@@ -571,21 +581,40 @@ export class ChatService {
     approvals: RunToolApprovalItem[],
     state: ApprovalState,
   ): Promise<void> {
-    for (const approval of approvals) {
-      const approved = await permissionManager.requestToolApproval(
-        channelId,
-        approval,
-        sessionId,
-      );
+    const rememberedDecisions = new Map<string, PermissionResult>();
 
-      if (approved) {
-        state.approve(approval);
-      } else {
-        state.reject(approval, {
-          message: "The Discord user denied approval for this tool call.",
-        });
+    for (const approval of approvals) {
+      const toolName = getApprovalToolName(approval);
+      const decision =
+        rememberedDecisions.get(toolName) ??
+        (await permissionManager.requestToolApproval(
+          channelId,
+          approval,
+          sessionId,
+        ));
+
+      if (decision.rememberTool) {
+        rememberedDecisions.set(toolName, decision);
       }
+
+      this.applyApprovalDecision(approval, decision, state);
     }
+  }
+
+  private applyApprovalDecision(
+    approval: RunToolApprovalItem,
+    decision: PermissionResult,
+    state: ApprovalState,
+  ): void {
+    if (decision.approved) {
+      state.approve(approval, { alwaysApprove: decision.rememberTool });
+      return;
+    }
+
+    state.reject(approval, {
+      alwaysReject: decision.rememberTool,
+      message: "The Discord user denied approval for this tool call.",
+    });
   }
 }
 

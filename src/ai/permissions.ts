@@ -20,13 +20,62 @@ export interface PermissionContext {
   userId: string;
 }
 
+export type PermissionDecision =
+  | "approve_once"
+  | "approve_tool"
+  | "deny_once"
+  | "deny_tool";
+
+export interface PermissionResult {
+  approved: boolean;
+  rememberTool: boolean;
+  decision: PermissionDecision;
+}
+
+const DENY_ONCE_RESULT: PermissionResult = {
+  approved: false,
+  rememberTool: false,
+  decision: "deny_once",
+};
+
 function truncate(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength - 3)}...`;
 }
 
-function getToolName(approvalItem: RunToolApprovalItem): string {
+export function getApprovalToolName(
+  approvalItem: RunToolApprovalItem,
+): string {
   return approvalItem.name ?? approvalItem.toolName ?? "unknown_tool";
+}
+
+function getDecisionLabel(decision: PermissionDecision): string {
+  switch (decision) {
+    case "approve_once":
+      return "allowed once";
+    case "approve_tool":
+      return "allowed this tool for this turn";
+    case "deny_once":
+      return "denied once";
+    case "deny_tool":
+      return "denied this tool for this turn";
+  }
+}
+
+function resultFromDecision(decision: PermissionDecision): PermissionResult {
+  return {
+    approved: decision.startsWith("approve"),
+    rememberTool: decision.endsWith("tool"),
+    decision,
+  };
+}
+
+function decisionFromCustomId(customId: string): PermissionDecision | null {
+  if (customId.startsWith("perm_approve_tool_")) return "approve_tool";
+  if (customId.startsWith("perm_approve_once_")) return "approve_once";
+  if (customId.startsWith("perm_deny_tool_")) return "deny_tool";
+  if (customId.startsWith("perm_deny_once_")) return "deny_once";
+  return null;
 }
 
 function formatArguments(rawArguments: string | undefined): string {
@@ -45,7 +94,7 @@ function formatArguments(rawArguments: string | undefined): string {
 }
 
 function getPermissionDescription(approvalItem: RunToolApprovalItem): string {
-  const toolName = getToolName(approvalItem);
+  const toolName = getApprovalToolName(approvalItem);
   const formattedArgs = formatArguments(approvalItem.arguments);
   const lines = [`Tool: \`${toolName}\``];
 
@@ -82,7 +131,7 @@ interface ApprovalPromptArgs {
 
 interface ApprovalCollectorState {
   settled: boolean;
-  resolve: (approved: boolean) => void;
+  resolve: (result: PermissionResult) => void;
   collector: InteractionCollector<ButtonInteraction>;
 }
 
@@ -113,14 +162,28 @@ async function settleApprovalFromInteraction(
   args: ApprovalPromptArgs,
   state: ApprovalCollectorState,
 ): Promise<void> {
-  const approved = interaction.customId.startsWith("perm_approve");
+  const decision = decisionFromCustomId(interaction.customId);
+  if (!decision) {
+    aiLogger.warn(
+      {
+        channelId: args.channelId,
+        sessionId: args.sessionId,
+        tool: args.toolName,
+        customId: interaction.customId,
+      },
+      "Unknown tool approval button clicked",
+    );
+    return;
+  }
+
+  const result = resultFromDecision(decision);
   const resultEmbed = createPermissionEmbed(
-    approved
+    result.approved
       ? `Permission Granted: ${args.toolName}`
       : `Permission Denied: ${args.toolName}`,
     args.approvalItem,
-    approved ? 0x00aa55 : 0xcc3333,
-    `Decided by ${interaction.user.username}`,
+    result.approved ? 0x00aa55 : 0xcc3333,
+    `${getDecisionLabel(decision)} by ${interaction.user.username}`,
   );
 
   try {
@@ -129,19 +192,21 @@ async function settleApprovalFromInteraction(
       components: [],
     });
     state.settled = true;
-    state.collector.stop(approved ? "approved" : "denied");
+    state.collector.stop(result.approved ? "approved" : "denied");
 
     aiLogger.info(
       {
         channelId: args.channelId,
         sessionId: args.sessionId,
         tool: args.toolName,
-        approved,
+        approved: result.approved,
+        rememberTool: result.rememberTool,
+        decision,
       },
       "User responded to tool approval request",
     );
 
-    state.resolve(approved);
+    state.resolve(result);
   } catch (error) {
     state.settled = true;
     state.collector.stop("update_failed");
@@ -154,7 +219,7 @@ async function settleApprovalFromInteraction(
       },
       "Failed to update tool approval prompt",
     );
-    state.resolve(false);
+    state.resolve(DENY_ONCE_RESULT);
   }
 }
 
@@ -213,11 +278,11 @@ function handleApprovalEnd(
     "Tool approval request ended without approval",
   );
 
-  state.resolve(false);
+  state.resolve(DENY_ONCE_RESULT);
 }
 
-function waitForApproval(args: ApprovalPromptArgs): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
+function waitForApproval(args: ApprovalPromptArgs): Promise<PermissionResult> {
+  return new Promise<PermissionResult>((resolve) => {
     const collector = args.promptMessage.createMessageComponentCollector({
       componentType: ComponentType.Button,
       time: args.timeoutMs,
@@ -253,16 +318,16 @@ export class PermissionManager {
     approvalItem: RunToolApprovalItem,
     sessionId: string,
     timeoutMs = PERMISSION_TIMEOUT_MS,
-  ): Promise<boolean> {
+  ): Promise<PermissionResult> {
     const context = this.contexts.get(channelId);
-    const toolName = getToolName(approvalItem);
+    const toolName = getApprovalToolName(approvalItem);
 
     if (!context) {
       aiLogger.warn(
         { channelId, tool: toolName },
         "No permission context found, denying tool approval request",
       );
-      return false;
+      return DENY_ONCE_RESULT;
     }
 
     const { channel, userId } = context;
@@ -272,18 +337,26 @@ export class PermissionManager {
         `Permission Required: ${toolName}`,
         approvalItem,
         0xffa500,
-        `Only the requesting user can respond. Expires in ${Math.round(timeoutMs / 1000)}s`,
+        `Choose once for one call, or tool this turn for repeats. Expires in ${Math.round(timeoutMs / 1000)}s`,
       );
 
       const buttonId = randomUUID().slice(0, 12);
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-          .setCustomId(`perm_approve_${buttonId}`)
-          .setLabel("Allow")
+          .setCustomId(`perm_approve_tool_${buttonId}`)
+          .setLabel("Allow Tool This Turn")
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
-          .setCustomId(`perm_deny_${buttonId}`)
-          .setLabel("Deny")
+          .setCustomId(`perm_approve_once_${buttonId}`)
+          .setLabel("Allow Once")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`perm_deny_once_${buttonId}`)
+          .setLabel("Deny Once")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`perm_deny_tool_${buttonId}`)
+          .setLabel("Deny Tool This Turn")
           .setStyle(ButtonStyle.Danger),
       );
 
@@ -319,7 +392,7 @@ export class PermissionManager {
         },
         "Failed to send tool approval prompt",
       );
-      return false;
+      return DENY_ONCE_RESULT;
     }
   }
 }

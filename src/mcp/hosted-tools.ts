@@ -8,6 +8,12 @@ import {
   isSmitheryConfigured,
 } from "./smithery-api";
 
+const SMITHERY_DISCOVERY_TOOL_NAMES = [
+  "get_toolbox_status",
+  "mcp_list_tools",
+  "search_toolbox",
+];
+
 export async function getHostedMcpServerCount(): Promise<number> {
   if (!isSmitheryConfigured()) return 0;
   return (await countConnectedSmitheryConnections()) > 0 ? 1 : 0;
@@ -40,7 +46,10 @@ export async function getHostedMcpTools(): Promise<Tool[]> {
       },
       deferLoading: false,
       requireApproval: {
-        never: { readOnly: true },
+        never: {
+          readOnly: true,
+          toolNames: SMITHERY_DISCOVERY_TOOL_NAMES,
+        },
         always: { readOnly: false },
       },
     }),
