@@ -23,6 +23,7 @@ export {
 } from "./memory";
 export { auditLogTool } from "./audit";
 export { lastfmTool } from "./lastfm";
+export { smitheryListToolsTool, smitheryCallTool } from "./smithery";
 
 // Import for array export
 import { calculatorTool } from "./calc";
@@ -49,6 +50,7 @@ import {
 } from "./memory";
 import { auditLogTool } from "./audit";
 import { lastfmTool } from "./lastfm";
+import { smitheryListToolsTool, smitheryCallTool } from "./smithery";
 import type { Tool } from "@openai/agents";
 
 interface ToolRegistration {
@@ -58,6 +60,7 @@ interface ToolRegistration {
    * assistant message is acceptable.
    */
   readonly producesDiscordOutput?: boolean;
+  readonly externalService?: boolean;
 }
 
 const toolRegistry: readonly ToolRegistration[] = [
@@ -81,6 +84,8 @@ const toolRegistry: readonly ToolRegistration[] = [
   { tool: searchConversationTool },
   { tool: auditLogTool },
   { tool: lastfmTool },
+  { tool: smitheryListToolsTool, externalService: true },
+  { tool: smitheryCallTool, externalService: true },
 ];
 
 // Export all tools as an array for use with the OpenAI Agents runtime.
@@ -95,5 +100,11 @@ export const allTools: readonly Tool[] = toolRegistry.map(
 export const selfRespondingToolNames: ReadonlySet<string> = new Set(
   toolRegistry
     .filter((registration) => registration.producesDiscordOutput === true)
+    .map((registration) => registration.tool.name),
+);
+
+export const externalToolNames: ReadonlySet<string> = new Set(
+  toolRegistry
+    .filter((registration) => registration.externalService === true)
     .map((registration) => registration.tool.name),
 );

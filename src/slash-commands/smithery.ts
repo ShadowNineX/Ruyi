@@ -16,7 +16,6 @@ import {
 } from "../db/models";
 import { botLogger } from "../logger";
 import {
-  clearSmitheryServiceTokenCache,
   createOrUpdateSmitheryConnection,
   deleteSmitheryConnection,
   isSmitheryConfigured,
@@ -211,7 +210,6 @@ async function unlinkSmitheryServer(
   }
 
   await clearSmitheryConnection(serverId);
-  clearSmitheryServiceTokenCache();
 
   botLogger.info(
     { serverId, user: interaction.user.username },
@@ -251,7 +249,6 @@ async function showConnectionState(
   const serverInfo = SMITHERY_SERVERS[serverId];
 
   if (snapshot.status === "connected") {
-    clearSmitheryServiceTokenCache();
     const linkState = await getSmitheryLinkState();
     await interaction.editReply({
       embeds: [

@@ -1,8 +1,13 @@
-import { z } from "zod";
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
+import Smithery from "@smithery/api";
+import { createConnection, SmitheryAuthorizationError } from "@smithery/api/mcp";
+import type { Connection } from "@smithery/api/resources/connections/connections";
+import type { Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
 import { env } from "../env";
 import { mcpLogger } from "../logger";
 import {
   getAllSmitheryConnections,
+  getSmitheryConnection,
   saveSmitheryConnection,
   type ISmitheryConnection,
   type SmitheryConnectionStatus,
@@ -10,56 +15,15 @@ import {
 } from "../db/models";
 import { SMITHERY_SERVERS } from "./smithery-catalog";
 
-const SMITHERY_API_BASE_URL = "https://api.smithery.ai";
 const SMITHERY_MCP_BASE_URL = "https://mcp.smithery.run";
+const MCP_CLIENT_INFO = {
+  name: "ruyi-discord-bot",
+  version: "1.0.0",
+} as const;
 const SMITHERY_APP_METADATA = {
   app: "ruyi-discord-bot",
   scope: "global",
 } as const;
-const SERVICE_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
-
-const ConnectionStatusSchema = z.looseObject({
-  state: z.string(),
-  setupUrl: z.string().optional(),
-  message: z.string().optional(),
-  error: z.string().optional(),
-});
-
-const ConnectionSchema = z.looseObject({
-  connectionId: z.string(),
-  name: z.string().optional(),
-  mcpUrl: z.string().nullable().optional(),
-  status: ConnectionStatusSchema,
-});
-
-const DeleteConnectionSchema = z.looseObject({
-  success: z.boolean(),
-});
-
-const ServiceTokenSchema = z.looseObject({
-  token: z.string(),
-  expiresAt: z.string(),
-});
-
-const SmitheryToolSchema = z.looseObject({
-  name: z.string(),
-  title: z.string().optional(),
-  description: z.string().optional(),
-  annotations: z
-    .looseObject({
-      readOnlyHint: z.boolean().optional(),
-    })
-    .optional(),
-});
-
-const ToolListEnvelopeSchema = z.looseObject({
-  tools: z.array(SmitheryToolSchema).default([]),
-});
-
-const ErrorResponseSchema = z.looseObject({
-  message: z.string().optional(),
-  error: z.string().optional(),
-});
 
 export interface SmitheryConnectionSnapshot {
   connectionId: string;
@@ -73,24 +37,15 @@ export interface SmitheryToolSummary {
   title?: string;
   description?: string;
   readOnly?: boolean;
+  destructive?: boolean;
+  inputSchema?: unknown;
 }
 
-interface CachedServiceToken {
-  token: string;
-  expiresAtMs: number;
+export interface SmitheryToolCallResult {
+  connectionId: string;
+  toolName: string;
+  result: unknown;
 }
-
-export class SmitheryApiError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "SmitheryApiError";
-  }
-}
-
-let cachedServiceToken: CachedServiceToken | null = null;
 
 function requireSmitheryConfig(): {
   apiKey: string;
@@ -108,7 +63,14 @@ function requireSmitheryConfig(): {
   };
 }
 
-function normalizeStatus(state: string): SmitheryConnectionStatus {
+function getSmitheryClient(): Smithery {
+  const { apiKey } = requireSmitheryConfig();
+  return new Smithery({ apiKey });
+}
+
+function normalizeStatus(
+  state: Connection["status"] extends { state: infer T } ? T : string,
+): SmitheryConnectionStatus {
   switch (state) {
     case "connected":
     case "auth_required":
@@ -134,85 +96,47 @@ function getConnectionMetadata(
   };
 }
 
-function getApiUrl(path: string): string {
-  return `${SMITHERY_API_BASE_URL}${path}`;
+function getErrorStatus(error: unknown): number | undefined {
+  if (!(error instanceof Error) || !("status" in error)) return undefined;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : undefined;
 }
 
-function getAuthHeaders(): Record<string, string> {
-  const { apiKey } = requireSmitheryConfig();
+function getStatusSetupUrl(status: Connection["status"] | undefined): string | undefined {
+  if (!status) return undefined;
+  if (status.state === "auth_required") {
+    return status.setupUrl;
+  }
+  if (status.state === "input_required") {
+    return status.setupUrl;
+  }
+  return undefined;
+}
+
+function getStatusErrorMessage(
+  status: Connection["status"] | undefined,
+): string | undefined {
+  return status?.state === "error" ? status.message : undefined;
+}
+
+function toSnapshot(connection: Connection): SmitheryConnectionSnapshot {
   return {
-    Authorization: `Bearer ${apiKey}`,
+    connectionId: connection.connectionId,
+    status: normalizeStatus(connection.status?.state ?? "unknown"),
+    setupUrl: getStatusSetupUrl(connection.status),
+    errorMessage: getStatusErrorMessage(connection.status),
   };
 }
 
-function getErrorText(status: number, text: string): string {
-  if (!text) return `Smithery request failed with status ${status}`;
-
-  try {
-    const parsed: unknown = JSON.parse(text);
-    const error = ErrorResponseSchema.safeParse(parsed);
-    const message = error.success
-      ? (error.data.message ?? error.data.error)
-      : undefined;
-    return message ?? text;
-  } catch {
-    return text;
-  }
-}
-
-function toToolSummary(
-  tool: z.infer<typeof SmitheryToolSchema>,
-): SmitheryToolSummary {
+function toToolSummary(tool: McpTool): SmitheryToolSummary {
   return {
     name: tool.name,
     title: tool.title,
     description: tool.description,
     readOnly: tool.annotations?.readOnlyHint,
+    destructive: tool.annotations?.destructiveHint,
+    inputSchema: tool.inputSchema,
   };
-}
-
-function parseToolList(payload: unknown): SmitheryToolSummary[] {
-  const directTools = ToolListEnvelopeSchema.safeParse(payload);
-  if (directTools.success) {
-    return directTools.data.tools.map(toToolSummary);
-  }
-
-  const byConnection = z.record(z.string(), z.unknown()).safeParse(payload);
-  if (!byConnection.success) return [];
-
-  return Object.values(byConnection.data).flatMap((value) => {
-    const envelope = ToolListEnvelopeSchema.safeParse(value);
-    return envelope.success ? envelope.data.tools.map(toToolSummary) : [];
-  });
-}
-
-async function readJson<T>(
-  response: Response,
-  schema: z.ZodType<T>,
-): Promise<T> {
-  const text = await response.text();
-  if (!response.ok) {
-    throw new SmitheryApiError(response.status, getErrorText(response.status, text));
-  }
-
-  const parsed: unknown = text ? JSON.parse(text) : {};
-  return schema.parse(parsed);
-}
-
-async function smitheryFetch<T>(
-  path: string,
-  schema: z.ZodType<T>,
-  init: RequestInit = {},
-): Promise<T> {
-  const response = await fetch(getApiUrl(path), {
-    ...init,
-    headers: {
-      ...getAuthHeaders(),
-      ...init.headers,
-    },
-  });
-
-  return readJson(response, schema);
 }
 
 async function saveSnapshot(
@@ -228,16 +152,48 @@ async function saveSnapshot(
   });
 }
 
-function toSnapshot(
-  connection: z.infer<typeof ConnectionSchema>,
-): SmitheryConnectionSnapshot {
-  const status = normalizeStatus(connection.status.state);
-  return {
-    connectionId: connection.connectionId,
-    status,
-    setupUrl: connection.status.setupUrl,
-    errorMessage: connection.status.message ?? connection.status.error,
-  };
+async function withSmitheryMcpClient<T>(
+  connectionId: string,
+  callback: (client: McpClient) => Promise<T>,
+): Promise<T> {
+  const { namespace } = requireSmitheryConfig();
+  const smithery = getSmitheryClient();
+  const { transport } = await createConnection({
+    client: smithery,
+    namespace,
+    connectionId,
+  });
+  const client = new McpClient(MCP_CLIENT_INFO, { capabilities: {} });
+
+  try {
+    await client.connect(transport);
+    return await callback(client);
+  } finally {
+    await client.close().catch((error: unknown) => {
+      mcpLogger.debug(
+        {
+          connectionId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Failed to close Smithery MCP client",
+      );
+    });
+  }
+}
+
+async function requireConnectedSmitheryConnection(
+  serverId: SmitheryServerId,
+): Promise<ISmitheryConnection> {
+  const connection = await getSmitheryConnection(serverId);
+  if (!connection) {
+    throw new Error(`${SMITHERY_SERVERS[serverId].name} is not linked. Run /smithery first.`);
+  }
+  if (connection.status !== "connected") {
+    throw new Error(
+      `${SMITHERY_SERVERS[serverId].name} is not ready. Current Smithery status: ${connection.status}.`,
+    );
+  }
+  return connection;
 }
 
 export function isSmitheryConfigured(): boolean {
@@ -246,7 +202,10 @@ export function isSmitheryConfigured(): boolean {
 
 export function getSmitheryNamespaceMcpUrl(): string {
   const { namespace } = requireSmitheryConfig();
-  return new URL(encodeURIComponent(namespace), `${SMITHERY_MCP_BASE_URL}/`).toString();
+  return new URL(
+    encodeURIComponent(namespace),
+    `${SMITHERY_MCP_BASE_URL}/`,
+  ).toString();
 }
 
 export async function createOrUpdateSmitheryConnection(
@@ -254,24 +213,16 @@ export async function createOrUpdateSmitheryConnection(
 ): Promise<SmitheryConnectionSnapshot> {
   const { namespace } = requireSmitheryConfig();
   const server = SMITHERY_SERVERS[serverId];
-  const connectionId = getConnectionId(serverId);
+  const client = getSmitheryClient();
 
-  const connection = await smitheryFetch(
-    `/connect/${encodeURIComponent(namespace)}/${encodeURIComponent(connectionId)}`,
-    ConnectionSchema,
-    {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        transport: "http",
-        mcpUrl: server.mcpUrl,
-        name: server.name,
-        metadata: getConnectionMetadata(serverId),
-      }),
-    },
-  );
+  const connection = await client.connections.set(getConnectionId(serverId), {
+    namespace,
+    transport: "http",
+    mcpUrl: server.mcpUrl,
+    name: server.name,
+    metadata: getConnectionMetadata(serverId),
+  });
+
   const snapshot = toSnapshot(connection);
   await saveSnapshot(serverId, snapshot);
   return snapshot;
@@ -281,11 +232,10 @@ export async function refreshSmitheryConnection(
   serverId: SmitheryServerId,
 ): Promise<SmitheryConnectionSnapshot> {
   const { namespace } = requireSmitheryConfig();
-  const connectionId = getConnectionId(serverId);
-  const connection = await smitheryFetch(
-    `/connect/${encodeURIComponent(namespace)}/${encodeURIComponent(connectionId)}`,
-    ConnectionSchema,
-  );
+  const client = getSmitheryClient();
+  const connection = await client.connections.get(getConnectionId(serverId), {
+    namespace,
+  });
   const snapshot = toSnapshot(connection);
   await saveSnapshot(serverId, snapshot);
   return snapshot;
@@ -297,7 +247,7 @@ export async function refreshKnownSmitheryConnections(): Promise<void> {
   const connections = await getAllSmitheryConnections();
   for (const connection of connections) {
     try {
-      await createOrUpdateSmitheryConnection(connection.serverId);
+      await refreshSmitheryConnection(connection.serverId);
     } catch (error) {
       mcpLogger.warn(
         {
@@ -314,88 +264,54 @@ export async function deleteSmitheryConnection(
   serverId: SmitheryServerId,
 ): Promise<boolean> {
   const { namespace } = requireSmitheryConfig();
-  const connectionId = getConnectionId(serverId);
+  const client = getSmitheryClient();
 
   try {
-    const result = await smitheryFetch(
-      `/connect/${encodeURIComponent(namespace)}/${encodeURIComponent(connectionId)}`,
-      DeleteConnectionSchema,
-      { method: "DELETE" },
-    );
+    const result = await client.connections.delete(getConnectionId(serverId), {
+      namespace,
+    });
     return result.success;
   } catch (error) {
-    if (error instanceof SmitheryApiError && error.status === 404) {
-      return true;
-    }
+    if (getErrorStatus(error) === 404) return true;
     throw error;
   }
-}
-
-export async function createSmitheryServiceToken(): Promise<string> {
-  const { namespace } = requireSmitheryConfig();
-  const token = await smitheryFetch("/tokens", ServiceTokenSchema, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      policy: [
-        {
-          namespaces: namespace,
-          resources: "connections",
-          operations: ["read", "execute"],
-          metadata: SMITHERY_APP_METADATA,
-          ttl: "30m",
-        },
-      ],
-    }),
-  });
-
-  const expiresAtMs = new Date(token.expiresAt).getTime();
-  cachedServiceToken = {
-    token: token.token,
-    expiresAtMs,
-  };
-
-  return token.token;
-}
-
-export async function getSmitheryServiceToken(): Promise<string> {
-  if (
-    cachedServiceToken &&
-    cachedServiceToken.expiresAtMs - SERVICE_TOKEN_REFRESH_BUFFER_MS > Date.now()
-  ) {
-    return cachedServiceToken.token;
-  }
-
-  return createSmitheryServiceToken();
-}
-
-export function clearSmitheryServiceTokenCache(): void {
-  cachedServiceToken = null;
 }
 
 export async function listSmitheryConnectionTools(
   serverId: SmitheryServerId,
 ): Promise<SmitheryToolSummary[]> {
-  const { namespace } = requireSmitheryConfig();
-  const connectionId = getConnectionId(serverId);
-  const payload = await smitheryFetch(
-    `/connect/${encodeURIComponent(namespace)}/${encodeURIComponent(connectionId)}/.tools`,
-    z.unknown(),
+  const connection = await requireConnectedSmitheryConnection(serverId);
+  const result = await withSmitheryMcpClient(connection.connectionId, (client) =>
+    client.listTools(),
   );
-
-  return parseToolList(payload);
+  return result.tools.map(toToolSummary);
 }
 
-export async function listSmitheryNamespaceTools(): Promise<
-  SmitheryToolSummary[]
-> {
-  const { namespace } = requireSmitheryConfig();
-  const payload = await smitheryFetch(
-    `/connect/${encodeURIComponent(namespace)}/.tools`,
-    z.unknown(),
-  );
+export async function callSmitheryConnectionTool(
+  serverId: SmitheryServerId,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<SmitheryToolCallResult> {
+  const connection = await requireConnectedSmitheryConnection(serverId);
 
-  return parseToolList(payload);
+  try {
+    const result = await withSmitheryMcpClient(connection.connectionId, (client) =>
+      client.callTool({ name: toolName, arguments: args }),
+    );
+    return {
+      connectionId: connection.connectionId,
+      toolName,
+      result,
+    };
+  } catch (error) {
+    if (error instanceof SmitheryAuthorizationError) {
+      await saveSnapshot(serverId, {
+        connectionId: error.connectionId,
+        status: "auth_required",
+        setupUrl: error.authorizationUrl,
+        errorMessage: error.message,
+      });
+    }
+    throw error;
+  }
 }

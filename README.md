@@ -22,10 +22,11 @@ Set `SMITHERY_API_KEY` and `SMITHERY_NAMESPACE`, restart the bot, then run
 GitHub and other MCP services, so you should not need to paste OAuth codes into
 Discord.
 
-Ruyi uses Smithery's direct namespace MCP endpoint by default, so connected
-service tools are exposed to the agent immediately as first-class MCP tools.
-Runtime calls use short-lived Smithery service tokens scoped to Ruyi's global
-connection metadata.
+Ruyi uses the official `@smithery/api` SDK for connection management and
+`@smithery/api/mcp` with the MCP TypeScript SDK for tool execution. The model
+sees only two stable local tools, `smithery_list_tools` and
+`smithery_call_tool`; upstream MCP schemas are discovered at call time instead
+of being registered as OpenAI function schemas during chat startup.
 
 On first startup after upgrading from the old OAuth-token flow, Ruyi drops the
 legacy `smitherytokens` MongoDB collection and records that migration in config.
