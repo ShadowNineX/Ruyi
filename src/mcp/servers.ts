@@ -13,6 +13,7 @@ import {
   getSmitheryServiceToken,
   isSmitheryConfigured,
 } from "./smithery-api";
+import { sanitizeMcpInputSchema } from "./schema";
 
 const MCP_CONNECT_TIMEOUT_MS = 30_000;
 const APPROVAL_FREE_SMART_TOOL_NAMES = new Set([
@@ -23,6 +24,7 @@ const BLOCKED_SMART_TOOL_NAMES = ["remove_server"];
 
 type McpToolList = Awaited<ReturnType<MCPServer["listTools"]>>;
 type McpToolOutput = Awaited<ReturnType<MCPServer["callTool"]>>;
+type McpTool = McpToolList[number];
 
 function formatMcpToolError({ error }: Parameters<MCPToolErrorFunction>[0]): string {
   return error instanceof Error ? error.message : String(error);
@@ -46,6 +48,13 @@ function deniedMcpToolOutput(toolName: string): McpToolOutput {
       text: `The Discord user denied approval for MCP tool ${toolName}.`,
     },
   ];
+}
+
+function sanitizeMcpTool(tool: McpTool): McpTool {
+  return {
+    ...tool,
+    inputSchema: sanitizeMcpInputSchema(tool.inputSchema),
+  };
 }
 
 class ApprovalMcpServer implements MCPServer {
@@ -75,8 +84,11 @@ class ApprovalMcpServer implements MCPServer {
     return this.inner.close();
   }
 
-  listTools(): Promise<McpToolList> {
-    return this.inner.listTools();
+  async listTools(): Promise<McpToolList> {
+    const tools = await this.inner.listTools();
+    return tools
+      .filter((tool) => !BLOCKED_SMART_TOOL_NAMES.includes(tool.name))
+      .map(sanitizeMcpTool);
   }
 
   invalidateToolsCache(): Promise<void> {
