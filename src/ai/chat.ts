@@ -25,6 +25,7 @@ import { autoExtractFacts } from "./extraction";
 
 const LOCAL_TOOL_NAMES = new Set(allTools.map((tool) => tool.name));
 const MAX_AGENT_IMAGE_INPUTS = 4;
+const MAX_TOOL_LOG_PREVIEW_CHARS = 800;
 const UnknownRecordSchema = z.record(z.string(), z.unknown());
 const ToolCallSchema = z.looseObject({
   arguments: z.unknown().optional(),
@@ -81,6 +82,7 @@ interface TurnToolUsage {
   localToolCallCount: number;
   externalToolCallCount: number;
   hostedMcpCallKeys: Set<string>;
+  completedHostedMcpCallKeys: Set<string>;
 }
 
 function parseArguments(value: unknown): Record<string, unknown> {
@@ -181,7 +183,24 @@ function createTurnToolUsage(): TurnToolUsage {
     localToolCallCount: 0,
     externalToolCallCount: 0,
     hostedMcpCallKeys: new Set<string>(),
+    completedHostedMcpCallKeys: new Set<string>(),
   };
+}
+
+function truncatePreview(value: string): string {
+  if (value.length <= MAX_TOOL_LOG_PREVIEW_CHARS) return value;
+  return `${value.slice(0, MAX_TOOL_LOG_PREVIEW_CHARS - 3)}...`;
+}
+
+function formatLogPreview(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string") return truncatePreview(value);
+
+  try {
+    return truncatePreview(JSON.stringify(value));
+  } catch {
+    return truncatePreview(String(value));
+  }
 }
 
 function getHostedToolCallKey(
@@ -484,16 +503,19 @@ export class ChatService {
       session.onToolStart(displayName, parseArguments(hostedCall.arguments));
     }
 
-    if (
+    const isComplete =
       parsedEvent.data.name === "tool_output" ||
       hostedCall.status === "completed" ||
-      hostedCall.providerData?.error !== undefined
-    ) {
-      aiLogger.debug(
+      hostedCall.providerData?.error !== undefined;
+
+    if (isComplete && !toolUsage.completedHostedMcpCallKeys.has(callKey)) {
+      toolUsage.completedHostedMcpCallKeys.add(callKey);
+      aiLogger.info(
         {
           tool: displayName,
           status: hostedCall.status,
           hasOutput: hostedCall.output !== undefined,
+          outputPreview: formatLogPreview(hostedCall.output),
           error: hostedCall.providerData?.error,
         },
         "Hosted MCP tool call completed",
