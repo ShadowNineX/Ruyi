@@ -1,6 +1,8 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { Readability, isProbablyReaderable } from "@mozilla/readability";
 import { tool } from "@openai/agents";
+import { JSDOM, VirtualConsole } from "jsdom";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { formatError } from "../utils/types";
@@ -13,23 +15,23 @@ const MAX_TEXT_CHARS = 12_000;
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
-const SKIPPED_HTML_TAGS = new Set(["script", "style", "noscript"]);
-const HTML_BLOCK_TAGS = new Set([
-  "article",
-  "br",
-  "div",
-  "footer",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
+const HTML_FALLBACK_REMOVE_SELECTORS = [
+  "script",
+  "style",
+  "noscript",
+  "template",
+  "svg",
+  "canvas",
+  "iframe",
+  "nav",
+  "aside",
+  "form",
+  "button",
+  "select",
+  "textarea",
   "header",
-  "li",
-  "p",
-  "section",
-]);
+  "footer",
+].join(",");
 
 interface FetchResponse {
   response: Response;
@@ -41,6 +43,18 @@ interface ReadTextResult {
   text: string;
   bytesRead: number;
   byteTruncated: boolean;
+}
+
+interface PreparedTextResult {
+  text: string;
+  charTruncated: boolean;
+  extractionMethod: "raw" | "readability" | "dom_text" | "plain_text";
+  title?: string | null;
+  excerpt?: string | null;
+  byline?: string | null;
+  siteName?: string | null;
+  lang?: string | null;
+  publishedTime?: string | null;
 }
 
 function clampMaxChars(value: number | null): number {
@@ -267,103 +281,6 @@ async function readResponseText(response: Response): Promise<ReadTextResult> {
   };
 }
 
-function decodeBasicHtmlEntities(value: string): string {
-  return value
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'");
-}
-
-function parseHtmlTagName(tagContent: string): string {
-  const trimmed = tagContent.trimStart();
-  const start = trimmed.startsWith("/") ? 1 : 0;
-  let end = start;
-
-  while (end < trimmed.length) {
-    const code = trimmed.codePointAt(end);
-    const char = trimmed[end];
-    if (code === undefined || !char) break;
-    const isNameChar =
-      (code >= 48 && code <= 57) ||
-      (code >= 65 && code <= 90) ||
-      (code >= 97 && code <= 122) ||
-      char === "-" ||
-      char === ":";
-    if (!isNameChar) break;
-    end += 1;
-  }
-
-  return trimmed.slice(start, end).toLowerCase();
-}
-
-function isClosingHtmlTag(tagContent: string): boolean {
-  return tagContent.trimStart().startsWith("/");
-}
-
-function findTagEnd(value: string, start: number): number {
-  const end = value.indexOf(">", start + 1);
-  return end === -1 ? value.length - 1 : end;
-}
-
-function skipHtmlComment(value: string, start: number): number {
-  const end = value.indexOf("-->", start + 4);
-  return end === -1 ? value.length : end + 3;
-}
-
-function skipHtmlElement(value: string, lowerValue: string, start: number): number {
-  const tagEnd = findTagEnd(value, start);
-  const tagName = parseHtmlTagName(value.slice(start + 1, tagEnd));
-  if (!SKIPPED_HTML_TAGS.has(tagName)) return tagEnd + 1;
-
-  const closingStart = lowerValue.indexOf(`</${tagName}`, tagEnd + 1);
-  if (closingStart === -1) return value.length;
-
-  return findTagEnd(value, closingStart) + 1;
-}
-
-function htmlToPlainText(value: string): string {
-  let result = "";
-  const lowerValue = value.toLowerCase();
-  let index = 0;
-
-  while (index < value.length) {
-    const char = value[index];
-    if (char !== "<") {
-      result += char;
-      index += 1;
-      continue;
-    }
-
-    if (value.startsWith("<!--", index)) {
-      result += " ";
-      index = skipHtmlComment(value, index);
-      continue;
-    }
-
-    const tagEnd = findTagEnd(value, index);
-    const tagContent = value.slice(index + 1, tagEnd);
-    const tagName = parseHtmlTagName(tagContent);
-
-    if (!isClosingHtmlTag(tagContent) && SKIPPED_HTML_TAGS.has(tagName)) {
-      result += " ";
-      index = skipHtmlElement(value, lowerValue, index);
-      continue;
-    }
-
-    result += HTML_BLOCK_TAGS.has(tagName) ? "\n" : " ";
-    index = tagEnd + 1;
-  }
-
-  return result;
-}
-
-function htmlToText(value: string): string {
-  return decodeBasicHtmlEntities(htmlToPlainText(value));
-}
-
 function normalizeWhitespace(value: string): string {
   let result = "";
   let pendingSpace = false;
@@ -401,26 +318,90 @@ function normalizeText(value: string): string {
   return normalizeWhitespace(value.replaceAll("\r", ""));
 }
 
+function parseHtmlDocument(html: string, finalUrl: string): Document {
+  const virtualConsole = new VirtualConsole();
+  const dom = new JSDOM(html, {
+    url: finalUrl,
+    contentType: "text/html",
+    virtualConsole,
+  });
+  return dom.window.document;
+}
+
+function removeNoisyFallbackNodes(document: Document): void {
+  document.querySelectorAll(HTML_FALLBACK_REMOVE_SELECTORS).forEach((node) => {
+    node.remove();
+  });
+}
+
+function getFallbackDocumentText(document: Document): string {
+  removeNoisyFallbackNodes(document);
+  return document.body?.textContent ?? document.documentElement.textContent ?? "";
+}
+
+function extractReadableHtmlText(
+  html: string,
+  finalUrl: string,
+): Omit<PreparedTextResult, "charTruncated"> {
+  const document = parseHtmlDocument(html, finalUrl);
+  const readerable = isProbablyReaderable(document, {
+    minContentLength: 80,
+    minScore: 12,
+  });
+  const article = new Readability(document.cloneNode(true) as Document, {
+    charThreshold: 200,
+  }).parse();
+  const articleText = normalizeText(article?.textContent ?? "");
+
+  if (articleText && (readerable || articleText.length >= 200)) {
+    return {
+      text: articleText,
+      extractionMethod: "readability",
+      title: article?.title ?? null,
+      excerpt: article?.excerpt ?? null,
+      byline: article?.byline ?? null,
+      siteName: article?.siteName ?? null,
+      lang: article?.lang ?? null,
+      publishedTime: article?.publishedTime ?? null,
+    };
+  }
+
+  const fallbackText = normalizeText(getFallbackDocumentText(document));
+  return {
+    text: fallbackText,
+    extractionMethod: "dom_text",
+  };
+}
+
 function prepareText(
   text: string,
   contentType: string,
   raw: boolean,
   maxChars: number,
-): { text: string; charTruncated: boolean } {
-  let normalized: string;
+  finalUrl: string,
+): PreparedTextResult {
+  let prepared: Omit<PreparedTextResult, "charTruncated">;
   if (raw) {
-    normalized = text.trim();
+    prepared = {
+      text: text.trim(),
+      extractionMethod: "raw",
+    };
+  } else if (contentType.includes("html")) {
+    prepared = extractReadableHtmlText(text, finalUrl);
   } else {
-    const readableText = contentType.includes("html") ? htmlToText(text) : text;
-    normalized = normalizeText(readableText);
+    prepared = {
+      text: normalizeText(text),
+      extractionMethod: "plain_text",
+    };
   }
 
-  if (normalized.length <= maxChars) {
-    return { text: normalized, charTruncated: false };
+  if (prepared.text.length <= maxChars) {
+    return { ...prepared, charTruncated: false };
   }
 
   return {
-    text: normalized.slice(0, maxChars),
+    ...prepared,
+    text: prepared.text.slice(0, maxChars),
     charTruncated: true,
   };
 }
@@ -496,6 +477,7 @@ export const fetchUrlTool = tool({
         contentType.toLowerCase(),
         raw === true,
         maxChars,
+        finalUrl,
       );
 
       return {
@@ -503,6 +485,13 @@ export const fetchUrlTool = tool({
         bytesRead: body.bytesRead,
         byteTruncated: body.byteTruncated,
         charTruncated: prepared.charTruncated,
+        extractionMethod: prepared.extractionMethod,
+        title: prepared.title,
+        excerpt: prepared.excerpt,
+        byline: prepared.byline,
+        siteName: prepared.siteName,
+        lang: prepared.lang,
+        publishedTime: prepared.publishedTime,
         text: prepared.text,
       };
     } catch (error) {
