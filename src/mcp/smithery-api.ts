@@ -12,6 +12,7 @@ import { SMITHERY_SERVERS } from "./smithery-catalog";
 
 const SMITHERY_API_BASE_URL = "https://api.smithery.ai";
 const SMITHERY_MCP_BASE_URL = "https://mcp.smithery.run";
+const SMITHERY_MCP_MODE = "smart";
 const SERVICE_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 const ConnectionStatusSchema = z.looseObject({
@@ -185,7 +186,9 @@ export function isSmitheryConfigured(): boolean {
 
 export function getSmitheryNamespaceMcpUrl(): string {
   const { namespace } = requireSmitheryConfig();
-  return `${SMITHERY_MCP_BASE_URL}/${encodeURIComponent(namespace)}`;
+  const url = new URL(encodeURIComponent(namespace), `${SMITHERY_MCP_BASE_URL}/`);
+  url.searchParams.set("mode", SMITHERY_MCP_MODE);
+  return url.toString();
 }
 
 export async function createOrUpdateSmitheryConnection(
