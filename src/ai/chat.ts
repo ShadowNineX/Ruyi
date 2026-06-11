@@ -11,9 +11,7 @@ import { z } from "zod";
 import { allTools } from "../tools";
 import { aiLogger } from "../logger";
 import { mcpRegistry } from "../mcp";
-import {
-  getHostedMcpTools,
-} from "../mcp/hosted-tools";
+import { getHostedMcpTools } from "../mcp/hosted-tools";
 import { env } from "../env";
 import { CHAT_TIMEOUT_MS } from "../constants";
 import type { ChatSession } from "../utils/chat-session";
@@ -29,11 +27,32 @@ const LOCAL_TOOL_NAMES = new Set(allTools.map((tool) => tool.name));
 const MAX_AGENT_IMAGE_INPUTS = 4;
 const UnknownRecordSchema = z.record(z.string(), z.unknown());
 const ToolCallSchema = z.looseObject({
-    arguments: z.unknown().optional(),
-  });
+  arguments: z.unknown().optional(),
+});
 const RawStreamEventSchema = z.looseObject({
-    type: z.string(),
-  });
+  type: z.string(),
+});
+const HostedToolProviderDataSchema = z.looseObject({
+  type: z.string().optional(),
+  name: z.string().optional(),
+  server_label: z.string().optional(),
+  error: z.unknown().optional(),
+});
+const HostedToolRawItemSchema = z.looseObject({
+  type: z.literal("hosted_tool_call"),
+  name: z.string(),
+  id: z.string().optional(),
+  arguments: z.unknown().optional(),
+  status: z.string().optional(),
+  output: z.unknown().optional(),
+  providerData: HostedToolProviderDataSchema.optional(),
+});
+const RunItemStreamEventSchema = z.looseObject({
+  name: z.string(),
+  item: z.looseObject({
+    rawItem: z.unknown().optional(),
+  }),
+});
 
 export interface ChatOptions {
   userMessage: string;
@@ -56,6 +75,12 @@ interface StreamLike extends AsyncIterable<RunStreamEvent> {
 interface ApprovalState {
   approve: (item: RunToolApprovalItem) => void;
   reject: (item: RunToolApprovalItem, options?: { message?: string }) => void;
+}
+
+interface TurnToolUsage {
+  localToolCallCount: number;
+  externalToolCallCount: number;
+  hostedMcpCallKeys: Set<string>;
 }
 
 function parseArguments(value: unknown): Record<string, unknown> {
@@ -87,12 +112,16 @@ function rawEventType(event: RunStreamEvent): string | null {
 
 function isTextDeltaEvent(event: RunStreamEvent): boolean {
   const type = rawEventType(event);
-  return type === "response.output_text.delta" || type === "response.refusal.delta";
+  return (
+    type === "response.output_text.delta" || type === "response.refusal.delta"
+  );
 }
 
 function isTextDoneEvent(event: RunStreamEvent): boolean {
   const type = rawEventType(event);
-  return type === "response.output_text.done" || type === "response.refusal.done";
+  return (
+    type === "response.output_text.done" || type === "response.refusal.done"
+  );
 }
 
 function formatToolDisplayName(
@@ -145,6 +174,28 @@ function buildRunnerInput(
   ];
 
   return [user(content)];
+}
+
+function createTurnToolUsage(): TurnToolUsage {
+  return {
+    localToolCallCount: 0,
+    externalToolCallCount: 0,
+    hostedMcpCallKeys: new Set<string>(),
+  };
+}
+
+function getHostedToolCallKey(
+  rawItem: z.infer<typeof HostedToolRawItemSchema>,
+): string {
+  return rawItem.id ?? `${rawItem.name}:${String(rawItem.arguments ?? "")}`;
+}
+
+function getHostedToolDisplayName(
+  rawItem: z.infer<typeof HostedToolRawItemSchema>,
+): string {
+  const server = rawItem.providerData?.server_label;
+  const name = rawItem.providerData?.name ?? rawItem.name;
+  return server ? `${server}:${name}` : `mcp:${name}`;
 }
 
 export class ChatService {
@@ -253,7 +304,8 @@ export class ChatService {
 
       const agentSessionId = await agentSession.getSessionId();
       const hostedMcpTools = await getHostedMcpTools();
-      const agent = this.createAgent(session, hostedMcpTools);
+      const toolUsage = createTurnToolUsage();
+      const agent = this.createAgent(session, hostedMcpTools, toolUsage);
       const runner = agentsRuntimeManager.getRunner();
       const runOptions = {
         stream: true,
@@ -274,7 +326,7 @@ export class ChatService {
       );
 
       let stream = await runner.run(agent, runnerInput, runOptions);
-      await this.drainStream(stream, session);
+      await this.drainStream(stream, session, toolUsage);
 
       let approvalCycles = 0;
       while (stream.interruptions.length > 0) {
@@ -293,7 +345,7 @@ export class ChatService {
         session.onThinking();
 
         stream = await runner.run(agent, stream.state, runOptions);
-        await this.drainStream(stream, session);
+        await this.drainStream(stream, session, toolUsage);
       }
 
       const finalOutput = stream.finalOutput;
@@ -306,6 +358,8 @@ export class ChatService {
         {
           responseLength: finalContent?.length ?? 0,
           preview: finalContent?.slice(0, 200) ?? null,
+          localToolCallCount: toolUsage.localToolCallCount,
+          externalToolCallCount: toolUsage.externalToolCallCount,
         },
         "Chat response generated",
       );
@@ -344,7 +398,11 @@ export class ChatService {
     }
   }
 
-  private createAgent(session: ChatSession, hostedMcpTools: Tool[]) {
+  private createAgent(
+    session: ChatSession,
+    hostedMcpTools: Tool[],
+    toolUsage: TurnToolUsage,
+  ) {
     const agent = new Agent({
       name: "Ruyi",
       instructions: systemPrompt,
@@ -354,7 +412,7 @@ export class ChatService {
     });
 
     agent.on("agent_tool_start", (_context, tool, details) => {
-      this.handleToolStart(tool, details.toolCall, session);
+      this.handleToolStart(tool, details.toolCall, session, toolUsage);
     });
     agent.on("agent_tool_end", (_context, tool) => {
       this.handleToolEnd(tool, session);
@@ -366,20 +424,83 @@ export class ChatService {
   private async drainStream(
     stream: StreamLike,
     session: ChatSession,
+    toolUsage: TurnToolUsage,
   ): Promise<void> {
     for await (const event of stream) {
       // Consuming the stream lets the SDK execute tool calls and surface
       // lifecycle hooks; Discord typing is only shown while text is emitted.
-      if (isTextDeltaEvent(event)) {
-        session.onTextGenerationStart();
-      } else if (isTextDoneEvent(event)) {
-        session.onTextGenerationEnd();
-      }
+      this.handleStreamEvent(event, session, toolUsage);
     }
 
     session.onTextGenerationEnd();
     await stream.completed;
     if (stream.error) throw stream.error;
+  }
+
+  private handleStreamEvent(
+    event: RunStreamEvent,
+    session: ChatSession,
+    toolUsage: TurnToolUsage,
+  ): void {
+    if (isTextDeltaEvent(event)) {
+      session.onTextGenerationStart();
+    } else if (isTextDoneEvent(event)) {
+      session.onTextGenerationEnd();
+    }
+
+    this.handleHostedMcpStreamEvent(event, session, toolUsage);
+  }
+
+  private handleHostedMcpStreamEvent(
+    event: RunStreamEvent,
+    session: ChatSession,
+    toolUsage: TurnToolUsage,
+  ): void {
+    if (event.type !== "run_item_stream_event") return;
+
+    const parsedEvent = RunItemStreamEventSchema.safeParse(event);
+    if (!parsedEvent.success) return;
+
+    const rawItem = parsedEvent.data.item.rawItem;
+    const parsedRawItem = HostedToolRawItemSchema.safeParse(rawItem);
+    if (!parsedRawItem.success) return;
+
+    const hostedCall = parsedRawItem.data;
+    const callKey = getHostedToolCallKey(hostedCall);
+    const displayName = getHostedToolDisplayName(hostedCall);
+
+    if (!toolUsage.hostedMcpCallKeys.has(callKey)) {
+      toolUsage.hostedMcpCallKeys.add(callKey);
+      toolUsage.externalToolCallCount += 1;
+      aiLogger.info(
+        {
+          tool: hostedCall.providerData?.name ?? hostedCall.name,
+          server: hostedCall.providerData?.server_label,
+          status: hostedCall.status,
+          error: hostedCall.providerData?.error,
+        },
+        "Hosted MCP tool call observed",
+      );
+      session.onToolStart(displayName, parseArguments(hostedCall.arguments));
+    }
+
+    if (
+      parsedEvent.data.name === "tool_output" ||
+      hostedCall.status === "completed" ||
+      hostedCall.providerData?.error !== undefined
+    ) {
+      aiLogger.debug(
+        {
+          tool: displayName,
+          status: hostedCall.status,
+          hasOutput: hostedCall.output !== undefined,
+          error: hostedCall.providerData?.error,
+        },
+        "Hosted MCP tool call completed",
+      );
+      session.onToolEnd(displayName);
+      session.onThinking();
+    }
   }
 
   private getToolDisplayName(toolName: string): {
@@ -400,8 +521,14 @@ export class ChatService {
     tool: Tool,
     toolCall: unknown,
     session: ChatSession,
+    toolUsage: TurnToolUsage,
   ): void {
     const { displayName, isLocalTool } = this.getToolDisplayName(tool.name);
+    if (isLocalTool) {
+      toolUsage.localToolCallCount += 1;
+    } else {
+      toolUsage.externalToolCallCount += 1;
+    }
     aiLogger.info(
       { tool: tool.name, isMCP: !isLocalTool },
       isLocalTool ? "Tool execution starting" : "MCP tool execution starting",

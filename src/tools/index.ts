@@ -51,39 +51,49 @@ import { auditLogTool } from "./audit";
 import { lastfmTool } from "./lastfm";
 import type { Tool } from "@openai/agents";
 
-// Export all tools as an array for use with the OpenAI Agents runtime
-export const allTools = [
-  calculatorTool,
-  channelInfoTool,
-  serverInfoTool,
-  userInfoTool,
-  manageRoleTool,
-  reactionTool,
-  pinTool,
-  searchMessagesTool,
-  deleteMessagesTool,
-  editBotMessageTool,
-  embedTool,
-  fetchUrlTool,
-  generateImageTool,
-  describeImageTool,
-  memoryStoreTool,
-  memoryRecallTool,
-  searchMemoryTool,
-  searchConversationTool,
-  auditLogTool,
-  lastfmTool,
-] as const satisfies readonly Tool[];
+interface ToolRegistration {
+  readonly tool: Tool;
+  /**
+   * True when the tool already posts visible Discord output, so an empty final
+   * assistant message is acceptable.
+   */
+  readonly producesDiscordOutput?: boolean;
+}
+
+const toolRegistry: readonly ToolRegistration[] = [
+  { tool: calculatorTool },
+  { tool: channelInfoTool },
+  { tool: serverInfoTool },
+  { tool: userInfoTool },
+  { tool: manageRoleTool },
+  { tool: reactionTool },
+  { tool: pinTool },
+  { tool: searchMessagesTool },
+  { tool: deleteMessagesTool },
+  { tool: editBotMessageTool, producesDiscordOutput: true },
+  { tool: embedTool, producesDiscordOutput: true },
+  { tool: fetchUrlTool },
+  { tool: generateImageTool, producesDiscordOutput: true },
+  { tool: describeImageTool },
+  { tool: memoryStoreTool },
+  { tool: memoryRecallTool },
+  { tool: searchMemoryTool },
+  { tool: searchConversationTool },
+  { tool: auditLogTool },
+  { tool: lastfmTool },
+];
+
+// Export all tools as an array for use with the OpenAI Agents runtime.
+export const allTools: readonly Tool[] = toolRegistry.map(
+  (registration) => registration.tool,
+);
 
 /**
  * Tools that produce their own visible Discord output (embed, image, etc.)
  * and therefore make a missing assistant text reply non-fatal.
- *
- * Centralized here so `bot.ts` doesn't have to know about specific tool
- * names. To mark a new tool as self-responding, add its name to this set.
  */
-export const selfRespondingToolNames: ReadonlySet<string> = new Set([
-  "send_embed",
-  "generate_image",
-  "edit_bot_message",
-]);
+export const selfRespondingToolNames: ReadonlySet<string> = new Set(
+  toolRegistry
+    .filter((registration) => registration.producesDiscordOutput === true)
+    .map((registration) => registration.tool.name),
+);
