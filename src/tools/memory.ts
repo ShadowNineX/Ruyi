@@ -2,7 +2,14 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { Memory, Conversation } from "../db/models";
-import { toolContextManager } from "../utils/types";
+import { toolContextManager, formatError } from "../utils/types";
+import {
+  GLOBAL_MEMORY_CAP,
+  MEMORY_VALUE_MAX_LEN,
+  USER_MEMORY_CAP,
+} from "../constants";
+
+type MemorySearchFilter = Record<string, unknown>;
 
 // Get the actual Discord username from context - don't trust model's username parameter
 function getContextUsername(): string | null {
@@ -10,7 +17,7 @@ function getContextUsername(): string | null {
   return ctx.message?.author.username ?? null;
 }
 
-function truncateValue(value: string, maxLength = 500): string {
+function truncateValue(value: string, maxLength = MEMORY_VALUE_MAX_LEN): string {
   if (value.length <= maxLength) return value;
   return value.slice(0, maxLength - 3) + "...";
 }
@@ -43,7 +50,7 @@ async function handleSaveMemory(
   }
 
   const truncatedValue = truncateValue(normalizedValue);
-  const limit = scope === "global" ? 50 : 30;
+  const limit = scope === "global" ? GLOBAL_MEMORY_CAP : USER_MEMORY_CAP;
   const query =
     scope === "global"
       ? { scope: "global" as const }
@@ -60,7 +67,13 @@ async function handleSaveMemory(
     const oldest = await Memory.findOne({ ...query, pinned: false }).sort({
       updatedAt: 1,
     });
-    if (oldest) await oldest.deleteOne();
+    if (!oldest) {
+      return {
+        error:
+          `Memory cap reached for ${scope}. Unpin or delete an existing memory before saving more.`,
+      };
+    }
+    await oldest.deleteOne();
   }
 
   await Memory.updateOne(
@@ -260,8 +273,7 @@ export const memoryStoreTool = tool({
           return { error: `Unknown action: ${action}` };
       }
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      const errorMessage = formatError(error);
       toolLogger.error(
         { error: errorMessage },
         "Memory store operation failed",
@@ -379,20 +391,14 @@ export const searchMemoryTool = tool({
 
     try {
       const regex = new RegExp(escapeRegExp(query), "i");
-      let memoryQuery = Memory.find().or([{ key: regex }, { value: regex }]);
-
-      if (scope === "global") {
-        memoryQuery = memoryQuery.where("scope").equals("global");
-      } else if (scope === "user") {
-        memoryQuery = memoryQuery
-          .where("scope")
-          .equals("user")
-          .where("username")
-          .equals(username);
+      const filter = buildMemorySearchFilter(regex, scope, username);
+      if (typeof filter === "string") {
+        return { error: filter };
       }
-      // scope === "all" or null: no additional filter
 
-      const results = await memoryQuery.limit(20).sort({ updatedAt: -1 });
+      const results = await Memory.find(filter).limit(20).sort({
+        updatedAt: -1,
+      });
 
       if (results.length === 0) {
         return {
@@ -411,8 +417,7 @@ export const searchMemoryTool = tool({
 
       return { found: true, count: memories.length, memories };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      const errorMessage = formatError(error);
       toolLogger.error({ error: errorMessage }, "Memory search failed");
       return { error: errorMessage };
     }
@@ -543,10 +548,34 @@ export const searchConversationTool = tool({
 
       return { found: true, count: results.length, messages: results };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      const errorMessage = formatError(error);
       toolLogger.error({ error: errorMessage }, "Conversation search failed");
       return { error: errorMessage };
     }
   },
 });
+
+function buildMemorySearchFilter(
+  regex: RegExp,
+  scope: "global" | "user" | "all" | null,
+  username: string | null,
+): MemorySearchFilter | string {
+  const textFilter: MemorySearchFilter = {
+    $or: [{ key: regex }, { value: regex }],
+  };
+
+  if (scope === "global") {
+    return { $and: [textFilter, { scope: "global" }] };
+  }
+
+  if (scope === "user") {
+    if (!username) return "Username required for user-scoped memory search";
+    return { $and: [textFilter, { scope: "user", username }] };
+  }
+
+  const visibleScopeFilter: MemorySearchFilter = username
+    ? { $or: [{ scope: "global" }, { scope: "user", username }] }
+    : { scope: "global" };
+
+  return { $and: [textFilter, visibleScopeFilter] };
+}

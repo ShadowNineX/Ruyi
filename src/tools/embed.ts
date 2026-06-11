@@ -2,7 +2,7 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 import { EmbedBuilder } from "discord.js";
 import { toolLogger } from "../logger";
-import { toolContextManager } from "../utils/types";
+import { toolContextManager, formatError } from "../utils/types";
 
 // Map color names to hex values
 const colorMap: Record<string, number> = {
@@ -323,8 +323,7 @@ export const embedTool = tool({
         embedCount: embeds.length,
       };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      const errorMessage = formatError(error);
       toolLogger.error({ error: errorMessage }, "Failed to send embed");
       return { error: "Failed to send embed", details: errorMessage };
     }

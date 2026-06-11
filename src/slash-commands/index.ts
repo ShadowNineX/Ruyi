@@ -13,6 +13,7 @@ export const slashCommands = [
 
 export {
   handleSmitherySelect,
+  handleSmitheryUnlinkSelect,
   handleSmitheryCodeButton,
   handleSmitheryModal,
 } from "./smithery";

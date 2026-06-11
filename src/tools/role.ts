@@ -2,7 +2,7 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 import type { ColorResolvable, Guild, Role, GuildMember } from "discord.js";
 import { toolLogger } from "../logger";
-import { toolContextManager } from "../utils/types";
+import { toolContextManager, formatError } from "../utils/types";
 
 function parseColor(
   color: string | undefined | null,
@@ -33,6 +33,16 @@ async function findMember(
       (m) => m.user.username.toLowerCase() === username.toLowerCase(),
     ) || members.first()
   );
+}
+
+function getRoleManageabilityError(role: Role): string | null {
+  if (role.managed) {
+    return `Role "${role.name}" is managed by an integration and cannot be changed by the bot.`;
+  }
+  if (!role.editable) {
+    return `Role "${role.name}" is above or equal to the bot's highest role, or the bot lacks Manage Roles permission.`;
+  }
+  return null;
 }
 
 // Extracted action handlers to reduce complexity
@@ -76,6 +86,8 @@ async function handleEditRole(
   if (!role) {
     return { error: `Role "${roleName}" not found` };
   }
+  const manageabilityError = getRoleManageabilityError(role);
+  if (manageabilityError) return { error: manageabilityError };
   if (!newName && !color) {
     return { error: "No changes specified (provide new_name or color)" };
   }
@@ -110,6 +122,8 @@ async function handleAssignRole(
   if (!role) {
     return { error: `Role "${roleName}" not found` };
   }
+  const manageabilityError = getRoleManageabilityError(role);
+  if (manageabilityError) return { error: manageabilityError };
   const member = await findMember(guild, username);
   if (!member) {
     return { error: `User "${username}" not found` };
@@ -144,6 +158,8 @@ async function handleRemoveRole(
   if (!role) {
     return { error: `Role "${roleName}" not found` };
   }
+  const manageabilityError = getRoleManageabilityError(role);
+  if (manageabilityError) return { error: manageabilityError };
   const member = await findMember(guild, username);
   if (!member) {
     return { error: `User "${username}" not found` };
@@ -178,6 +194,7 @@ export const manageRoleTool = tool({
       ),
     role_name: z
       .string()
+      .min(1)
       .describe("Name of the role to create, edit, assign, or remove"),
     new_name: z
       .string()
@@ -204,27 +221,38 @@ export const manageRoleTool = tool({
       return { error: "Not in a server" };
     }
 
+    const roleName = role_name.trim();
+    const newName = new_name?.trim() || null;
+
+    if (!roleName) {
+      return { error: "Role name cannot be empty" };
+    }
+
     toolLogger.debug(
-      { action, role_name, new_name, color, username },
+      { action, role_name: roleName, new_name: newName, color, username },
       "Managing role",
     );
 
     try {
       switch (action) {
         case "create":
-          return await handleCreateRole(guild, role_name, color);
+          return await handleCreateRole(guild, roleName, color);
         case "edit":
-          return await handleEditRole(guild, role_name, new_name, color);
+          return await handleEditRole(guild, roleName, newName, color);
         case "assign":
-          return await handleAssignRole(guild, role_name, username);
+          return await handleAssignRole(guild, roleName, username);
         case "remove":
-          return await handleRemoveRole(guild, role_name, username);
+          return await handleRemoveRole(guild, roleName, username);
         default:
           return { error: `Unknown action: ${action}` };
       }
     } catch (error) {
-      toolLogger.error({ action, role_name, error }, "Error managing role");
-      return { error: `Failed to ${action} role: ${(error as Error).message}` };
+      const errorMessage = formatError(error);
+      toolLogger.error(
+        { action, role_name: roleName, error: errorMessage },
+        "Error managing role",
+      );
+      return { error: `Failed to ${action} role: ${errorMessage}` };
     }
   },
 });

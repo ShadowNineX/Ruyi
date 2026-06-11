@@ -2,7 +2,7 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 import { AuditLogEvent, type GuildAuditLogsEntry } from "discord.js";
 import { toolLogger } from "../logger";
-import { toolContextManager } from "../utils/types";
+import { toolContextManager, formatError } from "../utils/types";
 
 const actionTypeMap: Record<string, AuditLogEvent> = {
   guild_update: AuditLogEvent.GuildUpdate,
@@ -59,7 +59,8 @@ function truncateAuditValue(value: unknown): unknown {
     return serialized.length > 300
       ? `${serialized.slice(0, 297)}...`
       : serialized;
-  } catch {
+  } catch (error) {
+    toolLogger.debug({ error }, "Failed to serialize audit log value");
     return "[unserializable value]";
   }
 }
@@ -220,8 +221,7 @@ export const auditLogTool = tool({
             : "No audit log entries found matching your criteria.",
       };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      const errorMessage = formatError(error);
       toolLogger.error({ error: errorMessage }, "Failed to fetch audit log");
 
       if (

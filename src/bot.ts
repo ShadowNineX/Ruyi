@@ -20,13 +20,14 @@ import {
   slashCommands,
   handleSlashCommand,
   handleSmitherySelect,
+  handleSmitheryUnlinkSelect,
   handleSmitheryCodeButton,
   handleSmitheryModal,
-} from "./slashCommands";
+} from "./slash-commands";
 import {
   ChatSession,
   type SessionStatusSnapshot,
-} from "./utils/chatSession";
+} from "./utils/chat-session";
 import {
   fetchReplyChain,
   fetchChatHistory,
@@ -34,7 +35,7 @@ import {
   sendReplyChunks,
   getErrorMessage,
 } from "./utils/messages";
-import { messageSyncService } from "./services/messageSync";
+import { messageSyncService } from "./services/message-sync";
 import { CHAT_TURN_TIMEOUT_MS, DISCORD_OPERATION_TIMEOUT_MS } from "./constants";
 
 interface ResponseGate {
@@ -553,6 +554,11 @@ export class RuyiBot {
       interaction.customId === "smithery_select_server"
     ) {
       await handleSmitherySelect(interaction);
+    } else if (
+      interaction.isStringSelectMenu() &&
+      interaction.customId === "smithery_unlink_server"
+    ) {
+      await handleSmitheryUnlinkSelect(interaction);
     } else if (
       interaction.isButton() &&
       interaction.customId === "smithery_enter_code"

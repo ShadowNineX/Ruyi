@@ -12,7 +12,7 @@ import { mcpRegistry } from "../mcp";
 import { mcpConnectionManager } from "../mcp/client";
 import { env } from "../env";
 import { CHAT_TIMEOUT_MS } from "../constants";
-import type { ChatSession } from "../utils/chatSession";
+import type { ChatSession } from "../utils/chat-session";
 import { systemPrompt } from "./prompt";
 import { sessionManager } from "./session";
 import { agentsRuntimeManager } from "./client";

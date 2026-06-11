@@ -33,8 +33,17 @@ export abstract class SmitheryMCPServer extends MCPServer {
   }
 
   private clearCachedToken(): void {
-    cachedTokens.delete(this.slug);
-    cacheLoadedAt.delete(this.slug);
+    SmitheryMCPServer.clearCachedToken(this.slug);
+  }
+
+  static clearCachedToken(serverId: SmitheryServerId): void {
+    cachedTokens.delete(serverId);
+    cacheLoadedAt.delete(serverId);
+  }
+
+  static setCachedToken(serverId: SmitheryServerId, token: ISmitheryToken): void {
+    cachedTokens.set(serverId, token);
+    cacheLoadedAt.set(serverId, Date.now());
   }
 
   protected override async handleAuthFailure(error: string): Promise<void> {

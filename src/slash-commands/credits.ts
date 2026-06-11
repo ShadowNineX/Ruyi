@@ -15,7 +15,7 @@ import {
   OPENAI_BILLING_OVERVIEW_URL,
   OpenAIBillingError,
   type OpenAICostSummary,
-} from "../services/openaiBilling";
+} from "../services/openai-billing";
 
 const CREDITS_COLORS = {
   neutral: 0x5865f2,

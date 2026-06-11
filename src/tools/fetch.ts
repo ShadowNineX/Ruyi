@@ -3,6 +3,7 @@ import { isIP } from "node:net";
 import { tool } from "@openai/agents";
 import { z } from "zod";
 import { toolLogger } from "../logger";
+import { formatError } from "../utils/types";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 5;
@@ -505,8 +506,7 @@ export const fetchUrlTool = tool({
         text: prepared.text,
       };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      const errorMessage = formatError(error);
       toolLogger.error({ url, error: errorMessage }, "URL fetch failed");
       return { error: "Failed to fetch URL", details: errorMessage };
     }

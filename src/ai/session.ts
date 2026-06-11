@@ -54,7 +54,8 @@ function stringifyUnknown(value: unknown): string {
 
   try {
     return JSON.stringify(value);
-  } catch {
+  } catch (error) {
+    aiLogger.debug({ error }, "Failed to serialize content value");
     return "[unserializable value]";
   }
 }

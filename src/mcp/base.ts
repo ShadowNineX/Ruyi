@@ -3,6 +3,7 @@ import {
   type MCPServer as AgentsMCPServer,
 } from "@openai/agents";
 import { aiLogger } from "../logger";
+import { createAuthenticatedFetch, getErrorMessage } from "./http";
 
 /**
  * MCP server configuration used by the OpenAI Agents SDK wrapper.
@@ -29,10 +30,6 @@ export interface MCPHealthCheckResult {
   responseTimeMs?: number;
   /** List of tools available from the MCP server */
   tools?: string[];
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function getErrorStatus(error: unknown): number | undefined {
@@ -259,40 +256,4 @@ export abstract class MCPServer {
       );
     }
   }
-}
-
-function normalizeHeaders(headers: RequestInit["headers"]): Record<string, string> {
-  if (!headers) return {};
-
-  if (headers instanceof Headers) {
-    const normalized: Record<string, string> = {};
-    headers.forEach((value, key) => {
-      normalized[key] = value;
-    });
-    return normalized;
-  }
-
-  if (Array.isArray(headers)) {
-    return Object.fromEntries(headers);
-  }
-
-  const normalized: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    if (typeof value === "string") normalized[key] = value;
-  }
-  return normalized;
-}
-
-function createAuthenticatedFetch(headers: Record<string, string>) {
-  return async (
-    input: Request | string | URL,
-    init?: RequestInit,
-  ): Promise<Response> =>
-    fetch(input, {
-      ...init,
-      headers: {
-        ...headers,
-        ...normalizeHeaders(init?.headers),
-      },
-    });
 }

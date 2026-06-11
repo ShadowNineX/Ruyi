@@ -1,4 +1,4 @@
-import mongoose, { Schema, Document } from "mongoose";
+import mongoose, { Schema, type Document } from "mongoose";
 
 export interface IConfig extends Document {
   key: string;
@@ -12,8 +12,10 @@ const ConfigSchema = new Schema<IConfig>({
 
 export const Config = mongoose.model<IConfig>("Config", ConfigSchema);
 
-// Helper functions
-export async function getConfigValue(key: string, defaultValue: string): Promise<string> {
+export async function getConfigValue(
+  key: string,
+  defaultValue: string,
+): Promise<string> {
   const config = await Config.findOne({ key });
   return config?.value ?? defaultValue;
 }

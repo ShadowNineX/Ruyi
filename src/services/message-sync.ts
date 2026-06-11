@@ -15,6 +15,15 @@ const BATCH_DELAY_MS = 1000;
 type MessageableChannel = TextChannel | NewsChannel | ThreadChannel;
 type MessagePresence = "exists" | "deleted" | "unknown";
 type SyncConversation = Pick<IConversation, "channelId" | "messages">;
+type SyncMessageWithId = SyncConversation["messages"][number] & {
+  messageId: string;
+};
+
+function hasMessageId(
+  message: SyncConversation["messages"][number],
+): message is SyncMessageWithId {
+  return typeof message.messageId === "string" && message.messageId.length > 0;
+}
 
 function isMessageableChannel(channel: unknown): channel is MessageableChannel {
   return (
@@ -78,7 +87,7 @@ async function syncConversation(
   conversation: SyncConversation,
 ): Promise<{ channelId: string; deleted: number; skipped: number }> {
   const channelId = conversation.channelId;
-  const messagesWithIds = conversation.messages.filter((m) => m.messageId);
+  const messagesWithIds = conversation.messages.filter(hasMessageId);
   const messagesWithoutIds =
     conversation.messages.length - messagesWithIds.length;
 
@@ -117,7 +126,7 @@ async function syncConversation(
     return { channelId, deleted: 0, skipped: messagesWithIds.length };
   }
 
-  const messageIds = messagesWithIds.map((m) => m.messageId!);
+  const messageIds = messagesWithIds.map((m) => m.messageId);
   const deletedIds: string[] = [];
   let skippedFetches = 0;
 

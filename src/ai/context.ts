@@ -1,6 +1,6 @@
 import { DateTime } from "luxon";
 import { AgentSession, Conversation, Memory } from "../db/models";
-import type { IMemory } from "../db/models/Memory";
+import type { IMemory } from "../db/models/memory";
 import { aiLogger } from "../logger";
 import {
   AUTO_EXTRACT_COOLDOWN_MS,

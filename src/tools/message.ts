@@ -1,8 +1,12 @@
 import { tool } from "@openai/agents";
 import { z } from "zod";
 import { toolLogger } from "../logger";
-import { toolContextManager, type ToolContext } from "../utils/types";
-import { ChannelType, TextChannel, Message } from "discord.js";
+import {
+  formatError,
+  toolContextManager,
+  type ToolContext,
+} from "../utils/types";
+import { ChannelType, type TextChannel, type Message } from "discord.js";
 
 interface ReactionInfo {
   emoji: string;
@@ -248,8 +252,7 @@ export const searchMessagesTool = tool({
             : "No messages found matching your criteria",
       };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      const errorMessage = formatError(error);
       toolLogger.error({ error: errorMessage }, "Failed to search messages");
       return { error: "Failed to search messages", details: errorMessage };
     }
@@ -272,7 +275,7 @@ async function fetchMessagesByIds(
       messages.push(msg);
     } catch (error) {
       toolLogger.debug(
-        { messageId: id, error: (error as Error).message },
+        { messageId: id, error: formatError(error) },
         "Could not fetch message for deletion",
       );
     }
@@ -356,8 +359,7 @@ export const editBotMessageTool = tool({
         content: truncateContent(edited.content, 200),
       };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      const errorMessage = formatError(error);
       toolLogger.error(
         { error: errorMessage, message_id },
         "Failed to edit bot message",
@@ -410,7 +412,7 @@ async function performDeletion(
       deletedCount++;
     } catch (error) {
       toolLogger.debug(
-        { messageId: msg.id, error: (error as Error).message },
+        { messageId: msg.id, error: formatError(error) },
         "Could not delete old message",
       );
     }
@@ -489,8 +491,7 @@ For "clean this channel" or "delete all messages" requests, use count=100.`,
         message: `Deleted ${deletedCount} message${deletedCount === 1 ? "" : "s"}`,
       };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      const errorMessage = formatError(error);
       toolLogger.error({ error: errorMessage }, "Failed to delete messages");
       return { error: "Failed to delete messages", details: errorMessage };
     }

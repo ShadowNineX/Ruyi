@@ -4,27 +4,19 @@ import {
   type MCPServer as AgentsMCPServer,
   type MCPServers,
 } from "@openai/agents";
-import { z } from "zod";
 import { aiLogger, toolLogger } from "../logger";
 import { mcpRegistry, type MCPServer as RuyiMCPServer } from "./index";
+import { createAuthenticatedFetch, getErrorMessage } from "./http";
 
 interface MCPToolInfo {
   name: string;
   description?: string;
 }
 
-type AuthenticatedFetch = (
-  input: Parameters<typeof fetch>[0],
-  init?: Parameters<typeof fetch>[1],
-) => Promise<Response>;
 type MCPToolList = Awaited<
   ReturnType<MCPServerStreamableHttp["listTools"]>
 >;
 type MCPTool = MCPToolList[number];
-
-const HeaderTupleSchema = z.tuple([z.string(), z.string()]);
-const HeaderEntriesSchema = z.array(HeaderTupleSchema);
-const HeaderRecordSchema = z.record(z.string(), z.string());
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -52,45 +44,11 @@ class SanitizedMCPServerStreamableHttp extends MCPServerStreamableHttp {
   }
 }
 
-function normalizeHeaders(headers: unknown): Record<string, string> {
-  if (!headers) return {};
-
-  if (headers instanceof Headers) {
-    const normalized: Record<string, string> = {};
-    headers.forEach((value, key) => {
-      normalized[key] = value;
-    });
-    return normalized;
-  }
-
-  const entries = HeaderEntriesSchema.safeParse(headers);
-  if (entries.success) return Object.fromEntries(entries.data);
-
-  const record = HeaderRecordSchema.safeParse(headers);
-  if (record.success) return record.data;
-
-  return {};
-}
-
-function createAuthenticatedFetch(
-  headers: Record<string, string>,
-): AuthenticatedFetch {
-  return async (input, init) => {
-    const nextInit = {
-      ...init,
-      headers: {
-        ...headers,
-        ...normalizeHeaders(init?.headers),
-      },
-    };
-    return fetch(input, nextInit);
-  };
-}
-
 export class MCPConnectionManager {
   private connectedServers: MCPServers | null = null;
   private activeServers: AgentsMCPServer[] = [];
   private tools: MCPToolInfo[] = [];
+  private initializePromise: Promise<MCPToolInfo[]> | null = null;
 
   private createAgentsServer(server: RuyiMCPServer): AgentsMCPServer | null {
     if (!server.isEnabled()) {
@@ -107,7 +65,7 @@ export class MCPConnectionManager {
       cacheToolsList: true,
       fetch: config.headers ? createAuthenticatedFetch(config.headers) : undefined,
       errorFunction: ({ error }: { error: unknown }) => {
-        const message = error instanceof Error ? error.message : "Unknown MCP error";
+        const message = getErrorMessage(error);
         toolLogger.error({ server: server.name, error: message }, "MCP tool call failed");
         return message;
       },
@@ -126,7 +84,7 @@ export class MCPConnectionManager {
             description: tool.description,
           }));
         } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : "Unknown error";
+          const errorMsg = getErrorMessage(error);
           aiLogger.warn(
             { server: server.name, error: errorMsg },
             "Failed to list MCP tools from active server",
@@ -140,6 +98,16 @@ export class MCPConnectionManager {
   }
 
   async initialize(): Promise<MCPToolInfo[]> {
+    if (this.initializePromise) return this.initializePromise;
+
+    this.initializePromise = this.initializeServers().finally(() => {
+      this.initializePromise = null;
+    });
+
+    return this.initializePromise;
+  }
+
+  private async initializeServers(): Promise<MCPToolInfo[]> {
     aiLogger.info("Initializing MCP server connections...");
     await this.closeAll();
 
@@ -185,7 +153,7 @@ export class MCPConnectionManager {
 
       return this.tools;
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      const errorMsg = getErrorMessage(error);
       aiLogger.error({ error: errorMsg }, "Failed to initialize MCP servers");
       this.connectedServers = null;
       this.activeServers = [];
@@ -212,7 +180,7 @@ export class MCPConnectionManager {
       try {
         await this.connectedServers.close();
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        const errorMsg = getErrorMessage(error);
         aiLogger.warn({ error: errorMsg }, "Failed to close MCP servers cleanly");
       }
     }

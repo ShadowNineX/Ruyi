@@ -2,6 +2,7 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { lastFMClient, type Period } from "../lib/lastfm";
+import { formatError } from "../utils/types";
 
 export const lastfmTool = tool({
   name: "lastfm",
@@ -91,8 +92,7 @@ export const lastfmTool = tool({
           return { error: `Unknown action: ${action}` };
       }
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      const errorMessage = formatError(error);
       toolLogger.error(
         { error: errorMessage, action, username },
         "Last.fm query failed",

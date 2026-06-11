@@ -3,7 +3,7 @@ import { z } from "zod";
 import { AttachmentBuilder, EmbedBuilder } from "discord.js";
 import { tool } from "@openai/agents";
 import { toolLogger } from "../logger";
-import { toolContextManager } from "../utils/types";
+import { toolContextManager, formatError } from "../utils/types";
 import { env } from "../env";
 
 type OpenAIImageSize = "auto" | "1024x1024" | "1536x1024" | "1024x1536";
@@ -350,17 +350,19 @@ export const generateImageTool = tool({
         revised_prompt: image?.revised_prompt ?? null,
       };
     } catch (error) {
-      const err = error as Error & { status?: number };
+      const errorMessage = formatError(error);
+      const status =
+        typeof error === "object" && error !== null && "status" in error
+          ? error.status
+          : undefined;
       toolLogger.error(
         {
-          error: err.message,
-          stack: err.stack,
-          name: err.name,
-          status: err.status,
+          error: errorMessage,
+          status,
         },
         "Failed to generate image",
       );
-      return { error: "Failed to generate image", details: err.message };
+      return { error: "Failed to generate image", details: errorMessage };
     }
   },
 });

@@ -2,6 +2,7 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { evaluate } from "mathjs";
+import { formatError } from "../utils/types";
 
 const MAX_EXPRESSION_LENGTH = 500;
 const MAX_RESULT_LENGTH = 2000;
@@ -36,8 +37,7 @@ export const calculatorTool = tool({
       toolLogger.info({ expression, result }, "Calculation complete");
       return { expression, result };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      const errorMessage = formatError(error);
       toolLogger.error(
         { expression, error: errorMessage },
         "Calculation failed",

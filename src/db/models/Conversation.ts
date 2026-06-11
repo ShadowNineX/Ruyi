@@ -1,4 +1,4 @@
-import mongoose, { Schema, Document } from "mongoose";
+import mongoose, { Schema, type Document } from "mongoose";
 
 export interface IConversationMessage {
   messageId?: string;
@@ -22,7 +22,7 @@ const MessageSchema = new Schema<IConversationMessage>(
     isBot: { type: Boolean, required: true },
     timestamp: { type: Date, default: Date.now },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const ConversationSchema = new Schema<IConversation>({
@@ -31,4 +31,7 @@ const ConversationSchema = new Schema<IConversation>({
   lastInteraction: { type: Date, default: Date.now },
 });
 
-export const Conversation = mongoose.model<IConversation>("Conversation", ConversationSchema);
+export const Conversation = mongoose.model<IConversation>(
+  "Conversation",
+  ConversationSchema,
+);

@@ -1,11 +1,11 @@
-export { Config, getConfigValue, setConfigValue, type IConfig } from "./Config";
-export { Memory, type IMemory } from "./Memory";
+export { Config, getConfigValue, setConfigValue, type IConfig } from "./config";
+export { Memory, type IMemory } from "./memory";
 export {
   Conversation,
   type IConversation,
   type IConversationMessage,
-} from "./Conversation";
-export { AgentSession, type IAgentSession } from "./AgentSession";
+} from "./conversation";
+export { AgentSession, type IAgentSession } from "./agent-session";
 export {
   SmitheryToken,
   getSmitheryTokens,
@@ -15,4 +15,4 @@ export {
   clearSmitheryTokens,
   type ISmitheryToken,
   type SmitheryServerId,
-} from "./SmitheryToken";
+} from "./smithery-token";

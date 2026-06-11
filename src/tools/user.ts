@@ -1,7 +1,7 @@
 import { tool } from "@openai/agents";
 import { z } from "zod";
 import { toolLogger } from "../logger";
-import { toolContextManager } from "../utils/types";
+import { toolContextManager, formatError } from "../utils/types";
 
 const USER_ID_REGEX = /^\d{17,20}$/;
 const USER_MENTION_REGEX = /^<@!?(\d{17,20})>$/;
@@ -17,6 +17,7 @@ export const userInfoTool = tool({
   parameters: z.object({
     username: z
       .string()
+      .min(1)
       .describe("Username, display name, mention, or Discord user ID to look up."),
   }),
   execute: async ({ username }) => {
@@ -28,12 +29,15 @@ export const userInfoTool = tool({
     toolLogger.debug({ username }, "Looking up user");
     try {
       const lookup = normalizeUserLookup(username);
+      if (!lookup) {
+        return { error: "Username cannot be empty" };
+      }
       const lowerLookup = lookup.toLowerCase();
 
       let member = USER_ID_REGEX.test(lookup)
         ? await guild.members.fetch(lookup).catch((error: unknown) => {
             toolLogger.debug(
-              { username, error: (error as Error).message },
+              { username, error: formatError(error) },
               "Could not fetch member by ID",
             );
             return null;
@@ -82,8 +86,12 @@ export const userInfoTool = tool({
         isOwner: member.id === guild.ownerId,
       };
     } catch (error) {
-      toolLogger.error({ username, error }, "Error fetching user");
-      return { error: "Failed to fetch user: " + username };
+      const errorMessage = formatError(error);
+      toolLogger.error(
+        { username, error: errorMessage },
+        "Error fetching user",
+      );
+      return { error: "Failed to fetch user: " + username, details: errorMessage };
     }
   },
 });
