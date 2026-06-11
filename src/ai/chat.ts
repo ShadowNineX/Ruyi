@@ -2,6 +2,7 @@ import {
   Agent,
   user,
   type AgentInputItem,
+  type MCPServer,
   type RunStreamEvent,
   type RunToolApprovalItem,
   type Tool,
@@ -11,7 +12,7 @@ import { z } from "zod";
 import { allTools } from "../tools";
 import { aiLogger } from "../logger";
 import { mcpRegistry } from "../mcp";
-import { getHostedMcpTools } from "../mcp/hosted-tools";
+import { closeMcpServers, connectMcpServersForRun } from "../mcp/servers";
 import { env } from "../env";
 import { CHAT_TIMEOUT_MS } from "../constants";
 import type { ChatSession } from "../utils/chat-session";
@@ -243,6 +244,7 @@ export class ChatService {
     } = options;
 
     permissionManager.setContext(channelId, { channel, userId });
+    let mcpServers: MCPServer[] = [];
 
     const abortController = new AbortController();
     const abortFromParent = (): void => {
@@ -332,9 +334,9 @@ export class ChatService {
       throwIfAborted(signal);
 
       const agentSessionId = await agentSession.getSessionId();
-      const hostedMcpTools = await getHostedMcpTools();
+      mcpServers = await connectMcpServersForRun();
       const toolUsage = createTurnToolUsage();
-      const agent = this.createAgent(session, hostedMcpTools, toolUsage);
+      const agent = this.createAgent(session, mcpServers, toolUsage);
       const runner = agentsRuntimeManager.getRunner();
       const runOptions = {
         stream: true,
@@ -349,7 +351,7 @@ export class ChatService {
           channelId,
           sessionId: agentSessionId,
           localToolCount: allTools.length,
-          hostedMcpServerCount: hostedMcpTools.length,
+          mcpServerCount: mcpServers.length,
         },
         "Using persistent OpenAI Agents session",
       );
@@ -422,6 +424,7 @@ export class ChatService {
       throw error;
     } finally {
       clearTimeout(timeout);
+      await closeMcpServers(mcpServers);
       signal?.removeEventListener("abort", abortFromParent);
       permissionManager.clearContext(channelId);
     }
@@ -429,14 +432,18 @@ export class ChatService {
 
   private createAgent(
     session: ChatSession,
-    hostedMcpTools: Tool[],
+    mcpServers: MCPServer[],
     toolUsage: TurnToolUsage,
   ) {
     const agent = new Agent({
       name: "Ruyi",
       instructions: systemPrompt,
       model: agentsRuntimeManager.model,
-      tools: [...allTools, ...hostedMcpTools],
+      tools: [...allTools],
+      mcpServers,
+      mcpConfig: {
+        convertSchemasToStrict: true,
+      },
       toolUseBehavior: "run_llm_again",
     });
 

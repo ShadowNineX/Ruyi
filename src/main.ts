@@ -9,7 +9,7 @@ import {
 import { ruyiBot } from "./bot";
 import { allTools } from "./tools";
 import { mcpRegistry } from "./mcp";
-import { getHostedMcpServerCount } from "./mcp/hosted-tools";
+import { getMcpServerCount } from "./mcp/servers";
 import { logger, botLogger } from "./logger";
 
 // Connect to MongoDB first (needed for Smithery connections)
@@ -22,7 +22,7 @@ await mcpRegistry.logHealth();
 logger.info(
   {
     local: allTools.map((t) => t.name),
-    hostedMcpServers: await getHostedMcpServerCount(),
+    mcpServers: await getMcpServerCount(),
     totalLocalTools: allTools.length,
   },
   "Tools registered",
