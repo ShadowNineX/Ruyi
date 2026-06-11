@@ -9,7 +9,7 @@ Ruyi is a Discord bot (Nine Sols themed AI companion) built on Bun + TypeScript 
 - Type-check: `bun run typecheck` (or `bunx tsc --noEmit`)
 - Build: `bun run build` emits `dist/main.js` via `bun build`
 - Start: `bun run start` runs the compiled `dist/main.js` artifact
-- Required env: `DISCORD_TOKEN`, `OPENAI_API_KEY`. Optional: `MONGO_URI`, `MODEL_NAME` (default `gpt-5.4-mini`), `VISION_MODEL_NAME` (defaults to `MODEL_NAME` for image understanding), `LOG_LEVEL`, `LASTFM_API_KEY`, `OPENAI_ADMIN_KEY` (`/credits` organization costs), `SMITHERY_API_KEY`, `SMITHERY_NAMESPACE`, `DEBUG_PROMPTS`.
+- Required env: `DISCORD_TOKEN`, `OPENAI_API_KEY`. Optional: `MONGO_URI`, `MODEL_NAME` (default `gpt-5.4-mini`), `VISION_MODEL_NAME` (defaults to `MODEL_NAME` for image understanding), `LOG_LEVEL`, `LASTFM_API_KEY`, `OPENAI_ADMIN_KEY` (`/credits` organization costs), `SMITHERY_API_KEY`, `SMITHERY_NAMESPACE`, `SMITHERY_MCP_MODE` (`direct` by default, `smart` for Smithery toolbox mode), `DEBUG_PROMPTS`.
 - All env access goes through [src/env.ts](src/env.ts) (zod-validated, fail-fast at startup). Do **not** read `Bun.env` directly.
 
 ## Architecture (boot → reply)
@@ -33,7 +33,7 @@ Ruyi is a Discord bot (Nine Sols themed AI companion) built on Bun + TypeScript 
 - All tools live in [src/tools/](src/tools/) and are exported via the `allTools` array in [src/tools/index.ts](src/tools/index.ts).
 - Tools that produce their own Discord output (embed, image) must be added to `selfRespondingToolNames` in the same file so an empty assistant reply is non-fatal.
 - Pattern: build directly with `tool({ name, description, parameters: z.object({...}), execute })` from `@openai/agents`. Discord context (channel/guild/message/referencedMessage) flows through `runWithToolContext()` + `toolContextManager.get()` in [src/utils/types.ts](src/utils/types.ts) — [src/bot.ts](src/bot.ts) wraps each chat turn in `runWithToolContext(toolCtx, () => chatService.chat(...))` so tools see the active context via `AsyncLocalStorage`. Tools must guard against null channel/guild and return structured error objects (not throw). Use the SDK's `needsApproval` option for sensitive tools.
-- MCP-backed tools live in [src/mcp/](src/mcp/). Smithery Connect is configured with `SMITHERY_API_KEY` + `SMITHERY_NAMESPACE`; `/smithery` creates hosted Smithery setup links and stores connection IDs/statuses. Runtime MCP is exposed as one OpenAI hosted MCP namespace tool from [src/mcp/hosted-tools.ts](src/mcp/hosted-tools.ts), using short-lived Smithery service tokens minted by [src/mcp/smithery-api.ts](src/mcp/smithery-api.ts).
+- MCP-backed tools live in [src/mcp/](src/mcp/). Smithery Connect is configured with `SMITHERY_API_KEY` + `SMITHERY_NAMESPACE`; `/smithery` creates hosted Smithery setup links and stores connection IDs/statuses. Runtime MCP is exposed as one OpenAI hosted MCP namespace tool from [src/mcp/hosted-tools.ts](src/mcp/hosted-tools.ts), using short-lived Smithery service tokens minted by [src/mcp/smithery-api.ts](src/mcp/smithery-api.ts). Keep `SMITHERY_MCP_MODE=direct` for normal prefixed action tools; `smart` mode exposes Smithery's toolbox discovery flow and can hide direct action tools behind search.
 - Memory tools enforce per-user scope by Discord username, truncate values to `MEMORY_VALUE_MAX_LEN`, and evict past `USER_MEMORY_CAP` / global cap. See [src/tools/memory.ts](src/tools/memory.ts).
 
 ## Persistence

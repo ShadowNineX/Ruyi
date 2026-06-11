@@ -5,7 +5,9 @@ import {
 import { mcpLogger } from "../logger";
 import { SMITHERY_SERVERS } from "./smithery-catalog";
 import {
+  getSmitheryMcpMode,
   isSmitheryConfigured,
+  listSmitheryConnectionTools,
   refreshKnownSmitheryConnections,
 } from "./smithery-api";
 
@@ -39,11 +41,17 @@ export class MCPRegistry {
 
     for (const connection of connections) {
       const serverName = getConnectionName(connection.serverId);
+      const tools =
+        connection.status === "connected"
+          ? await this.getConnectionToolNames(connection.serverId)
+          : [];
       mcpLogger.info(
         {
           serverId: connection.serverId,
           connectionId: connection.connectionId,
           status: connection.status,
+          toolCount: tools.length,
+          toolSample: tools.slice(0, 8),
           hasSetupUrl: Boolean(connection.setupUrl),
           error: connection.errorMessage,
         },
@@ -54,11 +62,30 @@ export class MCPRegistry {
     mcpLogger.info(
       {
         configured: true,
+        mode: getSmitheryMcpMode(),
         connected: connectedCount,
         total: connections.length,
       },
       "Smithery Connect health check complete",
     );
+  }
+
+  private async getConnectionToolNames(
+    serverId: SmitheryServerId,
+  ): Promise<string[]> {
+    try {
+      const tools = await listSmitheryConnectionTools(serverId);
+      return tools.map((tool) => tool.name);
+    } catch (error) {
+      mcpLogger.warn(
+        {
+          serverId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Failed to list Smithery connection tools",
+      );
+      return [];
+    }
   }
 }
 

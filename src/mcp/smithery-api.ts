@@ -12,7 +12,6 @@ import { SMITHERY_SERVERS } from "./smithery-catalog";
 
 const SMITHERY_API_BASE_URL = "https://api.smithery.ai";
 const SMITHERY_MCP_BASE_URL = "https://mcp.smithery.run";
-const SMITHERY_MCP_MODE = "smart";
 const SERVICE_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 const ConnectionStatusSchema = z.looseObject({
@@ -38,6 +37,21 @@ const ServiceTokenSchema = z.looseObject({
   expiresAt: z.string(),
 });
 
+const SmitheryToolSchema = z.looseObject({
+  name: z.string(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  annotations: z
+    .looseObject({
+      readOnlyHint: z.boolean().optional(),
+    })
+    .optional(),
+});
+
+const ToolListEnvelopeSchema = z.looseObject({
+  tools: z.array(SmitheryToolSchema).default([]),
+});
+
 const ErrorResponseSchema = z.looseObject({
   message: z.string().optional(),
   error: z.string().optional(),
@@ -48,6 +62,13 @@ export interface SmitheryConnectionSnapshot {
   status: SmitheryConnectionStatus;
   setupUrl?: string;
   errorMessage?: string;
+}
+
+export interface SmitheryToolSummary {
+  name: string;
+  title?: string;
+  description?: string;
+  readOnly?: boolean;
 }
 
 interface CachedServiceToken {
@@ -126,6 +147,32 @@ function getErrorText(status: number, text: string): string {
   }
 }
 
+function toToolSummary(
+  tool: z.infer<typeof SmitheryToolSchema>,
+): SmitheryToolSummary {
+  return {
+    name: tool.name,
+    title: tool.title,
+    description: tool.description,
+    readOnly: tool.annotations?.readOnlyHint,
+  };
+}
+
+function parseToolList(payload: unknown): SmitheryToolSummary[] {
+  const directTools = ToolListEnvelopeSchema.safeParse(payload);
+  if (directTools.success) {
+    return directTools.data.tools.map(toToolSummary);
+  }
+
+  const byConnection = z.record(z.string(), z.unknown()).safeParse(payload);
+  if (!byConnection.success) return [];
+
+  return Object.values(byConnection.data).flatMap((value) => {
+    const envelope = ToolListEnvelopeSchema.safeParse(value);
+    return envelope.success ? envelope.data.tools.map(toToolSummary) : [];
+  });
+}
+
 async function readJson<T>(
   response: Response,
   schema: z.ZodType<T>,
@@ -187,8 +234,14 @@ export function isSmitheryConfigured(): boolean {
 export function getSmitheryNamespaceMcpUrl(): string {
   const { namespace } = requireSmitheryConfig();
   const url = new URL(encodeURIComponent(namespace), `${SMITHERY_MCP_BASE_URL}/`);
-  url.searchParams.set("mode", SMITHERY_MCP_MODE);
+  if (env.SMITHERY_MCP_MODE === "smart") {
+    url.searchParams.set("mode", "smart");
+  }
   return url.toString();
+}
+
+export function getSmitheryMcpMode(): "direct" | "smart" {
+  return env.SMITHERY_MCP_MODE;
 }
 
 export async function createOrUpdateSmitheryConnection(
@@ -277,8 +330,22 @@ export async function deleteSmitheryConnection(
 }
 
 export async function createSmitheryServiceToken(): Promise<string> {
+  const { namespace } = requireSmitheryConfig();
   const token = await smitheryFetch("/tokens", ServiceTokenSchema, {
     method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      policy: [
+        {
+          namespaces: namespace,
+          resources: "connections",
+          operations: ["read", "execute"],
+          ttl: "1h",
+        },
+      ],
+    }),
   });
 
   const expiresAtMs = new Date(token.expiresAt).getTime();
@@ -303,4 +370,29 @@ export async function getSmitheryServiceToken(): Promise<string> {
 
 export function clearSmitheryServiceTokenCache(): void {
   cachedServiceToken = null;
+}
+
+export async function listSmitheryConnectionTools(
+  serverId: SmitheryServerId,
+): Promise<SmitheryToolSummary[]> {
+  const { namespace } = requireSmitheryConfig();
+  const connectionId = getConnectionId(serverId);
+  const payload = await smitheryFetch(
+    `/connect/${encodeURIComponent(namespace)}/${encodeURIComponent(connectionId)}/.tools`,
+    z.unknown(),
+  );
+
+  return parseToolList(payload);
+}
+
+export async function listSmitheryNamespaceTools(): Promise<
+  SmitheryToolSummary[]
+> {
+  const { namespace } = requireSmitheryConfig();
+  const payload = await smitheryFetch(
+    `/connect/${encodeURIComponent(namespace)}/.tools`,
+    z.unknown(),
+  );
+
+  return parseToolList(payload);
 }

@@ -2,6 +2,7 @@ import { hostedMcpTool, type Tool } from "@openai/agents";
 import { countConnectedSmitheryConnections } from "../db/models";
 import { mcpLogger } from "../logger";
 import {
+  getSmitheryMcpMode,
   getSmitheryNamespaceMcpUrl,
   getSmitheryServiceToken,
   isSmitheryConfigured,
@@ -30,7 +31,10 @@ export async function getHostedMcpTools(): Promise<Tool[]> {
     hostedMcpTool({
       serverLabel: "smithery",
       serverUrl: getSmitheryNamespaceMcpUrl(),
-      serverDescription: "Smithery Connect MCP namespace",
+      serverDescription:
+        getSmitheryMcpMode() === "smart"
+          ? "Smithery Connect smart toolbox for the configured namespace"
+          : "Smithery Connect namespace with connected tools such as GitHub issues, Brave Search, and YouTube",
       headers: {
         Authorization: `Bearer ${serviceToken}`,
       },
