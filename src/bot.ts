@@ -32,6 +32,8 @@ import {
   fetchReplyChain,
   fetchChatHistory,
   fetchReferencedMessage,
+  formatMessageForAI,
+  getMessageImageInputs,
   sendReplyChunks,
   getErrorMessage,
 } from "./utils/messages";
@@ -155,8 +157,9 @@ export class RuyiBot {
     }
 
     try {
+      const classifierMessage = formatMessageForAI(message);
       const shouldRespond = await replyClassifier.shouldReply(
-        message.content.trim(),
+        classifierMessage,
         this.client.user?.username ?? "Bot",
         message.channel.id,
       );
@@ -219,11 +222,18 @@ export class RuyiBot {
     this.throwIfAborted(signal);
 
     const combinedHistory = [...replyChain, ...chatHistory];
+    const imageInputs = [
+      ...getMessageImageInputs(message, "current message"),
+      ...(toolCtx.referencedMessage
+        ? getMessageImageInputs(toolCtx.referencedMessage, "replied message")
+        : []),
+    ];
 
     botLogger.debug(
       {
         replyChainLength: replyChain.length,
         historyCount: chatHistory.length,
+        imageInputCount: imageInputs.length,
       },
       "Fetched message context",
     );
@@ -231,15 +241,17 @@ export class RuyiBot {
     await session.sendStatusEmbed(message);
     this.throwIfAborted(signal);
 
+    const userMessage = formatMessageForAI(message);
     const reply = await runWithToolContext(toolCtx, () =>
       chatService.chat({
-        userMessage: message.content.trim(),
+        userMessage,
         username,
         channelId: message.channel.id,
         channel: guildChannel,
         userId: message.author.id,
         session,
         chatHistory: combinedHistory,
+        imageInputs,
         messageId: message.id,
         signal,
       }),

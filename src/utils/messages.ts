@@ -1,6 +1,160 @@
-import type { Message } from "discord.js";
+import type { Attachment, Message } from "discord.js";
 import type { ChatMessage } from "../ai";
 import { botLogger } from "../logger";
+
+const MAX_ATTACHMENT_DESCRIPTION_LENGTH = 120;
+const MAX_EMBED_DESCRIPTION_LENGTH = 240;
+const MAX_EMBED_FIELD_LENGTH = 120;
+
+export interface MessageImageInput {
+  url: string;
+  source: string;
+  detail: "auto" | "low" | "high";
+}
+
+const IMAGE_EXTENSION_REGEX = /\.(?:avif|bmp|gif|jpe?g|png|webp)(?:[?#].*)?$/i;
+
+function isImageAttachmentName(name: string): boolean {
+  return IMAGE_EXTENSION_REGEX.test(name);
+}
+
+function isImageAttachment(attachment: Attachment): boolean {
+  return (
+    attachment.contentType?.startsWith("image/") === true ||
+    Boolean(attachment.width && attachment.height) ||
+    isImageAttachmentName(attachment.name)
+  );
+}
+
+export function getMessageImageInputs(
+  message: Message,
+  sourceLabel = "message",
+): MessageImageInput[] {
+  const attachmentImages = [...message.attachments.values()]
+    .filter(isImageAttachment)
+    .map((attachment, index) => ({
+      url: attachment.url,
+      source: `${sourceLabel} attachment ${index + 1}: ${attachment.name}`,
+      detail: "auto" as const,
+    }));
+
+  const embedImages = message.embeds.flatMap((embed, embedIndex) => {
+    const urls = [embed.image?.url, embed.thumbnail?.url].filter(
+      (url): url is string => Boolean(url),
+    );
+    return urls.map((url, imageIndex) => ({
+      url,
+      source: `${sourceLabel} embed ${embedIndex + 1} image ${imageIndex + 1}`,
+      detail: "auto" as const,
+    }));
+  });
+
+  return [...attachmentImages, ...embedImages];
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function truncateMetadata(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 3)}...`;
+}
+
+function formatAttachmentDimensions(
+  width: number | null,
+  height: number | null,
+): string | null {
+  return width && height ? `${width}x${height}` : null;
+}
+
+function formatMessageAttachments(message: Message): string[] {
+  return [...message.attachments.values()].map((attachment, index) => {
+    const details = [
+      attachment.contentType ? `type=${attachment.contentType}` : null,
+      `size=${formatBytes(attachment.size)}`,
+      formatAttachmentDimensions(attachment.width, attachment.height)
+        ? `dimensions=${formatAttachmentDimensions(attachment.width, attachment.height)}`
+        : null,
+      attachment.description
+        ? `description="${truncateMetadata(
+            attachment.description,
+            MAX_ATTACHMENT_DESCRIPTION_LENGTH,
+          )}"`
+        : null,
+    ].filter(Boolean);
+
+    return `${index + 1}. ${attachment.name} (${details.join(", ")})\n   url: ${
+      attachment.url
+    }`;
+  });
+}
+
+function formatMessageStickers(message: Message): string[] {
+  return [...message.stickers.values()].map((sticker, index) => {
+    const description = sticker.description
+      ? ` - ${truncateMetadata(sticker.description, MAX_ATTACHMENT_DESCRIPTION_LENGTH)}`
+      : "";
+    return `${index + 1}. ${sticker.name}${description}`;
+  });
+}
+
+function formatMessageEmbeds(message: Message): string[] {
+  return message.embeds.map((embed, index) => {
+    const parts = [
+      embed.title ? `title="${truncateMetadata(embed.title, 120)}"` : null,
+      embed.description
+        ? `description="${truncateMetadata(
+            embed.description,
+            MAX_EMBED_DESCRIPTION_LENGTH,
+          )}"`
+        : null,
+      embed.url ? `url=${embed.url}` : null,
+      embed.image?.url ? `image=${embed.image.url}` : null,
+      embed.thumbnail?.url ? `thumbnail=${embed.thumbnail.url}` : null,
+      embed.fields.length > 0
+        ? `fields=${embed.fields
+            .slice(0, 3)
+            .map(
+              (field) =>
+                `${field.name}: ${truncateMetadata(
+                  field.value,
+                  MAX_EMBED_FIELD_LENGTH,
+                )}`,
+            )
+            .join(" | ")}`
+        : null,
+    ].filter(Boolean);
+
+    return `${index + 1}. ${parts.join(", ") || "embed with no text metadata"}`;
+  });
+}
+
+export function formatMessageForAI(message: Message): string {
+  const sections: string[] = [];
+  const content = message.content.trim();
+
+  if (content) sections.push(content);
+
+  const attachments = formatMessageAttachments(message);
+  if (attachments.length > 0) {
+    sections.push(`Attachments:\n${attachments.join("\n")}`);
+  }
+
+  const stickers = formatMessageStickers(message);
+  if (stickers.length > 0) {
+    sections.push(`Stickers:\n${stickers.join("\n")}`);
+  }
+
+  const embeds = formatMessageEmbeds(message);
+  if (embeds.length > 0) {
+    sections.push(`Embedded/link preview content:\n${embeds.join("\n")}`);
+  }
+
+  return sections.length > 0 ? sections.join("\n\n") : "[no text content]";
+}
 
 // Patterns for content that should not be split
 const PROTECTED_PATTERNS = [
@@ -175,7 +329,7 @@ export async function fetchReplyChain(
 
       chain.unshift({
         author: referencedMessage.author.username,
-        content: referencedMessage.content.trim(),
+        content: formatMessageForAI(referencedMessage),
         isBot: referencedMessage.author.bot,
         isReplyContext: true,
       });
@@ -214,7 +368,7 @@ export async function fetchChatHistory(
       if (msg.id === message.id) continue;
       chatHistory.push({
         author: msg.author.username,
-        content: msg.content.trim(),
+        content: formatMessageForAI(msg),
         isBot: msg.author.bot,
       });
     }

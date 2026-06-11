@@ -42,6 +42,16 @@ const envSchema = z.object({
         !value.toLowerCase().includes(NON_OPENAI_MODEL_PROVIDER_FRAGMENT),
       "MODEL_NAME must be a direct OpenAI model id",
     ),
+  VISION_MODEL_NAME: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined)
+    .refine(
+      (value) =>
+        !value ||
+        !value.toLowerCase().includes(NON_OPENAI_MODEL_PROVIDER_FRAGMENT),
+      "VISION_MODEL_NAME must be a direct OpenAI model id",
+    ),
   MONGO_URI: z.string().default("mongodb://localhost:27017/ruyi"),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])

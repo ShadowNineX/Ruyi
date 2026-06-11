@@ -1,5 +1,7 @@
 import {
   Agent,
+  user,
+  type AgentInputItem,
   type RunStreamEvent,
   type RunToolApprovalItem,
   type Tool,
@@ -13,6 +15,7 @@ import { mcpConnectionManager } from "../mcp/client";
 import { env } from "../env";
 import { CHAT_TIMEOUT_MS } from "../constants";
 import type { ChatSession } from "../utils/chat-session";
+import type { MessageImageInput } from "../utils/messages";
 import { systemPrompt } from "./prompt";
 import { sessionManager } from "./session";
 import { agentsRuntimeManager } from "./client";
@@ -21,6 +24,7 @@ import { permissionManager } from "./permissions";
 import { autoExtractFacts } from "./extraction";
 
 const LOCAL_TOOL_NAMES = new Set(allTools.map((tool) => tool.name));
+const MAX_AGENT_IMAGE_INPUTS = 4;
 const UnknownRecordSchema = z.record(z.string(), z.unknown());
 const ToolCallSchema = z.looseObject({
     arguments: z.unknown().optional(),
@@ -37,6 +41,7 @@ export interface ChatOptions {
   userId: string;
   session: ChatSession;
   chatHistory?: ChatMessage[];
+  imageInputs?: MessageImageInput[];
   messageId?: string;
   signal?: AbortSignal;
 }
@@ -105,6 +110,41 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   throw new Error("Chat request was aborted");
 }
 
+function uniqueImageInputs(
+  imageInputs: MessageImageInput[],
+): MessageImageInput[] {
+  const seen = new Set<string>();
+  const unique: MessageImageInput[] = [];
+
+  for (const imageInput of imageInputs) {
+    if (seen.has(imageInput.url)) continue;
+    seen.add(imageInput.url);
+    unique.push(imageInput);
+    if (unique.length >= MAX_AGENT_IMAGE_INPUTS) break;
+  }
+
+  return unique;
+}
+
+function buildRunnerInput(
+  enrichedMessage: string,
+  imageInputs: MessageImageInput[],
+): string | AgentInputItem[] {
+  const images = uniqueImageInputs(imageInputs);
+  if (images.length === 0) return enrichedMessage;
+
+  const content: Exclude<Parameters<typeof user>[0], string> = [
+    { type: "input_text", text: enrichedMessage },
+    ...images.map((imageInput) => ({
+      type: "input_image" as const,
+      image: imageInput.url,
+      detail: imageInput.detail,
+    })),
+  ];
+
+  return [user(content)];
+}
+
 export class ChatService {
   async chat(options: ChatOptions): Promise<string | null> {
     const {
@@ -115,6 +155,7 @@ export class ChatService {
       userId,
       session,
       chatHistory = [],
+      imageInputs = [],
       messageId,
       signal,
     } = options;
@@ -150,7 +191,16 @@ export class ChatService {
       );
       throwIfAborted(signal);
 
-      const enrichedMessage = `${dynamicContext}\n\nUser message from ${username}:\n${userMessage}`;
+      const imageInputSummary =
+        imageInputs.length > 0
+          ? `\n\nNative image inputs attached for vision:\n${uniqueImageInputs(
+              imageInputs,
+            )
+              .map((imageInput, index) => `${index + 1}. ${imageInput.source}`)
+              .join("\n")}`
+          : "";
+      const enrichedMessage = `${dynamicContext}\n\nUser message from ${username}:\n${userMessage}${imageInputSummary}`;
+      const runnerInput = buildRunnerInput(enrichedMessage, imageInputs);
 
       if (env.DEBUG_PROMPTS) {
         aiLogger.debug({ systemPrompt }, "system prompt (debug dump)");
@@ -165,6 +215,7 @@ export class ChatService {
           username,
           contextLength: dynamicContext.length,
           historyCount: chatHistory.length,
+          imageInputCount: imageInputs.length,
           userMessagePreview: userMessage.slice(0, 80),
         },
         "Chat input received",
@@ -219,7 +270,7 @@ export class ChatService {
         "Using persistent OpenAI Agents session",
       );
 
-      let stream = await runner.run(agent, enrichedMessage, runOptions);
+      let stream = await runner.run(agent, runnerInput, runOptions);
       await this.drainStream(stream, session);
 
       let approvalCycles = 0;

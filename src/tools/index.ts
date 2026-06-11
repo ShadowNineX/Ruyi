@@ -14,6 +14,7 @@ export {
 export { embedTool } from "./embed";
 export { fetchUrlTool } from "./fetch";
 export { generateImageTool } from "./image";
+export { describeImageTool } from "./vision";
 export {
   memoryStoreTool,
   memoryRecallTool,
@@ -39,6 +40,7 @@ import {
 import { embedTool } from "./embed";
 import { fetchUrlTool } from "./fetch";
 import { generateImageTool } from "./image";
+import { describeImageTool } from "./vision";
 import {
   memoryStoreTool,
   memoryRecallTool,
@@ -64,6 +66,7 @@ export const allTools = [
   embedTool,
   fetchUrlTool,
   generateImageTool,
+  describeImageTool,
   memoryStoreTool,
   memoryRecallTool,
   searchMemoryTool,
