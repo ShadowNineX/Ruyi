@@ -428,6 +428,19 @@ function headersToRecord(headers: Headers): Record<string, string> {
   return record;
 }
 
+function logFetchResponse(result: {
+  requestedUrl: string;
+  finalUrl: string;
+  status: number;
+  ok: boolean;
+  redirectCount: number;
+  contentType: string | null;
+  contentLength: number | null;
+}): void {
+  const level = result.ok ? "info" : "warn";
+  toolLogger[level](result, "URL fetch response received");
+}
+
 export const fetchUrlTool = tool({
   name: "fetch_url",
   description:
@@ -477,7 +490,28 @@ export const fetchUrlTool = tool({
         headers: include_headers ? headersToRecord(response.headers) : undefined,
       };
 
+      logFetchResponse({
+        requestedUrl: url,
+        finalUrl,
+        status: response.status,
+        ok: response.ok,
+        redirectCount,
+        contentType: baseResult.contentType,
+        contentLength: baseResult.contentLength,
+      });
+
       if (!isTextualContentType(contentType)) {
+        toolLogger.info(
+          {
+            requestedUrl: url,
+            finalUrl,
+            status: response.status,
+            contentType: baseResult.contentType,
+            contentLength: baseResult.contentLength,
+          },
+          "URL fetch skipped non-text body",
+        );
+
         return {
           ...baseResult,
           text: null,
@@ -492,6 +526,21 @@ export const fetchUrlTool = tool({
         raw === true,
         maxChars,
         finalUrl,
+      );
+
+      toolLogger.info(
+        {
+          requestedUrl: url,
+          finalUrl,
+          status: response.status,
+          ok: response.ok,
+          bytesRead: body.bytesRead,
+          byteTruncated: body.byteTruncated,
+          charTruncated: prepared.charTruncated,
+          textChars: prepared.text.length,
+          extractionMethod: prepared.extractionMethod,
+        },
+        "URL fetch body processed",
       );
 
       return {
