@@ -37,6 +37,11 @@ const DENY_ONCE_RESULT: PermissionResult = {
   rememberTool: false,
   decision: "deny_once",
 };
+const SMITHERY_SERVICE_NAMES: Record<string, string> = {
+  brave: "Brave Search",
+  github: "GitHub",
+  youtube: "YouTube",
+};
 
 function truncate(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
@@ -78,23 +83,115 @@ function decisionFromCustomId(customId: string): PermissionDecision | null {
   return null;
 }
 
-function formatArguments(rawArguments: string | undefined): string {
-  if (!rawArguments) return "";
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseApprovalArguments(
+  rawArguments: string | undefined,
+): Record<string, unknown> | null {
+  if (!rawArguments) return null;
 
   try {
     const parsed: unknown = JSON.parse(rawArguments);
-    return JSON.stringify(parsed, null, 2);
+    return isRecord(parsed) ? parsed : null;
   } catch (error) {
     aiLogger.debug(
       { error: (error as Error).message },
       "Tool approval arguments were not JSON",
     );
-    return rawArguments;
+    return null;
   }
+}
+
+function formatArguments(rawArguments: string | undefined): string {
+  const parsed = parseApprovalArguments(rawArguments);
+  if (parsed) return JSON.stringify(parsed, null, 2);
+  return rawArguments ?? "";
+}
+
+function getStringField(
+  record: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function formatReadableValue(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string") return truncate(value.replace(/\s+/g, " "), 700);
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) return `${value.length} item(s)`;
+  if (isRecord(value)) return `fields: ${Object.keys(value).join(", ") || "none"}`;
+  return String(value);
+}
+
+function getSmitheryToolArguments(
+  approvalArgs: Record<string, unknown>,
+): Record<string, unknown> {
+  const directArgs = approvalArgs.tool_arguments ?? approvalArgs.arguments;
+  if (isRecord(directArgs)) return directArgs;
+
+  const legacyJson = approvalArgs.arguments_json;
+  if (typeof legacyJson !== "string") return {};
+
+  try {
+    const parsed: unknown = JSON.parse(legacyJson);
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function formatSmitheryToolArguments(args: Record<string, unknown>): string[] {
+  return Object.entries(args).map(
+    ([key, value]) => `- ${key}: ${formatReadableValue(value)}`,
+  );
+}
+
+function getSmitheryPermissionDescription(
+  approvalArgs: Record<string, unknown>,
+): string {
+  const serverId = getStringField(approvalArgs, "server_id") ?? "unknown";
+  const serviceName = SMITHERY_SERVICE_NAMES[serverId] ?? serverId;
+  const toolName = getStringField(approvalArgs, "tool_name") ?? "unknown";
+  const mcpArgs = getSmitheryToolArguments(approvalArgs);
+  const lines = [
+    `Service: **${serviceName}**`,
+    `MCP tool: \`${toolName}\``,
+  ];
+
+  const argumentLines = formatSmitheryToolArguments(mcpArgs);
+  if (argumentLines.length > 0) {
+    lines.push("", "Request details:", ...argumentLines);
+  }
+
+  return truncate(lines.join("\n"), 3900);
+}
+
+function getPermissionDisplayName(approvalItem: RunToolApprovalItem): string {
+  const toolName = getApprovalToolName(approvalItem);
+  if (toolName !== "smithery_call_tool") return toolName;
+
+  const approvalArgs = parseApprovalArguments(approvalItem.arguments);
+  if (!approvalArgs) return toolName;
+
+  const serverId = getStringField(approvalArgs, "server_id") ?? "Smithery";
+  const serviceName = SMITHERY_SERVICE_NAMES[serverId] ?? serverId;
+  const mcpToolName = getStringField(approvalArgs, "tool_name");
+  return mcpToolName ? `${serviceName} ${mcpToolName}` : serviceName;
 }
 
 function getPermissionDescription(approvalItem: RunToolApprovalItem): string {
   const toolName = getApprovalToolName(approvalItem);
+  const approvalArgs = parseApprovalArguments(approvalItem.arguments);
+  if (toolName === "smithery_call_tool" && approvalArgs) {
+    return getSmitheryPermissionDescription(approvalArgs);
+  }
+
   const formattedArgs = formatArguments(approvalItem.arguments);
   const lines = [`Tool: \`${toolName}\``];
 
@@ -177,10 +274,11 @@ async function settleApprovalFromInteraction(
   }
 
   const result = resultFromDecision(decision);
+  const displayName = getPermissionDisplayName(args.approvalItem);
   const resultEmbed = createPermissionEmbed(
     result.approved
-      ? `Permission Granted: ${args.toolName}`
-      : `Permission Denied: ${args.toolName}`,
+      ? `Permission Granted: ${displayName}`
+      : `Permission Denied: ${displayName}`,
     args.approvalItem,
     result.approved ? 0x00aa55 : 0xcc3333,
     `${getDecisionLabel(decision)} by ${interaction.user.username}`,
@@ -245,7 +343,7 @@ function handleApprovalEnd(
   state.settled = true;
 
   const timeoutEmbed = createPermissionEmbed(
-    `Permission Expired: ${args.toolName}`,
+    `Permission Expired: ${getPermissionDisplayName(args.approvalItem)}`,
     args.approvalItem,
     0x95a5a6,
     "Request timed out",
@@ -334,7 +432,7 @@ export class PermissionManager {
 
     try {
       const embed = createPermissionEmbed(
-        `Permission Required: ${toolName}`,
+        `Permission Required: ${getPermissionDisplayName(approvalItem)}`,
         approvalItem,
         0xffa500,
         `Choose once for one call, or tool this turn for repeats. Expires in ${Math.round(timeoutMs / 1000)}s`,

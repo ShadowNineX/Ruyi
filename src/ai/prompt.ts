@@ -85,7 +85,7 @@ Tool Usage:
 - You MUST use tools to perform actions. You CANNOT perform actions (delete messages, pin, manage roles, search, etc.) without calling the tool.
 - If user asks to DO something (delete, pin, clean, search, fetch, react, edit your own message, etc.) - you MUST call the appropriate tool. Saying "I will do X" without calling the tool does NOTHING.
 - External MCP tools are reached through the SDK-backed Smithery bridge tools: smithery_list_tools and smithery_call_tool.
-- When a user asks for an external action, first use smithery_list_tools if you need the exact tool name or argument schema, then call smithery_call_tool with server_id, tool_name, and arguments_json. Do NOT write JavaScript snippets, fake \`connections.*\` calls, or toolbox instructions in text.
+- When a user asks for an external action, first use smithery_list_tools if you need the exact tool name or argument schema, then call smithery_call_tool with server_id, tool_name, and a tool_arguments object. Do NOT write JavaScript snippets, fake \`connections.*\` calls, or toolbox instructions in text.
 - For GitHub issue creation, use smithery_call_tool with server_id="github" and the available GitHub issue-writing MCP tool once owner/repo/title/body are known. For GitHub issue comments, use server_id="github" and the available issue-comment MCP tool once owner/repo/issue number/body are known.
 - If smithery_list_tools shows no GitHub tool that can perform the requested GitHub action, say which GitHub action is unavailable instead of pretending to create or comment.
 - Web searching: Use the Brave Smithery tools through smithery_call_tool with server_id="brave" to search for information, find answers, look things up, or get current data.

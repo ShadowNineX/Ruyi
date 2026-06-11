@@ -16,17 +16,6 @@ import { formatError } from "../utils/types";
 const SmitheryServerIdSchema = z.enum(SMITHERY_SERVER_IDS);
 const JsonObjectSchema = z.record(z.string(), z.unknown());
 
-function parseArgumentsJson(value: string | null): Record<string, unknown> {
-  if (!value?.trim()) return {};
-
-  const parsed: unknown = JSON.parse(value);
-  const result = JsonObjectSchema.safeParse(parsed);
-  if (!result.success) {
-    throw new Error("arguments_json must parse to a JSON object.");
-  }
-  return result.data;
-}
-
 function formatToolSummary(
   toolSummary: Awaited<ReturnType<typeof listSmitheryConnectionTools>>[number],
   includeInputSchema: boolean,
@@ -111,7 +100,7 @@ export const smitheryListToolsTool = tool({
 export const smitheryCallTool = tool({
   name: "smithery_call_tool",
   description:
-    "Call one MCP tool through Smithery Connect. Use smithery_list_tools first if you do not know the exact tool name or JSON arguments.",
+    "Call one MCP tool through Smithery Connect. Use smithery_list_tools first if you do not know the exact tool name or argument object.",
   parameters: z.object({
     server_id: SmitheryServerIdSchema.describe(
       "Smithery service to call: github, brave, or youtube.",
@@ -120,19 +109,17 @@ export const smitheryCallTool = tool({
       .string()
       .min(1)
       .describe("Exact MCP tool name from smithery_list_tools, without a connection prefix."),
-    arguments_json: z
-      .string()
+    tool_arguments: JsonObjectSchema
       .nullable()
-      .describe("JSON object string to pass as tool arguments. Use {} when no arguments are needed."),
+      .describe("Object to pass as MCP tool arguments. Use {} when no arguments are needed."),
   }),
   needsApproval: true,
-  execute: async ({ server_id, tool_name, arguments_json }) => {
+  execute: async ({ server_id, tool_name, tool_arguments }) => {
     try {
-      const args = parseArgumentsJson(arguments_json);
       const result = await callSmitheryConnectionTool(
         server_id,
         tool_name,
-        args,
+        tool_arguments ?? {},
       );
 
       toolLogger.info(
