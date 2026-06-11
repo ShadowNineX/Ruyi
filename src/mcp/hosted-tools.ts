@@ -18,7 +18,7 @@ export function getHostedMcpTools(): Tool[] {
         serverUrl: config.url,
         serverDescription: `${server.name} MCP server`,
         headers: config.headers,
-        deferLoading: true,
+        deferLoading: false,
         requireApproval: {
           never: { readOnly: true },
           always: { readOnly: false },
