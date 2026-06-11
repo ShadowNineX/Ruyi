@@ -17,6 +17,7 @@ export const DISCORD_EMBED_DESCRIPTION_MAX_LENGTH = 4096;
 
 export const SMITHERY_SERVER_IDS = [
   "brave",
+  "github",
   "youtube",
 ] as const satisfies readonly SmitheryServerId[];
 
@@ -31,6 +32,11 @@ export const SMITHERY_SERVERS: Record<SmitheryServerId, SmitheryServerInfo> = {
     name: "Brave Search",
     emoji: "🦁",
     description: "Web, news, image, and local search",
+  },
+  github: {
+    name: "GitHub",
+    emoji: "🐙",
+    description: "Repositories, issues, pull requests, and code",
   },
   youtube: {
     name: "YouTube",

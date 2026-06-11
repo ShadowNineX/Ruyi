@@ -40,7 +40,7 @@ import {
 
 export const smitheryCommand = new SlashCommandBuilder()
   .setName("smithery")
-  .setDescription("Authorize Smithery MCP servers (YouTube, Brave, etc.)");
+  .setDescription("Authorize Smithery MCP servers (Brave, GitHub, YouTube)");
 
 export async function handleSmitheryCommand(
   interaction: ChatInputCommandInteraction,

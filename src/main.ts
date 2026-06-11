@@ -18,11 +18,16 @@ await connectDB();
 
 // Initialize Smithery tokens from database
 const smitheryStatus = await SmitheryMCPServer.initializeTokens();
-if (!smitheryStatus.brave && !smitheryStatus.youtube) {
+if (
+  !smitheryStatus.brave &&
+  !smitheryStatus.github &&
+  !smitheryStatus.youtube
+) {
   logger.warn("No Smithery tokens found. Run /smithery to authorize.");
 } else {
   const authorized: string[] = [];
   if (smitheryStatus.brave) authorized.push("Brave");
+  if (smitheryStatus.github) authorized.push("GitHub");
   if (smitheryStatus.youtube) authorized.push("YouTube");
   logger.info({ authorized }, "Smithery tokens loaded");
 }

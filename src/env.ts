@@ -58,7 +58,6 @@ const envSchema = z.object({
     .default("info"),
 
   // Optional (no default)
-  GITHUB_TOKEN: z.string().optional(),
   LASTFM_API_KEY: z.string().optional(),
   OPENAI_ADMIN_KEY: z.string().optional(),
 

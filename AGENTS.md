@@ -9,7 +9,7 @@ Ruyi is a Discord bot (Nine Sols themed AI companion) built on Bun + TypeScript 
 - Type-check: `bun run typecheck` (or `bunx tsc --noEmit`)
 - Build: `bun run build` emits `dist/main.js` via `bun build`
 - Start: `bun run start` runs the compiled `dist/main.js` artifact
-- Required env: `DISCORD_TOKEN`, `OPENAI_API_KEY`. Optional: `MONGO_URI`, `MODEL_NAME` (default `gpt-5.4-mini`), `VISION_MODEL_NAME` (defaults to `MODEL_NAME` for image understanding), `LOG_LEVEL`, `GITHUB_TOKEN`, `LASTFM_API_KEY`, `OPENAI_ADMIN_KEY` (`/credits` organization costs), `DEBUG_PROMPTS`.
+- Required env: `DISCORD_TOKEN`, `OPENAI_API_KEY`. Optional: `MONGO_URI`, `MODEL_NAME` (default `gpt-5.4-mini`), `VISION_MODEL_NAME` (defaults to `MODEL_NAME` for image understanding), `LOG_LEVEL`, `LASTFM_API_KEY`, `OPENAI_ADMIN_KEY` (`/credits` organization costs), `DEBUG_PROMPTS`.
 - All env access goes through [src/env.ts](src/env.ts) (zod-validated, fail-fast at startup). Do **not** read `Bun.env` directly.
 
 ## Architecture (boot → reply)
@@ -33,7 +33,7 @@ Ruyi is a Discord bot (Nine Sols themed AI companion) built on Bun + TypeScript 
 - All tools live in [src/tools/](src/tools/) and are exported via the `allTools` array in [src/tools/index.ts](src/tools/index.ts).
 - Tools that produce their own Discord output (embed, image) must be added to `selfRespondingToolNames` in the same file so an empty assistant reply is non-fatal.
 - Pattern: build directly with `tool({ name, description, parameters: z.object({...}), execute })` from `@openai/agents`. Discord context (channel/guild/message/referencedMessage) flows through `runWithToolContext()` + `toolContextManager.get()` in [src/utils/types.ts](src/utils/types.ts) — [src/bot.ts](src/bot.ts) wraps each chat turn in `runWithToolContext(toolCtx, () => chatService.chat(...))` so tools see the active context via `AsyncLocalStorage`. Tools must guard against null channel/guild and return structured error objects (not throw). Use the SDK's `needsApproval` option for sensitive tools.
-- MCP-backed tools live in [src/mcp/](src/mcp/) (`brave`, `github`, `youtube`, `smithery`). Health-checked at boot via [src/mcp/index.ts](src/mcp/index.ts), then connected for runtime through the OpenAI Agents SDK MCP server classes in [src/mcp/client.ts](src/mcp/client.ts).
+- MCP-backed tools live in [src/mcp/](src/mcp/) (`brave`, `github`, `youtube`, `smithery`). Smithery servers are authorized with `/smithery`, health-checked at boot via [src/mcp/index.ts](src/mcp/index.ts), then connected for runtime through the OpenAI Agents SDK MCP server classes in [src/mcp/client.ts](src/mcp/client.ts).
 - Memory tools enforce per-user scope by Discord username, truncate values to `MEMORY_VALUE_MAX_LEN`, and evict past `USER_MEMORY_CAP` / global cap. See [src/tools/memory.ts](src/tools/memory.ts).
 
 ## Persistence

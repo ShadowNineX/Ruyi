@@ -25,7 +25,7 @@ const CACHE_TTL_MS = 60 * 1000; // 1 minute cache
  * @see https://smithery.ai/docs/use/connect
  */
 export abstract class SmitheryMCPServer extends MCPServer {
-  /** The Smithery server slug (e.g., "brave", "youtube") */
+  /** The Smithery server slug (e.g., "brave", "github", "youtube") */
   protected abstract readonly slug: SmitheryServerId;
 
   protected get url(): string {
@@ -147,11 +147,13 @@ export abstract class SmitheryMCPServer extends MCPServer {
    */
   static async initializeTokens(): Promise<{
     brave: boolean;
+    github: boolean;
     youtube: boolean;
   }> {
     const allTokens = await getAllSmitheryTokens();
     const result: Record<SmitheryServerId, boolean> = {
       brave: false,
+      github: false,
       youtube: false,
     };
 
