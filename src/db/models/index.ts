@@ -7,12 +7,13 @@ export {
 } from "./conversation";
 export { AgentSession, type IAgentSession } from "./agent-session";
 export {
-  SmitheryToken,
-  getSmitheryTokens,
-  getAllSmitheryTokens,
-  saveSmitheryTokens,
-  isTokenExpired,
-  clearSmitheryTokens,
-  type ISmitheryToken,
+  SmitheryConnection,
+  getSmitheryConnection,
+  getAllSmitheryConnections,
+  countConnectedSmitheryConnections,
+  saveSmitheryConnection,
+  clearSmitheryConnection,
+  type ISmitheryConnection,
+  type SmitheryConnectionStatus,
   type SmitheryServerId,
-} from "./smithery-token";
+} from "./smithery-connection";

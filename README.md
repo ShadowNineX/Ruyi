@@ -14,3 +14,13 @@ bun run start
 ```
 
 For local development, use `bun run dev`.
+
+## Smithery MCP
+
+Set `SMITHERY_API_KEY` and `SMITHERY_NAMESPACE`, restart the bot, then run
+`/smithery` in Discord. The command creates Smithery hosted setup links for
+GitHub and other MCP services, so you should not need to paste OAuth codes into
+Discord.
+
+On first startup after upgrading from the old OAuth-token flow, Ruyi drops the
+legacy `smitherytokens` MongoDB collection and records that migration in config.

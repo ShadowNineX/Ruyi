@@ -14,8 +14,7 @@ export const slashCommands = [
 export {
   handleSmitherySelect,
   handleSmitheryUnlinkSelect,
-  handleSmitheryCodeButton,
-  handleSmitheryModal,
+  handleSmitheryCheckButton,
 } from "./smithery";
 
 export async function handleSlashCommand(

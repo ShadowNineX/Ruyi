@@ -15,12 +15,17 @@ import {
 
 export function buildSmitheryManagerEmbed(
   linkedServerIds: SmitheryServerId[],
+  needsSetupServerIds: SmitheryServerId[],
   unlinkedServerIds: SmitheryServerId[],
 ): EmbedBuilder {
   const linkedText =
     linkedServerIds.length > 0
       ? linkedServerIds.map(formatServerName).join("\n")
       : "No services linked yet.";
+  const setupText =
+    needsSetupServerIds.length > 0
+      ? needsSetupServerIds.map(formatServerName).join("\n")
+      : "No services are waiting for setup.";
   const unlinkedText =
     unlinkedServerIds.length > 0
       ? unlinkedServerIds.map(formatServerName).join("\n")
@@ -31,15 +36,17 @@ export function buildSmitheryManagerEmbed(
     .setDescription(
       "**Linked services:**\n" +
         `${linkedText}\n\n` +
+        "**Needs setup:**\n" +
+        `${setupText}\n\n` +
         "**Available to link:**\n" +
         `${unlinkedText}\n\n` +
-        "Authorize a service to let Ruyi use its MCP tools. Unlinking removes Ruyi's saved token for that service.",
+        "Authorize a service to let Ruyi use its MCP tools. Unlinking removes Ruyi's saved Smithery connection for that service.",
     )
     .setColor(0x5865f2);
 
-  if (unlinkedServerIds.length > 0) {
+  if (unlinkedServerIds.length > 0 || needsSetupServerIds.length > 0) {
     embed.setFooter({
-      text: "Linked services are hidden from the authorize menu",
+      text: "Linked services are hidden from the setup menu",
     });
   }
 
@@ -48,28 +55,31 @@ export function buildSmitheryManagerEmbed(
 
 export function buildSmitheryManagerRows(
   linkedServerIds: SmitheryServerId[],
+  needsSetupServerIds: SmitheryServerId[],
   unlinkedServerIds: SmitheryServerId[],
 ): ActionRowBuilder<StringSelectMenuBuilder>[] {
   const rows: ActionRowBuilder<StringSelectMenuBuilder>[] = [];
+  const setupServerIds = [...needsSetupServerIds, ...unlinkedServerIds];
+  const unlinkServerIds = [...linkedServerIds, ...needsSetupServerIds];
 
-  if (unlinkedServerIds.length > 0) {
+  if (setupServerIds.length > 0) {
     rows.push(
       new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId("smithery_select_server")
-          .setPlaceholder("Choose a service to authorize...")
-          .addOptions(unlinkedServerIds.map(buildServerOption)),
+          .setPlaceholder("Choose a service to set up...")
+          .addOptions(setupServerIds.map(buildServerOption)),
       ),
     );
   }
 
-  if (linkedServerIds.length > 0) {
+  if (unlinkServerIds.length > 0) {
     rows.push(
       new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId("smithery_unlink_server")
           .setPlaceholder("Choose a service to unlink...")
-          .addOptions(linkedServerIds.map(buildUnlinkServerOption)),
+          .addOptions(unlinkServerIds.map(buildUnlinkServerOption)),
       ),
     );
   }
@@ -79,29 +89,30 @@ export function buildSmitheryManagerRows(
 
 export function buildAuthorizationDescription(authUrl: string): string {
   const description =
-    `**Step 1:** Open [Smithery authorization](${authUrl})\n` +
-    "**Step 2:** After authorizing, you'll be redirected to a page with a code\n" +
-    "**Step 3:** Click Enter Authorization Code and paste the code";
+    `**Step 1:** Open [Smithery setup](${authUrl})\n` +
+    "**Step 2:** Finish the GitHub/Smithery permission screen\n" +
+    "**Step 3:** Come back here and click Check Status";
 
   if (description.length <= DISCORD_EMBED_DESCRIPTION_MAX_LENGTH) {
     return description;
   }
 
   return (
-    "**Step 1:** Copy the Smithery authorization URL from the bot logs\n" +
-    "**Step 2:** After authorizing, you'll be redirected to a page with a code\n" +
-    "**Step 3:** Click Enter Authorization Code and paste the code"
+    "**Step 1:** Open the Smithery setup URL from the bot logs\n" +
+    "**Step 2:** Finish the GitHub/Smithery permission screen\n" +
+    "**Step 3:** Come back here and click Check Status"
   );
 }
 
 export function addAuthorizationButtons(
   row: ActionRowBuilder<ButtonBuilder>,
   authUrl: string,
+  serverId: SmitheryServerId,
 ): void {
   if (authUrl.length <= DISCORD_BUTTON_URL_MAX_LENGTH) {
     row.addComponents(
       new ButtonBuilder()
-        .setLabel("Open Smithery")
+        .setLabel("Open Smithery Setup")
         .setStyle(ButtonStyle.Link)
         .setURL(authUrl),
     );
@@ -109,8 +120,8 @@ export function addAuthorizationButtons(
 
   row.addComponents(
     new ButtonBuilder()
-      .setCustomId("smithery_enter_code")
-      .setLabel("Enter Authorization Code")
+      .setCustomId(`smithery_check:${serverId}`)
+      .setLabel("Check Status")
       .setStyle(ButtonStyle.Success),
   );
 }

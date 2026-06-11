@@ -1,85 +1,63 @@
-import { MCPServer, type MCPHealthCheckResult } from "./base";
-import { braveMCP } from "./brave";
-import { githubMCP } from "./github";
-import { youtubeMCP } from "./youtube";
+import {
+  getAllSmitheryConnections,
+  type SmitheryServerId,
+} from "../db/models";
 import { mcpLogger } from "../logger";
+import { SMITHERY_SERVERS } from "./smithery-catalog";
+import {
+  isSmitheryConfigured,
+  refreshKnownSmitheryConnections,
+} from "./smithery-api";
 
-export {
-  MCPServer,
-  type MCPServerConfig,
-  type MCPHealthCheckResult,
-} from "./base";
-
-function getStatusIcon(result: MCPHealthCheckResult): string {
-  if (result.connected) return "\x1b[32m● CONNECTED\x1b[0m";
-  if (result.reachable) return "\x1b[33m◐ REACHABLE\x1b[0m";
-  if (result.enabled) return "\x1b[31m✗ FAILED\x1b[0m";
-  return "\x1b[90m○ DISABLED\x1b[0m";
-}
-
-function logServerResult(result: MCPHealthCheckResult): void {
-  const lines = [
-    `\n${result.name.toUpperCase()}`,
-    `  Status: ${getStatusIcon(result)}`,
-    `  URL: ${result.url}`,
-  ];
-
-  if (result.responseTimeMs !== undefined) {
-    lines.push(`  Response: ${result.responseTimeMs}ms`);
-  }
-
-  if (result.tools && result.tools.length > 0) {
-    const preview = result.tools.slice(0, 5).join(", ");
-    const more =
-      result.tools.length > 5 ? `, +${result.tools.length - 5} more` : "";
-    lines.push(
-      `  Tools: ${result.tools.length} available`,
-      `    \u2192 ${preview}${more}`,
-    );
-  }
-
-  if (result.error) {
-    lines.push(`  Note: ${result.error}`);
-  }
-
-  mcpLogger.info(lines.join("\n"));
+function getConnectionName(serverId: SmitheryServerId): string {
+  return SMITHERY_SERVERS[serverId]?.name ?? serverId;
 }
 
 export class MCPRegistry {
-  readonly servers: MCPServer[] = [braveMCP, githubMCP, youtubeMCP];
-
   getServerForTool(toolName: string): string | undefined {
-    for (const server of this.servers) {
-      if (server.ownsTool(toolName)) {
-        return server.name;
-      }
+    const [connectionId] = toolName.split(".");
+    if (connectionId && connectionId in SMITHERY_SERVERS) {
+      return getConnectionName(connectionId as SmitheryServerId);
     }
-    return undefined;
-  }
 
-  async checkHealth(): Promise<MCPHealthCheckResult[]> {
-    return Promise.all(this.servers.map((server) => server.checkHealth()));
+    return toolName.startsWith("smithery") ? "Smithery" : undefined;
   }
 
   async logHealth(): Promise<void> {
-    mcpLogger.info("MCP servers health check starting");
-
-    const results = await this.checkHealth();
-
-    for (const result of results) {
-      logServerResult(result);
+    if (!isSmitheryConfigured()) {
+      mcpLogger.warn(
+        "Smithery Connect disabled. Set SMITHERY_API_KEY and SMITHERY_NAMESPACE to enable MCP tools.",
+      );
+      return;
     }
 
-    const connectedCount = results.filter((r) => r.connected).length;
-    const reachableCount = results.filter((r) => r.reachable).length;
-    const enabledCount = results.filter((r) => r.enabled).length;
+    await refreshKnownSmitheryConnections();
+    const connections = await getAllSmitheryConnections();
+    const connectedCount = connections.filter(
+      (connection) => connection.status === "connected",
+    ).length;
+
+    for (const connection of connections) {
+      const serverName = getConnectionName(connection.serverId);
+      mcpLogger.info(
+        {
+          serverId: connection.serverId,
+          connectionId: connection.connectionId,
+          status: connection.status,
+          hasSetupUrl: Boolean(connection.setupUrl),
+          error: connection.errorMessage,
+        },
+        `${serverName} Smithery connection status`,
+      );
+    }
+
     mcpLogger.info(
       {
+        configured: true,
         connected: connectedCount,
-        reachable: reachableCount - connectedCount,
-        failed: enabledCount - reachableCount,
+        total: connections.length,
       },
-      "MCP servers health check complete",
+      "Smithery Connect health check complete",
     );
   }
 }

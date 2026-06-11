@@ -1,34 +1,33 @@
 import {
   ActionRowBuilder,
   ButtonBuilder,
+  ButtonStyle,
   EmbedBuilder,
   MessageFlags,
-  ModalBuilder,
   SlashCommandBuilder,
-  TextInputBuilder,
-  TextInputStyle,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
-  type ModalSubmitInteraction,
   type StringSelectMenuInteraction,
 } from "discord.js";
-import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-import { botLogger } from "../logger";
 import {
-  clearSmitheryTokens,
-  saveSmitheryTokens,
+  clearSmitheryConnection,
+  getSmitheryConnection,
   type SmitheryServerId,
 } from "../db/models";
-import { SmitheryMCPServer } from "../mcp/smithery";
+import { botLogger } from "../logger";
+import {
+  clearSmitheryServiceTokenCache,
+  createOrUpdateSmitheryConnection,
+  deleteSmitheryConnection,
+  isSmitheryConfigured,
+  refreshSmitheryConnection,
+  type SmitheryConnectionSnapshot,
+} from "../mcp/smithery-api";
 import {
   parseSmitheryServerId,
   SMITHERY_SERVERS,
 } from "./smithery/constants";
-import { SmitheryOAuthProvider } from "./smithery/oauth-provider";
-import {
-  getSmitheryLinkState,
-  pendingSmitheryFlows,
-} from "./smithery/state";
+import { getSmitheryLinkState } from "./smithery/state";
 import {
   addAuthorizationButtons,
   buildAuthorizationDescription,
@@ -49,18 +48,33 @@ export async function handleSmitheryCommand(
     "Smithery authorize command",
   );
 
-  const { linkedServerIds, unlinkedServerIds } = await getSmitheryLinkState();
+  if (!isSmitheryConfigured()) {
+    await interaction.reply({
+      embeds: [buildSmitheryConfigMissingEmbed()],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const linkState = await getSmitheryLinkState();
 
   await interaction.reply({
-    embeds: [buildSmitheryManagerEmbed(linkedServerIds, unlinkedServerIds)],
-    components: buildSmitheryManagerRows(linkedServerIds, unlinkedServerIds),
+    embeds: [
+      buildSmitheryManagerEmbed(
+        linkState.linkedServerIds,
+        linkState.needsSetupServerIds,
+        linkState.unlinkedServerIds,
+      ),
+    ],
+    components: buildSmitheryManagerRows(
+      linkState.linkedServerIds,
+      linkState.needsSetupServerIds,
+      linkState.unlinkedServerIds,
+    ),
     flags: MessageFlags.Ephemeral,
   });
 }
 
-/**
- * Handle server selection from dropdown.
- */
 export async function handleSmitherySelect(
   interaction: StringSelectMenuInteraction,
 ): Promise<void> {
@@ -79,18 +93,11 @@ export async function handleSmitherySelect(
   }
 
   try {
-    await startSmitheryAuthorization(interaction, serverId);
+    await startSmitherySetup(interaction, serverId);
   } catch (error) {
-    botLogger.error({ error, serverId }, "Failed to start Smithery OAuth");
+    botLogger.error({ error, serverId }, "Failed to start Smithery setup");
     await interaction.editReply({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("❌ Authorization Failed")
-          .setDescription(
-            `Failed to start OAuth flow: ${error instanceof Error ? error.message : "Unknown error"}`,
-          )
-          .setColor(0xff0000),
-      ],
+      embeds: [buildSmitheryErrorEmbed("Setup Failed", error)],
       components: [],
     });
   }
@@ -123,171 +130,73 @@ export async function handleSmitheryUnlinkSelect(
     );
     await interaction.editReply({
       embeds: [
-        new EmbedBuilder()
-          .setTitle("❌ Unlink Failed")
-          .setDescription(
-            `Failed to unlink ${serverInfo.name}: ${
-              error instanceof Error ? error.message : "Unknown error"
-            }`,
-          )
-          .setColor(0xff0000),
+        buildSmitheryErrorEmbed(`Unlink ${serverInfo.name} Failed`, error),
       ],
       components: [],
     });
   }
 }
 
-/**
- * Handle the "Enter Code" button - show modal.
- */
-export async function handleSmitheryCodeButton(
+export async function handleSmitheryCheckButton(
   interaction: ButtonInteraction,
 ): Promise<void> {
-  if (interaction.customId !== "smithery_enter_code") return;
-
-  const modal = new ModalBuilder({
-    custom_id: "smithery_code_modal",
-    title: "Enter Authorization Code",
-    components: [
-      new ActionRowBuilder<TextInputBuilder>({
-        components: [
-          new TextInputBuilder({
-            custom_id: "auth_code",
-            label: "Authorization Code",
-            placeholder: "Paste the code from the redirect URL here...",
-            style: TextInputStyle.Short,
-            required: true,
-            min_length: 10,
-            max_length: 500,
-          }),
-        ],
-      }),
-    ],
-  });
-
-  await interaction.showModal(modal);
-}
-
-/**
- * Handle the modal submission with the auth code.
- */
-export async function handleSmitheryModal(
-  interaction: ModalSubmitInteraction,
-): Promise<void> {
-  if (interaction.customId !== "smithery_code_modal") return;
+  const serverId = parseSmitheryCheckCustomId(interaction.customId);
+  if (!serverId) return;
 
   await interaction.deferUpdate();
 
-  const userId = interaction.user.id;
-  const authCode = interaction.fields.getTextInputValue("auth_code").trim();
-  const pendingFlow = pendingSmitheryFlows.get(userId);
-
-  if (!pendingFlow) {
-    await interaction.editReply({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("❌ Session Expired")
-          .setDescription(
-            "Your authorization session has expired. Please run `/smithery` again.",
-          )
-          .setColor(0xff0000),
-      ],
-      components: [],
-    });
-    return;
-  }
-
   try {
-    const result = await auth(pendingFlow.provider, {
-      serverUrl: pendingFlow.serverUrl,
-      authorizationCode: authCode,
-    });
-
-    if (result !== "AUTHORIZED") {
-      throw new Error("Authorization failed - unexpected result");
-    }
-
-    await showSuccess(interaction, pendingFlow.provider, pendingFlow.serverId);
-    pendingSmitheryFlows.delete(userId);
+    const snapshot = await refreshSmitheryConnection(serverId);
+    await showConnectionState(interaction, serverId, snapshot);
   } catch (error) {
     botLogger.error(
-      { error, serverId: pendingFlow.serverId, user: interaction.user.username },
-      "Failed to exchange Smithery auth code",
+      { error, serverId, user: interaction.user.username },
+      "Failed to refresh Smithery connection",
     );
     await interaction.editReply({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("❌ Code Exchange Failed")
-          .setDescription(
-            `Failed to exchange authorization code: ${error instanceof Error ? error.message : "Unknown error"}\n\n` +
-              "Make sure you copied the entire code from the URL.",
-          )
-          .setColor(0xff0000),
-      ],
-      components: [],
+      embeds: [buildSmitheryErrorEmbed("Status Check Failed", error)],
+      components: buildSetupRetryComponents(serverId),
     });
   }
 }
 
-async function startSmitheryAuthorization(
+async function startSmitherySetup(
   interaction: StringSelectMenuInteraction,
   serverId: SmitheryServerId,
 ): Promise<void> {
   const serverInfo = SMITHERY_SERVERS[serverId];
-  const { linkedServerIds, unlinkedServerIds } = await getSmitheryLinkState();
+  const linkState = await getSmitheryLinkState();
 
-  if (linkedServerIds.includes(serverId)) {
+  if (linkState.linkedServerIds.includes(serverId)) {
     await interaction.editReply({
       embeds: [
         new EmbedBuilder()
           .setTitle(`${serverInfo.emoji} ${serverInfo.name} Already Linked`)
           .setDescription(
-            `**${serverInfo.name}** is already linked, so it is no longer available to authorize.`,
+            `**${serverInfo.name}** is already linked, so it is hidden from the setup menu.`,
           )
           .setColor(0x5865f2),
-        buildSmitheryManagerEmbed(linkedServerIds, unlinkedServerIds),
+        buildSmitheryManagerEmbed(
+          linkState.linkedServerIds,
+          linkState.needsSetupServerIds,
+          linkState.unlinkedServerIds,
+        ),
       ],
-      components: buildSmitheryManagerRows(linkedServerIds, unlinkedServerIds),
+      components: buildSmitheryManagerRows(
+        linkState.linkedServerIds,
+        linkState.needsSetupServerIds,
+        linkState.unlinkedServerIds,
+      ),
     });
     return;
   }
 
-  const provider = new SmitheryOAuthProvider();
-  const serverUrl = `https://server.smithery.ai/${serverId}`;
-  const result = await auth(provider, { serverUrl });
-
-  if (result === "AUTHORIZED") {
-    await showSuccess(interaction, provider, serverId);
-    return;
-  }
-
-  if (result !== "REDIRECT" || !provider.capturedAuthUrl) {
-    throw new Error("Authorization failed - unexpected result");
-  }
-
-  pendingSmitheryFlows.set(interaction.user.id, {
-    provider,
-    serverUrl,
-    serverId,
-    authUrl: provider.capturedAuthUrl,
-  });
-
-  const authUrl = provider.capturedAuthUrl.toString();
-  const row = new ActionRowBuilder<ButtonBuilder>();
-  addAuthorizationButtons(row, authUrl);
-
-  await interaction.editReply({
-    embeds: [
-      new EmbedBuilder()
-        .setTitle(`${serverInfo.emoji} Authorize ${serverInfo.name}`)
-        .setDescription(buildAuthorizationDescription(authUrl))
-        .setColor(0xffa500)
-        .setFooter({
-          text: "The authorization code is in the URL after 'code='",
-        }),
-    ],
-    components: [row],
-  });
+  const snapshot = await createOrUpdateSmitheryConnection(serverId);
+  botLogger.info(
+    { serverId, status: snapshot.status },
+    "Smithery connection created or updated",
+  );
+  await showConnectionState(interaction, serverId, snapshot);
 }
 
 async function unlinkSmitheryServer(
@@ -295,76 +204,156 @@ async function unlinkSmitheryServer(
   serverId: SmitheryServerId,
 ): Promise<void> {
   const serverInfo = SMITHERY_SERVERS[serverId];
+  const localConnection = await getSmitheryConnection(serverId);
 
-  await clearSmitheryTokens(serverId);
-  SmitheryMCPServer.clearCachedToken(serverId);
-
-  const pendingFlow = pendingSmitheryFlows.get(interaction.user.id);
-  if (pendingFlow?.serverId === serverId) {
-    pendingSmitheryFlows.delete(interaction.user.id);
+  if (isSmitheryConfigured() && localConnection) {
+    await deleteSmitheryConnection(serverId);
   }
+
+  await clearSmitheryConnection(serverId);
+  clearSmitheryServiceTokenCache();
 
   botLogger.info(
     { serverId, user: interaction.user.username },
     "Smithery service unlinked",
   );
 
-  const { linkedServerIds, unlinkedServerIds } = await getSmitheryLinkState();
+  const linkState = await getSmitheryLinkState();
 
   await interaction.editReply({
     embeds: [
       new EmbedBuilder()
         .setTitle(`${serverInfo.emoji} ${serverInfo.name} Unlinked`)
         .setDescription(
-          `Ruyi's saved token for **${serverInfo.name}** has been removed.\n\n` +
-            "You can authorize it again from the menu below.",
+          `Ruyi's saved Smithery connection for **${serverInfo.name}** has been removed.\n\n` +
+            "You can set it up again from the menu below.",
         )
         .setColor(0x00aa88),
-      buildSmitheryManagerEmbed(linkedServerIds, unlinkedServerIds),
+      buildSmitheryManagerEmbed(
+        linkState.linkedServerIds,
+        linkState.needsSetupServerIds,
+        linkState.unlinkedServerIds,
+      ),
     ],
-    components: buildSmitheryManagerRows(linkedServerIds, unlinkedServerIds),
+    components: buildSmitheryManagerRows(
+      linkState.linkedServerIds,
+      linkState.needsSetupServerIds,
+      linkState.unlinkedServerIds,
+    ),
   });
 }
 
-async function showSuccess(
-  interaction: ModalSubmitInteraction | StringSelectMenuInteraction,
-  provider: SmitheryOAuthProvider,
+async function showConnectionState(
+  interaction: ButtonInteraction | StringSelectMenuInteraction,
   serverId: SmitheryServerId,
+  snapshot: SmitheryConnectionSnapshot,
 ): Promise<void> {
-  const accessToken = provider.getAccessToken();
-  const refreshToken = provider.getRefreshToken();
-  const expiresIn = provider.getExpiresIn();
   const serverInfo = SMITHERY_SERVERS[serverId];
 
-  if (!accessToken) {
-    throw new Error("No access token received");
+  if (snapshot.status === "connected") {
+    clearSmitheryServiceTokenCache();
+    const linkState = await getSmitheryLinkState();
+    await interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle(`${serverInfo.emoji} ${serverInfo.name} Connected`)
+          .setDescription(
+            `**${serverInfo.name}** is connected through Smithery.\n\n` +
+              getPermissionHint(serverId),
+          )
+          .setColor(0x00ff00),
+        buildSmitheryManagerEmbed(
+          linkState.linkedServerIds,
+          linkState.needsSetupServerIds,
+          linkState.unlinkedServerIds,
+        ),
+      ],
+      components: buildSmitheryManagerRows(
+        linkState.linkedServerIds,
+        linkState.needsSetupServerIds,
+        linkState.unlinkedServerIds,
+      ),
+    });
+    return;
   }
 
-  const savedTokens = await saveSmitheryTokens(serverId, {
-    accessToken,
-    refreshToken,
-    expiresIn,
-  });
-  SmitheryMCPServer.setCachedToken(serverId, savedTokens);
-
-  botLogger.info({ serverId }, "Smithery tokens saved to database");
+  const title =
+    snapshot.status === "auth_required" || snapshot.status === "input_required"
+      ? `${serverInfo.emoji} Finish ${serverInfo.name} Setup`
+      : `${serverInfo.emoji} ${serverInfo.name} Needs Attention`;
+  const description =
+    snapshot.setupUrl !== undefined
+      ? buildAuthorizationDescription(snapshot.setupUrl)
+      : `Smithery returned status **${snapshot.status}**, but did not include a setup URL.`;
 
   await interaction.editReply({
     embeds: [
       new EmbedBuilder()
-        .setTitle(`${serverInfo.emoji} ${serverInfo.name} Authorized!`)
+        .setTitle(title)
         .setDescription(
-          `You've successfully authorized **${serverInfo.name}**!\n\n` +
-            "Tokens have been saved and will be used automatically.\n" +
-            (refreshToken
-              ? "🔄 Tokens will refresh automatically when they expire."
-              : "⚠️ No refresh token received - you may need to re-authorize later."),
+          `${description}\n\n` +
+            `Current status: **${snapshot.status}**` +
+            (snapshot.errorMessage ? `\n${snapshot.errorMessage}` : ""),
         )
-        .setColor(0x00ff00)
-        .setFooter({
-          text: "Run /smithery again to authorize other servers",
-        }),
+        .setColor(snapshot.status === "error" ? 0xff0000 : 0xffa500),
     ],
-    components: [],
+    components: snapshot.setupUrl
+      ? buildSetupComponents(snapshot.setupUrl, serverId)
+      : buildSetupRetryComponents(serverId),
   });
+}
+
+function buildSetupComponents(
+  setupUrl: string,
+  serverId: SmitheryServerId,
+): ActionRowBuilder<ButtonBuilder>[] {
+  const row = new ActionRowBuilder<ButtonBuilder>();
+  addAuthorizationButtons(row, setupUrl, serverId);
+  return [row];
+}
+
+function buildSetupRetryComponents(
+  serverId: SmitheryServerId,
+): ActionRowBuilder<ButtonBuilder>[] {
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`smithery_check:${serverId}`)
+        .setLabel("Check Status")
+        .setStyle(ButtonStyle.Success),
+    ),
+  ];
+}
+
+function parseSmitheryCheckCustomId(customId: string): SmitheryServerId | null {
+  if (!customId.startsWith("smithery_check:")) return null;
+  return parseSmitheryServerId(customId.slice("smithery_check:".length));
+}
+
+function buildSmitheryConfigMissingEmbed(): EmbedBuilder {
+  return new EmbedBuilder()
+    .setTitle("Smithery Connect Not Configured")
+    .setDescription(
+      "Set `SMITHERY_API_KEY` and `SMITHERY_NAMESPACE` in the bot environment, then restart Ruyi.\n\n" +
+        "After that, `/smithery` can create hosted setup links instead of asking you to paste authorization codes.",
+    )
+    .setColor(0xffa500);
+}
+
+function buildSmitheryErrorEmbed(title: string, error: unknown): EmbedBuilder {
+  return new EmbedBuilder()
+    .setTitle(title)
+    .setDescription(error instanceof Error ? error.message : "Unknown error")
+    .setColor(0xff0000);
+}
+
+function getPermissionHint(serverId: SmitheryServerId): string {
+  if (serverId !== "github") {
+    return "Smithery now owns the downstream authorization for this service.";
+  }
+
+  return (
+    "GitHub repository access and write permissions are managed from GitHub's Installed GitHub Apps settings. " +
+    "For issue comments, the GitHub integration needs Issues: write or Pull requests: write on the target repository."
+  );
 }

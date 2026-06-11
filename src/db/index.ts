@@ -26,3 +26,5 @@ export async function connectDB(): Promise<typeof mongoose> {
     process.exit(1);
   }
 }
+
+export { runDatabaseMigrations } from "./migrations";

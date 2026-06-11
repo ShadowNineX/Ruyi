@@ -60,6 +60,14 @@ const envSchema = z.object({
   // Optional (no default)
   LASTFM_API_KEY: z.string().optional(),
   OPENAI_ADMIN_KEY: z.string().optional(),
+  SMITHERY_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
+  SMITHERY_NAMESPACE: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
 
   // Debug toggles
   DEBUG_PROMPTS: z

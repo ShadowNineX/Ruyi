@@ -12,7 +12,6 @@ import { allTools } from "../tools";
 import { aiLogger } from "../logger";
 import { mcpRegistry } from "../mcp";
 import {
-  getHostedMcpServerCount,
   getHostedMcpTools,
 } from "../mcp/hosted-tools";
 import { env } from "../env";
@@ -253,7 +252,8 @@ export class ChatService {
       throwIfAborted(signal);
 
       const agentSessionId = await agentSession.getSessionId();
-      const agent = this.createAgent(session);
+      const hostedMcpTools = await getHostedMcpTools();
+      const agent = this.createAgent(session, hostedMcpTools);
       const runner = agentsRuntimeManager.getRunner();
       const runOptions = {
         stream: true,
@@ -268,7 +268,7 @@ export class ChatService {
           channelId,
           sessionId: agentSessionId,
           localToolCount: allTools.length,
-          hostedMcpServerCount: getHostedMcpServerCount(),
+          hostedMcpServerCount: hostedMcpTools.length,
         },
         "Using persistent OpenAI Agents session",
       );
@@ -344,8 +344,7 @@ export class ChatService {
     }
   }
 
-  private createAgent(session: ChatSession) {
-    const hostedMcpTools = getHostedMcpTools();
+  private createAgent(session: ChatSession, hostedMcpTools: Tool[]) {
     const agent = new Agent({
       name: "Ruyi",
       instructions: systemPrompt,

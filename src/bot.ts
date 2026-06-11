@@ -21,8 +21,7 @@ import {
   handleSlashCommand,
   handleSmitherySelect,
   handleSmitheryUnlinkSelect,
-  handleSmitheryCodeButton,
-  handleSmitheryModal,
+  handleSmitheryCheckButton,
 } from "./slash-commands";
 import {
   ChatSession,
@@ -573,14 +572,9 @@ export class RuyiBot {
       await handleSmitheryUnlinkSelect(interaction);
     } else if (
       interaction.isButton() &&
-      interaction.customId === "smithery_enter_code"
+      interaction.customId.startsWith("smithery_check:")
     ) {
-      await handleSmitheryCodeButton(interaction);
-    } else if (
-      interaction.isModalSubmit() &&
-      interaction.customId === "smithery_code_modal"
-    ) {
-      await handleSmitheryModal(interaction);
+      await handleSmitheryCheckButton(interaction);
     }
   };
 

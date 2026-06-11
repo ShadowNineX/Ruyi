@@ -1,4 +1,4 @@
-import { connectDB } from "./db";
+import { connectDB, runDatabaseMigrations } from "./db";
 import { configManager } from "./config";
 import {
   agentsRuntimeManager,
@@ -9,36 +9,20 @@ import {
 import { ruyiBot } from "./bot";
 import { allTools } from "./tools";
 import { mcpRegistry } from "./mcp";
-import { SmitheryMCPServer } from "./mcp/smithery";
 import { getHostedMcpServerCount } from "./mcp/hosted-tools";
 import { logger, botLogger } from "./logger";
 
-// Connect to MongoDB first (needed for Smithery tokens)
+// Connect to MongoDB first (needed for Smithery connections)
 await connectDB();
+await runDatabaseMigrations();
 
-// Initialize Smithery tokens from database
-const smitheryStatus = await SmitheryMCPServer.initializeTokens();
-if (
-  !smitheryStatus.brave &&
-  !smitheryStatus.github &&
-  !smitheryStatus.youtube
-) {
-  logger.warn("No Smithery tokens found. Run /smithery to authorize.");
-} else {
-  const authorized: string[] = [];
-  if (smitheryStatus.brave) authorized.push("Brave");
-  if (smitheryStatus.github) authorized.push("GitHub");
-  if (smitheryStatus.youtube) authorized.push("YouTube");
-  logger.info({ authorized }, "Smithery tokens loaded");
-}
-
-// Log MCP server status with health check
+// Log Smithery Connect status with a light health check.
 await mcpRegistry.logHealth();
 
 logger.info(
   {
     local: allTools.map((t) => t.name),
-    hostedMcpServers: getHostedMcpServerCount(),
+    hostedMcpServers: await getHostedMcpServerCount(),
     totalLocalTools: allTools.length,
   },
   "Tools registered",
