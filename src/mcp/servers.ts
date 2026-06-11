@@ -50,10 +50,26 @@ function deniedMcpToolOutput(toolName: string): McpToolOutput {
   ];
 }
 
+function schemaFingerprint(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
+}
+
 function sanitizeMcpTool(tool: McpTool): McpTool {
+  const inputSchema = sanitizeMcpInputSchema(tool.inputSchema);
+  if (schemaFingerprint(inputSchema) !== schemaFingerprint(tool.inputSchema)) {
+    mcpLogger.debug(
+      { tool: tool.name },
+      "Sanitized MCP tool input schema for OpenAI compatibility",
+    );
+  }
+
   return {
     ...tool,
-    inputSchema: sanitizeMcpInputSchema(tool.inputSchema),
+    inputSchema,
   };
 }
 
@@ -175,7 +191,8 @@ export async function connectMcpServersForRun(): Promise<MCPServer[]> {
 
   try {
     await server.connect();
-    const tools = await server.listTools();
+    const approvalServer = new ApprovalMcpServer(server);
+    const tools = await approvalServer.listTools();
     mcpLogger.info(
       {
         server: server.name,
@@ -185,7 +202,7 @@ export async function connectMcpServersForRun(): Promise<MCPServer[]> {
       },
       "Connected Smithery MCP server",
     );
-    return [new ApprovalMcpServer(server)];
+    return [approvalServer];
   } catch (error) {
     await closeMcpServers([server]);
     mcpLogger.error(
