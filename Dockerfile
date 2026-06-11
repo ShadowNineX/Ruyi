@@ -2,14 +2,24 @@ FROM oven/bun:1 AS deps
 WORKDIR /app
 
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production --ignore-scripts
+RUN bun install --frozen-lockfile
+
+FROM deps AS build
+WORKDIR /app
+
+COPY tsconfig.json ./
+COPY src ./src
+
+RUN bun run typecheck
+RUN bun run build
 
 FROM oven/bun:1 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-COPY --from=deps /app/node_modules ./node_modules
-COPY package.json bun.lock tsconfig.json ./
-COPY src ./src
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --production --ignore-scripts
 
-CMD ["bun", "run", "src/main.ts"]
+COPY --from=build /app/dist ./dist
+
+CMD ["bun", "dist/main.js"]

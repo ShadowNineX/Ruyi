@@ -6,7 +6,9 @@ Ruyi is a Discord bot (Nine Sols themed AI companion) built on Bun + TypeScript 
 
 - Install: `bun install`
 - Dev (watch): `bun run dev` (alias for `bun run --watch src/main.ts`)
-- Type-check: `bunx tsc --noEmit` (no `build` script; Bun runs TS directly)
+- Type-check: `bun run typecheck` (or `bunx tsc --noEmit`)
+- Build: `bun run build` emits `dist/main.js` via `bun build`
+- Start: `bun run start` runs the compiled `dist/main.js` artifact
 - Required env: `DISCORD_TOKEN`, `OPENAI_API_KEY`. Optional: `MONGO_URI`, `MODEL_NAME` (default `gpt-5.4-mini`), `VISION_MODEL_NAME` (defaults to `MODEL_NAME` for image understanding), `LOG_LEVEL`, `GITHUB_TOKEN`, `LASTFM_API_KEY`, `OPENAI_ADMIN_KEY` (`/credits` organization costs), `DEBUG_PROMPTS`.
 - All env access goes through [src/env.ts](src/env.ts) (zod-validated, fail-fast at startup). Do **not** read `Bun.env` directly.
 
