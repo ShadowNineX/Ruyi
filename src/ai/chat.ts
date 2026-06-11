@@ -11,7 +11,10 @@ import { z } from "zod";
 import { allTools } from "../tools";
 import { aiLogger } from "../logger";
 import { mcpRegistry } from "../mcp";
-import { mcpConnectionManager } from "../mcp/client";
+import {
+  getHostedMcpServerCount,
+  getHostedMcpTools,
+} from "../mcp/hosted-tools";
 import { env } from "../env";
 import { CHAT_TIMEOUT_MS } from "../constants";
 import type { ChatSession } from "../utils/chat-session";
@@ -265,7 +268,7 @@ export class ChatService {
           channelId,
           sessionId: agentSessionId,
           localToolCount: allTools.length,
-          mcpToolCount: mcpConnectionManager.getTools().length,
+          hostedMcpServerCount: getHostedMcpServerCount(),
         },
         "Using persistent OpenAI Agents session",
       );
@@ -342,15 +345,12 @@ export class ChatService {
   }
 
   private createAgent(session: ChatSession) {
+    const hostedMcpTools = getHostedMcpTools();
     const agent = new Agent({
       name: "Ruyi",
       instructions: systemPrompt,
       model: agentsRuntimeManager.model,
-      tools: [...allTools],
-      mcpServers: mcpConnectionManager.getServers(),
-      mcpConfig: {
-        convertSchemasToStrict: true,
-      },
+      tools: [...allTools, ...hostedMcpTools],
       toolUseBehavior: "run_llm_again",
     });
 

@@ -19,7 +19,6 @@ import {
   saveSmitheryTokens,
   type SmitheryServerId,
 } from "../db/models";
-import { mcpConnectionManager } from "../mcp/client";
 import { SmitheryMCPServer } from "../mcp/smithery";
 import {
   parseSmitheryServerId,
@@ -299,7 +298,6 @@ async function unlinkSmitheryServer(
 
   await clearSmitheryTokens(serverId);
   SmitheryMCPServer.clearCachedToken(serverId);
-  await mcpConnectionManager.initialize();
 
   const pendingFlow = pendingSmitheryFlows.get(interaction.user.id);
   if (pendingFlow?.serverId === serverId) {
@@ -348,7 +346,6 @@ async function showSuccess(
     expiresIn,
   });
   SmitheryMCPServer.setCachedToken(serverId, savedTokens);
-  await mcpConnectionManager.initialize();
 
   botLogger.info({ serverId }, "Smithery tokens saved to database");
 

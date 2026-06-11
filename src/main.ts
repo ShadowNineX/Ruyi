@@ -10,7 +10,7 @@ import { ruyiBot } from "./bot";
 import { allTools } from "./tools";
 import { mcpRegistry } from "./mcp";
 import { SmitheryMCPServer } from "./mcp/smithery";
-import { mcpConnectionManager } from "./mcp/client";
+import { getHostedMcpServerCount } from "./mcp/hosted-tools";
 import { logger, botLogger } from "./logger";
 
 // Connect to MongoDB first (needed for Smithery tokens)
@@ -35,14 +35,11 @@ if (
 // Log MCP server status with health check
 await mcpRegistry.logHealth();
 
-// Initialize MCP tools via wrapper (connects to Smithery servers)
-const mcpTools = await mcpConnectionManager.initialize();
-
 logger.info(
   {
     local: allTools.map((t) => t.name),
-    mcp: mcpTools.map((t) => t.name),
-    total: allTools.length + mcpTools.length,
+    hostedMcpServers: getHostedMcpServerCount(),
+    totalLocalTools: allTools.length,
   },
   "Tools registered",
 );
@@ -63,7 +60,6 @@ ruyiBot.start();
 // Graceful shutdown handling
 async function shutdown(signal: string): Promise<void> {
   botLogger.info({ signal }, "Shutting down gracefully");
-  await mcpConnectionManager.closeAll();
   await shutdownAgentsRuntime();
   process.exit(0);
 }
