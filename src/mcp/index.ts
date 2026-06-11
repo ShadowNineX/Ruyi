@@ -22,6 +22,11 @@ export class MCPRegistry {
       return getConnectionName(connectionId as SmitheryServerId);
     }
 
+    const [sanitizedConnectionId] = toolName.split("_");
+    if (sanitizedConnectionId && sanitizedConnectionId in SMITHERY_SERVERS) {
+      return getConnectionName(sanitizedConnectionId as SmitheryServerId);
+    }
+
     return toolName.startsWith("smithery") ? "Smithery" : undefined;
   }
 

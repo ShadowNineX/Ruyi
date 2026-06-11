@@ -234,12 +234,14 @@ export function isSmitheryConfigured(): boolean {
 export function getSmitheryNamespaceMcpUrl(): string {
   const { namespace } = requireSmitheryConfig();
   const url = new URL(encodeURIComponent(namespace), `${SMITHERY_MCP_BASE_URL}/`);
-  url.searchParams.set("mode", "smart");
+  if (env.SMITHERY_MCP_MODE === "smart") {
+    url.searchParams.set("mode", "smart");
+  }
   return url.toString();
 }
 
-export function getSmitheryMcpMode(): "smart" {
-  return "smart";
+export function getSmitheryMcpMode(): "direct" | "smart" {
+  return env.SMITHERY_MCP_MODE;
 }
 
 export async function createOrUpdateSmitheryConnection(

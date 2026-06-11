@@ -68,7 +68,7 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((value) => value?.trim() || undefined),
-  SMITHERY_MCP_MODE: z.enum(["direct", "smart"]).default("smart"),
+  SMITHERY_MCP_MODE: z.enum(["direct", "smart"]).default("direct"),
 
   // Debug toggles
   DEBUG_PROMPTS: z
