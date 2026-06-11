@@ -16,11 +16,6 @@ import {
 import { sanitizeMcpInputSchema } from "./schema";
 
 const MCP_CONNECT_TIMEOUT_MS = 30_000;
-const APPROVAL_FREE_SMART_TOOL_NAMES = new Set([
-  "get_toolbox_status",
-  "search_toolbox",
-]);
-const BLOCKED_SMART_TOOL_NAMES = ["remove_server"];
 
 type McpToolList = Awaited<ReturnType<MCPServer["listTools"]>>;
 type McpToolOutput = Awaited<ReturnType<MCPServer["callTool"]>>;
@@ -102,9 +97,7 @@ class ApprovalMcpServer implements MCPServer {
 
   async listTools(): Promise<McpToolList> {
     const tools = await this.inner.listTools();
-    return tools
-      .filter((tool) => !BLOCKED_SMART_TOOL_NAMES.includes(tool.name))
-      .map(sanitizeMcpTool);
+    return tools.map(sanitizeMcpTool);
   }
 
   invalidateToolsCache(): Promise<void> {
@@ -127,8 +120,6 @@ class ApprovalMcpServer implements MCPServer {
     toolName: string,
     args: Record<string, unknown> | null,
   ): Promise<boolean> {
-    if (APPROVAL_FREE_SMART_TOOL_NAMES.has(toolName)) return true;
-
     const context = toolContextManager.get();
     const channelId = context.channel?.id;
     if (!channelId) {
@@ -170,7 +161,7 @@ export async function connectMcpServersForRun(): Promise<MCPServer[]> {
       { error: error instanceof Error ? error.message : String(error) },
       "Failed to create Smithery service token",
     );
-    return [];
+    throw new Error("Failed to create Smithery service token");
   }
 
   const server = new MCPServerStreamableHttp({
@@ -178,9 +169,6 @@ export async function connectMcpServersForRun(): Promise<MCPServer[]> {
     url: serverUrl,
     cacheToolsList: true,
     timeout: MCP_CONNECT_TIMEOUT_MS,
-    toolFilter: {
-      blockedToolNames: BLOCKED_SMART_TOOL_NAMES,
-    },
     requestInit: {
       headers: {
         Authorization: `Bearer ${serviceToken}`,
@@ -213,7 +201,7 @@ export async function connectMcpServersForRun(): Promise<MCPServer[]> {
       },
       "Failed to connect Smithery MCP server",
     );
-    return [];
+    throw new Error("Failed to connect Smithery MCP server");
   }
 
 }

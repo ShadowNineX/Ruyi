@@ -12,6 +12,10 @@ import { SMITHERY_SERVERS } from "./smithery-catalog";
 
 const SMITHERY_API_BASE_URL = "https://api.smithery.ai";
 const SMITHERY_MCP_BASE_URL = "https://mcp.smithery.run";
+const SMITHERY_APP_METADATA = {
+  app: "ruyi-discord-bot",
+  scope: "global",
+} as const;
 const SERVICE_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 const ConnectionStatusSchema = z.looseObject({
@@ -119,6 +123,15 @@ function normalizeStatus(state: string): SmitheryConnectionStatus {
 
 function getConnectionId(serverId: SmitheryServerId): string {
   return serverId;
+}
+
+function getConnectionMetadata(
+  serverId: SmitheryServerId,
+): Record<string, string> {
+  return {
+    ...SMITHERY_APP_METADATA,
+    serverId,
+  };
 }
 
 function getApiUrl(path: string): string {
@@ -233,15 +246,7 @@ export function isSmitheryConfigured(): boolean {
 
 export function getSmitheryNamespaceMcpUrl(): string {
   const { namespace } = requireSmitheryConfig();
-  const url = new URL(encodeURIComponent(namespace), `${SMITHERY_MCP_BASE_URL}/`);
-  if (env.SMITHERY_MCP_MODE === "smart") {
-    url.searchParams.set("mode", "smart");
-  }
-  return url.toString();
-}
-
-export function getSmitheryMcpMode(): "direct" | "smart" {
-  return env.SMITHERY_MCP_MODE;
+  return new URL(encodeURIComponent(namespace), `${SMITHERY_MCP_BASE_URL}/`).toString();
 }
 
 export async function createOrUpdateSmitheryConnection(
@@ -263,10 +268,7 @@ export async function createOrUpdateSmitheryConnection(
         transport: "http",
         mcpUrl: server.mcpUrl,
         name: server.name,
-        metadata: {
-          app: "ruyi-discord-bot",
-          serverId,
-        },
+        metadata: getConnectionMetadata(serverId),
       }),
     },
   );
@@ -295,7 +297,7 @@ export async function refreshKnownSmitheryConnections(): Promise<void> {
   const connections = await getAllSmitheryConnections();
   for (const connection of connections) {
     try {
-      await refreshSmitheryConnection(connection.serverId);
+      await createOrUpdateSmitheryConnection(connection.serverId);
     } catch (error) {
       mcpLogger.warn(
         {
@@ -342,7 +344,8 @@ export async function createSmitheryServiceToken(): Promise<string> {
           namespaces: namespace,
           resources: "connections",
           operations: ["read", "execute"],
-          ttl: "1h",
+          metadata: SMITHERY_APP_METADATA,
+          ttl: "30m",
         },
       ],
     }),

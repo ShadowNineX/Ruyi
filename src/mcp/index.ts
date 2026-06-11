@@ -5,7 +5,7 @@ import {
 import { mcpLogger } from "../logger";
 import { SMITHERY_SERVERS } from "./smithery-catalog";
 import {
-  getSmitheryMcpMode,
+  getSmitheryNamespaceMcpUrl,
   isSmitheryConfigured,
   listSmitheryConnectionTools,
   refreshKnownSmitheryConnections,
@@ -67,7 +67,7 @@ export class MCPRegistry {
     mcpLogger.info(
       {
         configured: true,
-        mode: getSmitheryMcpMode(),
+        namespaceUrl: getSmitheryNamespaceMcpUrl(),
         connected: connectedCount,
         total: connections.length,
       },
