@@ -22,6 +22,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function hasObjectType(value: unknown): boolean {
+  if (value === "object") return true;
+  return Array.isArray(value) && value.includes("object");
+}
+
+function isObjectSchema(value: Record<string, unknown>): boolean {
+  return hasObjectType(value.type) || isRecord(value.properties);
+}
+
 function sanitizeMcpSchema(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sanitizeMcpSchema);
   if (!isRecord(value)) return value;
@@ -31,6 +40,11 @@ function sanitizeMcpSchema(value: unknown): unknown {
     if (key === "format") continue;
     sanitized[key] = sanitizeMcpSchema(nestedValue);
   }
+
+  if (isObjectSchema(sanitized)) {
+    sanitized.additionalProperties = false;
+  }
+
   return sanitized;
 }
 
