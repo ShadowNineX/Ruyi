@@ -14,7 +14,43 @@ import {
 import { formatError } from "../utils/types";
 
 const SmitheryServerIdSchema = z.enum(SMITHERY_SERVER_IDS);
-const JsonObjectSchema = z.record(z.string(), z.unknown());
+const ToolArgumentValueSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+]);
+const ToolArgumentEntrySchema = z.object({
+  name: z.string().min(1).describe("MCP argument name."),
+  value: ToolArgumentValueSchema.describe(
+    "String, number, boolean, or null argument value. Use this for ordinary values.",
+  ),
+  json_value: z
+    .string()
+    .nullable()
+    .describe(
+      "Optional JSON string for array or object values. Leave null for ordinary values.",
+    ),
+});
+
+type ToolArgumentEntry = z.infer<typeof ToolArgumentEntrySchema>;
+
+function parseJsonValue(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return JSON.parse(trimmed) as unknown;
+}
+
+function toolArgumentEntriesToRecord(
+  entries: ToolArgumentEntry[] | null,
+): Record<string, unknown> {
+  const record: Record<string, unknown> = {};
+  for (const entry of entries ?? []) {
+    record[entry.name] =
+      entry.json_value !== null ? parseJsonValue(entry.json_value) : entry.value;
+  }
+  return record;
+}
 
 function formatToolSummary(
   toolSummary: Awaited<ReturnType<typeof listSmitheryConnectionTools>>[number],
@@ -109,17 +145,21 @@ export const smitheryCallTool = tool({
       .string()
       .min(1)
       .describe("Exact MCP tool name from smithery_list_tools, without a connection prefix."),
-    tool_arguments: JsonObjectSchema
+    tool_arguments: z
+      .array(ToolArgumentEntrySchema)
       .nullable()
-      .describe("Object to pass as MCP tool arguments. Use {} when no arguments are needed."),
+      .describe(
+        "MCP tool arguments as name/value entries. Use [] or null when no arguments are needed.",
+      ),
   }),
   needsApproval: true,
   execute: async ({ server_id, tool_name, tool_arguments }) => {
     try {
+      const args = toolArgumentEntriesToRecord(tool_arguments);
       const result = await callSmitheryConnectionTool(
         server_id,
         tool_name,
-        tool_arguments ?? {},
+        args,
       );
 
       toolLogger.info(

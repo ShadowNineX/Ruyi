@@ -129,10 +129,48 @@ function formatReadableValue(value: unknown): string {
   return String(value);
 }
 
+function parseJsonArgumentValue(value: unknown): unknown {
+  if (typeof value !== "string" || !value.trim()) return null;
+
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+function getArgumentEntryName(entry: unknown): string | null {
+  if (!isRecord(entry)) return null;
+  return getStringField(entry, "name");
+}
+
+function getArgumentEntryValue(entry: unknown): unknown {
+  if (!isRecord(entry)) return null;
+  const jsonValue = entry.json_value;
+  return jsonValue !== null && jsonValue !== undefined
+    ? parseJsonArgumentValue(jsonValue)
+    : entry.value;
+}
+
+function argumentEntriesToRecord(entries: unknown): Record<string, unknown> | null {
+  if (!Array.isArray(entries)) return null;
+
+  const record: Record<string, unknown> = {};
+  for (const entry of entries) {
+    const name = getArgumentEntryName(entry);
+    if (!name) continue;
+    record[name] = getArgumentEntryValue(entry);
+  }
+  return record;
+}
+
 function getSmitheryToolArguments(
   approvalArgs: Record<string, unknown>,
 ): Record<string, unknown> {
-  const directArgs = approvalArgs.tool_arguments ?? approvalArgs.arguments;
+  const toolArgumentEntries = argumentEntriesToRecord(approvalArgs.tool_arguments);
+  if (toolArgumentEntries) return toolArgumentEntries;
+
+  const directArgs = approvalArgs.arguments;
   if (isRecord(directArgs)) return directArgs;
 
   const legacyJson = approvalArgs.arguments_json;
