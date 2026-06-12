@@ -47,7 +47,7 @@ function toolArgumentEntriesToRecord(
   const record: Record<string, unknown> = {};
   for (const entry of entries ?? []) {
     record[entry.name] =
-      entry.json_value !== null ? parseJsonValue(entry.json_value) : entry.value;
+      entry.json_value === null ? entry.value : parseJsonValue(entry.json_value);
   }
   return record;
 }
@@ -72,7 +72,7 @@ export const smitheryListToolsTool = tool({
     "List MCP tools available through Smithery Connect. Use this before calling a Smithery tool when you need the exact tool name or argument schema.",
   parameters: z.object({
     server_id: SmitheryServerIdSchema.nullable().describe(
-      "Optional Smithery service to inspect. Use github for GitHub, brave for web search, youtube for YouTube.",
+      "Optional Smithery service to inspect. Use youtube for YouTube.",
     ),
     include_input_schema: z
       .boolean()
@@ -139,7 +139,7 @@ export const smitheryCallTool = tool({
     "Call one MCP tool through Smithery Connect. Use smithery_list_tools first if you do not know the exact tool name or argument object.",
   parameters: z.object({
     server_id: SmitheryServerIdSchema.describe(
-      "Smithery service to call: github, brave, or youtube.",
+      "Smithery service to call: youtube.",
     ),
     tool_name: z
       .string()

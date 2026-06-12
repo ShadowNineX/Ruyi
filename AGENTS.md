@@ -9,7 +9,7 @@ Ruyi is a Discord bot (Nine Sols themed AI companion) built on Bun + TypeScript 
 - Type-check: `bun run typecheck` (or `bunx tsc --noEmit`)
 - Build: `bun run build` emits `dist/main.js` via `bun build`
 - Start: `bun run start` runs the compiled `dist/main.js` artifact
-- Required env: `DISCORD_TOKEN`, `OPENAI_API_KEY`. Optional: `MONGO_URI`, `MODEL_NAME` (default `gpt-5.4-mini`), `VISION_MODEL_NAME` (defaults to `MODEL_NAME` for image understanding), `LOG_LEVEL`, `LASTFM_API_KEY`, `OPENAI_ADMIN_KEY` (`/credits` organization costs), `SMITHERY_API_KEY`, `SMITHERY_NAMESPACE`, `DEBUG_PROMPTS`.
+- Required env: `DISCORD_TOKEN`, `OPENAI_API_KEY`. Optional: `MONGO_URI`, `MODEL_NAME` (default `gpt-5.4-mini`), `VISION_MODEL_NAME` (defaults to `MODEL_NAME` for image understanding), `LOG_LEVEL`, `LASTFM_API_KEY`, `OPENAI_ADMIN_KEY` (`/credits` organization costs), `GITHUB_PERSONAL_ACCESS_TOKEN` (official GitHub MCP server), `GITHUB_MCP_URL` (defaults to GitHub's hosted MCP endpoint), `TAVILY_API_KEY`, `SMITHERY_API_KEY`, `SMITHERY_NAMESPACE`, `DEBUG_PROMPTS`.
 - All env access goes through [src/env.ts](src/env.ts) (zod-validated, fail-fast at startup). Do **not** read `Bun.env` directly.
 
 ## Architecture (boot → reply)
@@ -33,7 +33,8 @@ Ruyi is a Discord bot (Nine Sols themed AI companion) built on Bun + TypeScript 
 - All tools live in [src/tools/](src/tools/) and are exported via the `allTools` array in [src/tools/index.ts](src/tools/index.ts).
 - Tools that produce their own Discord output (embed, image) must be added to `selfRespondingToolNames` in the same file so an empty assistant reply is non-fatal.
 - Pattern: build directly with `tool({ name, description, parameters: z.object({...}), execute })` from `@openai/agents`. Discord context (channel/guild/message/referencedMessage) flows through `runWithToolContext()` + `toolContextManager.get()` in [src/utils/types.ts](src/utils/types.ts) — [src/bot.ts](src/bot.ts) wraps each chat turn in `runWithToolContext(toolCtx, () => chatService.chat(...))` so tools see the active context via `AsyncLocalStorage`. Tools must guard against null channel/guild and return structured error objects (not throw). Use the SDK's `needsApproval` option for sensitive tools.
-- MCP-backed tools live in [src/mcp/](src/mcp/) and [src/tools/smithery.ts](src/tools/smithery.ts). Smithery Connect is configured with `SMITHERY_API_KEY` + `SMITHERY_NAMESPACE`; `/smithery` creates hosted Smithery setup links and stores connection IDs/statuses. Runtime uses the official `@smithery/api` SDK for connection management and `@smithery/api/mcp` with the MCP TypeScript SDK for tool execution. Do not pass Smithery's dynamic upstream tool schemas directly to the OpenAI Agents SDK; expose stable local tools (`smithery_list_tools`, `smithery_call_tool`) instead.
+- MCP-backed tools live in [src/mcp/](src/mcp/) and [src/tools/](src/tools/). GitHub uses GitHub's official `github/github-mcp-server` as a hosted MCP server tool configured by `GITHUB_PERSONAL_ACCESS_TOKEN` and `GITHUB_MCP_URL`. Smithery Connect is still used for non-GitHub hosted MCP services, configured with `SMITHERY_API_KEY` + `SMITHERY_NAMESPACE`; `/smithery` creates hosted Smithery setup links and stores connection IDs/statuses. Do not route GitHub through Smithery.
+- Web search is exposed as one local `web_search` tool. It uses the Mongo-backed search provider setting first for answer-mode queries, then the other built-in provider when the first one errors or produces weak/no sources. Research-mode queries go directly to Tavily first. Change the preferred provider from Discord with `/search-provider`.
 - Memory tools enforce per-user scope by Discord username, truncate values to `MEMORY_VALUE_MAX_LEN`, and evict past `USER_MEMORY_CAP` / global cap. See [src/tools/memory.ts](src/tools/memory.ts).
 
 ## Persistence
@@ -46,7 +47,7 @@ Ruyi is a Discord bot (Nine Sols themed AI companion) built on Bun + TypeScript 
 ## Commands
 
 - Message commands use a Mongo-cached prefix from [src/config.ts](src/config.ts). Currently only `!ping` in [src/commands/](src/commands/).
-- Slash commands registered at startup from [src/slash-commands/](src/slash-commands/): `/prefix`, `/credits`, `/smithery`, `/memories`. Add new ones to the `slashCommands` array and the `handleSlashCommand` switch in [src/slash-commands/index.ts](src/slash-commands/index.ts).
+- Slash commands registered at startup from [src/slash-commands/](src/slash-commands/): `/prefix`, `/search-provider`, `/credits`, `/smithery`, `/memories`. Add new ones to the `slashCommands` array and the `handleSlashCommand` switch in [src/slash-commands/index.ts](src/slash-commands/index.ts).
 
 ## Logging & error handling
 
@@ -62,7 +63,7 @@ Ruyi speaks with authentic Nine Sols cadence (formal, deferential — "your humb
 ## Conventions
 
 - TypeScript strict; **no `any`**. Tools are typed via `tool()` inference from `@openai/agents`.
-- When adding a tool: append to `allTools`, mark self-responding if applicable, and ensure the tool only accesses Discord context via `toolContextManager.get()`.
+- When adding a tool: append to `allTools`, mark self-responding/external-service if applicable, and ensure the tool only accesses Discord context via `toolContextManager.get()`.
 - Keep cognitive complexity under 15 per function. Extract handlers from large switch statements (see [src/tools/role.ts](src/tools/role.ts), [src/tools/memory.ts](src/tools/memory.ts)).
 - Mongo writes must be bounded (slices, caps) — never unbounded growth.
 

@@ -1,7 +1,7 @@
 import mongoose, { Schema, type Document } from "mongoose";
 
 /** Supported Smithery server IDs. */
-export type SmitheryServerId = "brave" | "github" | "youtube";
+export type SmitheryServerId = "youtube";
 
 export type SmitheryConnectionStatus =
   | "connected"

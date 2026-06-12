@@ -3,9 +3,16 @@ import { prefixCommand, handlePrefixCommand } from "./prefix";
 import { smitheryCommand, handleSmitheryCommand } from "./smithery";
 import { memoriesCommand, handleMemoriesCommand } from "./memories";
 import { creditsCommand, handleCreditsCommand } from "./credits";
+import {
+  searchProviderCommand,
+  handleSearchProviderCommand,
+  handleSearchProviderSelect,
+  isSearchProviderSelect,
+} from "./search-provider";
 
 export const slashCommands = [
   prefixCommand,
+  searchProviderCommand,
   creditsCommand,
   smitheryCommand,
   memoriesCommand,
@@ -17,12 +24,20 @@ export {
   handleSmitheryCheckButton,
 } from "./smithery";
 
+export {
+  handleSearchProviderSelect,
+  isSearchProviderSelect,
+} from "./search-provider";
+
 export async function handleSlashCommand(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
   switch (interaction.commandName) {
     case "prefix":
       await handlePrefixCommand(interaction);
+      break;
+    case "search-provider":
+      await handleSearchProviderCommand(interaction);
       break;
     case "credits":
       await handleCreditsCommand(interaction);

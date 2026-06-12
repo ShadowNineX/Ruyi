@@ -48,8 +48,8 @@ const envSchema = z.object({
     .transform((value) => value?.trim() || undefined)
     .refine(
       (value) =>
-        !value ||
-        !value.toLowerCase().includes(NON_OPENAI_MODEL_PROVIDER_FRAGMENT),
+        value?.toLowerCase().includes(NON_OPENAI_MODEL_PROVIDER_FRAGMENT) !==
+        true,
       "VISION_MODEL_NAME must be a direct OpenAI model id",
     ),
   MONGO_URI: z.string().default("mongodb://localhost:27017/ruyi"),
@@ -60,6 +60,17 @@ const envSchema = z.object({
   // Optional (no default)
   LASTFM_API_KEY: z.string().optional(),
   OPENAI_ADMIN_KEY: z.string().optional(),
+  GITHUB_PERSONAL_ACCESS_TOKEN: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
+  GITHUB_MCP_URL: z
+    .url("GITHUB_MCP_URL must be a valid URL")
+    .default("https://api.githubcopilot.com/mcp/"),
+  TAVILY_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
   SMITHERY_API_KEY: z
     .string()
     .optional()

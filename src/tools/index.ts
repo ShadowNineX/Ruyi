@@ -13,6 +13,7 @@ export {
 } from "./message";
 export { embedTool } from "./embed";
 export { fetchUrlTool } from "./fetch";
+export { webSearchTool } from "./web-search";
 export { generateImageTool } from "./image";
 export { describeImageTool } from "./vision";
 export {
@@ -40,6 +41,7 @@ import {
 } from "./message";
 import { embedTool } from "./embed";
 import { fetchUrlTool } from "./fetch";
+import { webSearchTool } from "./web-search";
 import { generateImageTool } from "./image";
 import { describeImageTool } from "./vision";
 import {
@@ -51,7 +53,8 @@ import {
 import { auditLogTool } from "./audit";
 import { lastfmTool } from "./lastfm";
 import { smitheryListToolsTool, smitheryCallTool } from "./smithery";
-import type { Tool } from "@openai/agents";
+import { hostedMcpTool, type Tool } from "@openai/agents";
+import { env } from "../env";
 
 interface ToolRegistration {
   readonly tool: Tool;
@@ -63,7 +66,20 @@ interface ToolRegistration {
   readonly externalService?: boolean;
 }
 
-const toolRegistry: readonly ToolRegistration[] = [
+const githubMcpTool: Tool | null = env.GITHUB_PERSONAL_ACCESS_TOKEN
+  ? hostedMcpTool({
+      serverLabel: "github",
+      serverUrl: env.GITHUB_MCP_URL,
+      headers: {
+        Authorization: `Bearer ${env.GITHUB_PERSONAL_ACCESS_TOKEN}`,
+      },
+      requireApproval: "always",
+      serverDescription:
+        "GitHub's official MCP server for repositories, code, issues, pull requests, workflows, notifications, and related GitHub operations.",
+    })
+  : null;
+
+const baseToolRegistry: readonly ToolRegistration[] = [
   { tool: calculatorTool },
   { tool: channelInfoTool },
   { tool: serverInfoTool },
@@ -76,6 +92,7 @@ const toolRegistry: readonly ToolRegistration[] = [
   { tool: editBotMessageTool, producesDiscordOutput: true },
   { tool: embedTool, producesDiscordOutput: true },
   { tool: fetchUrlTool },
+  { tool: webSearchTool, externalService: true },
   { tool: generateImageTool, producesDiscordOutput: true },
   { tool: describeImageTool },
   { tool: memoryStoreTool },
@@ -87,6 +104,16 @@ const toolRegistry: readonly ToolRegistration[] = [
   { tool: smitheryListToolsTool, externalService: true },
   { tool: smitheryCallTool, externalService: true },
 ];
+
+function buildToolRegistry(): readonly ToolRegistration[] {
+  if (!githubMcpTool) return baseToolRegistry;
+  return [
+    ...baseToolRegistry,
+    { tool: githubMcpTool, externalService: true },
+  ];
+}
+
+const toolRegistry = buildToolRegistry();
 
 // Export all tools as an array for use with the OpenAI Agents runtime.
 export const allTools: readonly Tool[] = toolRegistry.map(

@@ -37,7 +37,7 @@ import {
 
 export const smitheryCommand = new SlashCommandBuilder()
   .setName("smithery")
-  .setDescription("Authorize Smithery MCP servers (Brave, GitHub, YouTube)");
+  .setDescription("Authorize Smithery MCP servers (YouTube)");
 
 export async function handleSmitheryCommand(
   interaction: ChatInputCommandInteraction,
@@ -256,7 +256,7 @@ async function showConnectionState(
           .setTitle(`${serverInfo.emoji} ${serverInfo.name} Connected`)
           .setDescription(
             `**${serverInfo.name}** is connected through Smithery.\n\n` +
-              getPermissionHint(serverId),
+              "Smithery now owns the downstream authorization for this service.",
           )
           .setColor(0x00ff00),
         buildSmitheryManagerEmbed(
@@ -342,15 +342,4 @@ function buildSmitheryErrorEmbed(title: string, error: unknown): EmbedBuilder {
     .setTitle(title)
     .setDescription(error instanceof Error ? error.message : "Unknown error")
     .setColor(0xff0000);
-}
-
-function getPermissionHint(serverId: SmitheryServerId): string {
-  if (serverId !== "github") {
-    return "Smithery now owns the downstream authorization for this service.";
-  }
-
-  return (
-    "GitHub repository access and write permissions are managed from GitHub's Installed GitHub Apps settings. " +
-    "For issue comments, the GitHub integration needs Issues: write or Pull requests: write on the target repository."
-  );
 }

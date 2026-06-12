@@ -38,8 +38,6 @@ const DENY_ONCE_RESULT: PermissionResult = {
   decision: "deny_once",
 };
 const SMITHERY_SERVICE_NAMES: Record<string, string> = {
-  brave: "Brave Search",
-  github: "GitHub",
   youtube: "YouTube",
 };
 

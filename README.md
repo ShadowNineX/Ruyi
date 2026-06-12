@@ -15,12 +15,35 @@ bun run start
 
 For local development, use `bun run dev`.
 
+## Web Search
+
+Ruyi exposes one `web_search` tool. Default/current-info questions use the
+Discord-selected primary provider first, then the other provider as fallback.
+Source-heavy research queries use Tavily directly.
+
+```bash
+TAVILY_API_KEY=tvly-your_tavily_api_key
+```
+
+Use `/search-provider` in Discord to choose OpenAI or Tavily as the primary
+answer-mode search provider.
+
 ## Smithery MCP
 
 Set `SMITHERY_API_KEY` and `SMITHERY_NAMESPACE`, restart the bot, then run
 `/smithery` in Discord. The command creates Smithery hosted setup links for
-GitHub and other MCP services, so you should not need to paste OAuth codes into
-Discord.
+non-GitHub MCP services, so you should not need to paste OAuth codes into
+Discord. GitHub uses the official `github/github-mcp-server` directly instead
+of Smithery.
+
+## GitHub MCP
+
+Ruyi attaches GitHub's hosted MCP server directly through the OpenAI Agents SDK:
+
+```bash
+GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_your_token
+GITHUB_MCP_URL=https://api.githubcopilot.com/mcp/
+```
 
 Ruyi uses the official `@smithery/api` SDK for connection management and
 `@smithery/api/mcp` with the MCP TypeScript SDK for tool execution. The model

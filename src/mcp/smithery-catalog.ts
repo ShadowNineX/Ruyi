@@ -1,8 +1,6 @@
 import type { SmitheryServerId } from "../db/models";
 
 export const SMITHERY_SERVER_IDS = [
-  "brave",
-  "github",
   "youtube",
 ] as const satisfies readonly SmitheryServerId[];
 
@@ -14,18 +12,6 @@ export interface SmitheryServerInfo {
 }
 
 export const SMITHERY_SERVERS: Record<SmitheryServerId, SmitheryServerInfo> = {
-  brave: {
-    name: "Brave Search",
-    emoji: "🦁",
-    description: "Web, news, image, and local search",
-    mcpUrl: "https://server.smithery.ai/brave",
-  },
-  github: {
-    name: "GitHub",
-    emoji: "🐙",
-    description: "Repositories, issues, pull requests, and code",
-    mcpUrl: "https://github.run.tools",
-  },
   youtube: {
     name: "YouTube",
     emoji: "📺",

@@ -90,7 +90,7 @@ export function buildSmitheryManagerRows(
 export function buildAuthorizationDescription(authUrl: string): string {
   const description =
     `**Step 1:** Open [Smithery setup](${authUrl})\n` +
-    "**Step 2:** Finish the GitHub/Smithery permission screen\n" +
+    "**Step 2:** Finish the Smithery permission screen\n" +
     "**Step 3:** Come back here and click Check Status";
 
   if (description.length <= DISCORD_EMBED_DESCRIPTION_MAX_LENGTH) {
@@ -99,7 +99,7 @@ export function buildAuthorizationDescription(authUrl: string): string {
 
   return (
     "**Step 1:** Open the Smithery setup URL from the bot logs\n" +
-    "**Step 2:** Finish the GitHub/Smithery permission screen\n" +
+    "**Step 2:** Finish the Smithery permission screen\n" +
     "**Step 3:** Come back here and click Check Status"
   );
 }
