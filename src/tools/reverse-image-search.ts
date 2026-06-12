@@ -257,7 +257,7 @@ function buildFollowUpQueries(
     queries.add('"Furbooru" "artist:"');
   }
 
-  return [...queries].slice(0, 2);
+  return [...queries].slice(0, 1);
 }
 
 function buildNextToolCalls(
@@ -545,11 +545,11 @@ export const reverseImageSearchTool = tool({
         should_continue_with_web_search:
           searchMode === "source" || searchMode === "art",
         follow_up_budget: {
-          web_search: 2,
+          web_search: 1,
           fetch_url: 1,
           describe_image: 1,
         },
-        note: "Provider pages are interactive and may show visual/exact matches the bot cannot directly scrape. For source/origin requests, use at most the listed follow-up budget: no more than two web_search calls, one fetch_url call, and one describe_image call. If that does not confirm the source, stop searching and include manual_reverse_search_markdown in the final answer so the user can open Google Lens/Bing/Yandex/TinEye/SauceNAO directly.",
+        note: "Provider pages are interactive and may show visual/exact matches the bot cannot directly scrape. For source/origin requests, use at most the listed follow-up budget: no more than one web_search call, one fetch_url call, and one describe_image call if a visual description would materially help. If describe_image fails because OpenAI cannot download the image URL, that URL is poisoned for this turn and must not be retried; use a different already-available image URL only if describe_image says the budget was refunded. If the follow-up budget does not confirm the source, stop searching and include manual_reverse_search_markdown in the final answer so the user can open Google Lens/Bing/Yandex/TinEye/SauceNAO directly.",
       };
     } catch (error) {
       const errorMessage = formatError(error);

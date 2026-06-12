@@ -31,6 +31,16 @@ function getVisionModel(): string {
   return configManager.getVisionModel();
 }
 
+function isImageDownloadFailure(errorMessage: string): boolean {
+  const normalized = errorMessage.toLowerCase();
+  return (
+    normalized.includes("downloading file") ||
+    normalized.includes("upstream status code") ||
+    normalized.includes("could not download") ||
+    normalized.includes("failed to download")
+  );
+}
+
 export const describeImageTool = tool({
   name: "describe_image",
   description:
@@ -57,6 +67,31 @@ export const describeImageTool = tool({
   timeoutMs: 60_000,
   timeoutBehavior: "error_as_result",
   execute: async ({ image_url, question, detail }) => {
+    const normalizedUrl = normalizeImageUrl(image_url);
+    const previousFailure =
+      toolContextManager.getImageDescriptionFailure(normalizedUrl);
+    if (previousFailure) {
+      return {
+        error: "Image URL already failed inspection this turn",
+        details: previousFailure,
+        retryable: false,
+        final_answer_required:
+          toolContextManager.imageDescriptionFailureLimitExceeded(),
+        instruction:
+          "Do not call describe_image again for this URL in this turn. Use a different image URL only if one is already available; otherwise continue with other evidence, or tell the user the image URL could not be inspected directly.",
+      };
+    }
+
+    if (toolContextManager.imageDescriptionFailureLimitExceeded()) {
+      return {
+        error: "Image inspection download failure limit exhausted",
+        retryable: false,
+        final_answer_required: true,
+        instruction:
+          "Too many image URLs failed inspection this turn. Stop calling describe_image and answer using the evidence already gathered.",
+      };
+    }
+
     const budgetDecision = toolContextManager.consumeToolCall("describe_image");
     if (!budgetDecision.allowed) {
       return toolContextManager.budgetDeniedResult(budgetDecision);
@@ -71,7 +106,6 @@ export const describeImageTool = tool({
       : DEFAULT_MAX_OUTPUT_TOKENS;
 
     try {
-      const normalizedUrl = normalizeImageUrl(image_url);
       const prompt = question?.trim() || DEFAULT_IMAGE_QUESTION;
 
       toolLogger.info(
@@ -115,11 +149,39 @@ export const describeImageTool = tool({
       };
     } catch (error) {
       const errorMessage = formatError(error);
+      const isDownloadFailure = isImageDownloadFailure(errorMessage);
+      const failureCount = toolContextManager.rememberImageDescriptionFailure(
+        normalizedUrl,
+        errorMessage,
+      );
+      if (isDownloadFailure) {
+        toolContextManager.refundToolCall("describe_image");
+      }
+
       toolLogger.error(
-        { error: errorMessage, model, detail: effectiveDetail },
+        {
+          error: errorMessage,
+          model,
+          detail: effectiveDetail,
+          imageUrlLength: normalizedUrl.length,
+          budgetRefunded: isDownloadFailure,
+          failureCount,
+        },
         "Image description failed",
       );
-      return { error: "Failed to inspect image", details: errorMessage };
+      return {
+        error: "Failed to inspect image",
+        details: errorMessage,
+        retryable: false,
+        budget_refunded: isDownloadFailure,
+        final_answer_required:
+          toolContextManager.imageDescriptionFailureLimitExceeded() ||
+          (reverseImageWorkflow && !isDownloadFailure),
+        instruction:
+          isDownloadFailure
+            ? "Do not retry describe_image for this same image URL in this turn. This download failure did not consume the useful describe_image budget; use a different image URL only if one is already available."
+            : "Do not retry describe_image for this same image URL in this turn. Continue with other evidence or tell the user the image could not be inspected directly.",
+      };
     }
   },
 });

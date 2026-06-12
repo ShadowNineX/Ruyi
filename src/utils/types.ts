@@ -13,6 +13,7 @@ type ToolCallCounts = Partial<Record<ReverseImageBudgetedTool, number>>;
 interface ToolTurnBudget {
   reverseImageWorkflowActive: boolean;
   calls: ToolCallCounts;
+  failedImageDescriptions: Record<string, string>;
 }
 
 export interface ToolContext {
@@ -49,10 +50,12 @@ const toolContextStore = new AsyncLocalStorage<ToolContext>();
 
 const REVERSE_IMAGE_WORKFLOW_LIMITS = {
   reverse_image_search: 1,
-  web_search: 2,
+  web_search: 1,
   fetch_url: 1,
   describe_image: 1,
 } as const satisfies Record<ReverseImageBudgetedTool, number>;
+
+const IMAGE_DESCRIPTION_DOWNLOAD_FAILURE_LIMIT = 2;
 
 const REVERSE_IMAGE_BUDGETED_TOOLS = new Set<string>(
   Object.keys(REVERSE_IMAGE_WORKFLOW_LIMITS),
@@ -62,6 +65,7 @@ function createToolTurnBudget(): ToolTurnBudget {
   return {
     reverseImageWorkflowActive: false,
     calls: {},
+    failedImageDescriptions: {},
   };
 }
 
@@ -133,8 +137,39 @@ class ToolContextFacade {
     return { allowed: true };
   }
 
+  refundToolCall(toolName: string): void {
+    if (!isReverseImageBudgetedTool(toolName)) return;
+
+    const budget = this.get().toolBudget;
+    if (!budget) return;
+
+    const used = budget.calls[toolName] ?? 0;
+    if (used <= 0) return;
+    budget.calls[toolName] = used - 1;
+  }
+
   isReverseImageWorkflowActive(): boolean {
     return this.get().toolBudget?.reverseImageWorkflowActive === true;
+  }
+
+  getImageDescriptionFailure(imageUrl: string): string | null {
+    return this.get().toolBudget?.failedImageDescriptions[imageUrl] ?? null;
+  }
+
+  rememberImageDescriptionFailure(imageUrl: string, error: string): number {
+    const budget = this.get().toolBudget;
+    if (!budget) return 0;
+    budget.failedImageDescriptions[imageUrl] = error;
+    return Object.keys(budget.failedImageDescriptions).length;
+  }
+
+  imageDescriptionFailureLimitExceeded(): boolean {
+    const budget = this.get().toolBudget;
+    if (!budget) return false;
+    return (
+      Object.keys(budget.failedImageDescriptions).length >=
+      IMAGE_DESCRIPTION_DOWNLOAD_FAILURE_LIMIT
+    );
   }
 
   budgetDeniedResult(decision: Exclude<ToolBudgetDecision, { allowed: true }>) {
