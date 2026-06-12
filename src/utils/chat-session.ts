@@ -1,9 +1,6 @@
 import { EmbedBuilder, type Message, type TextBasedChannel } from "discord.js";
 import { botLogger } from "../logger";
-import {
-  CHAT_STATUS_UPDATE_INTERVAL_MS,
-  CHAT_TYPING_INTERVAL_MS,
-} from "../constants";
+import { CHAT_TYPING_INTERVAL_MS } from "../constants";
 
 export type SessionStatus =
   | "thinking"
@@ -28,9 +25,10 @@ interface StatusState {
 }
 
 function getStatusColor(status: SessionStatus): number {
-  if (status === "complete") return 0x00ff00;
+  if (status === "tool") return 0x5865f2;
+  if (status === "approval") return 0xffaa00;
   if (status === "error") return 0xff0000;
-  return 0xffaa00;
+  return 0x2b2d31;
 }
 
 function formatElapsedTime(seconds: number): string {
@@ -47,55 +45,49 @@ function formatElapsedTime(seconds: number): string {
   return secs > 0 ? `${minutes}m ${secs}s` : `${minutes}m`;
 }
 
-function buildStatusEmbed(state: StatusState): EmbedBuilder {
+function formatToolList(toolCounts: Map<string, number>): string | null {
+  if (toolCounts.size === 0) return null;
+
+  return [...toolCounts.entries()]
+    .map(([tool, count]) =>
+      count > 1 ? `\`${tool}\` x${count}` : `\`${tool}\``,
+    )
+    .join("  ");
+}
+
+function buildToolStatusEmbed(state: StatusState): EmbedBuilder {
   const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
+  const currentTool = state.currentTool ?? "tool";
+  const title =
+    state.status === "approval" ? "Permission Needed" : "Using Tool";
+  const description =
+    state.status === "approval"
+      ? "Waiting for your choice in the permission prompt."
+      : `\`${currentTool}\``;
 
-  let statusText: string;
-  switch (state.status) {
-    case "thinking":
-      statusText = "Preparing response...";
-      break;
-    case "generating":
-      statusText = "Writing response...";
-      break;
-    case "tool":
-      statusText = `Running: \`${state.currentTool}\``;
-      break;
-    case "approval":
-      statusText = "Awaiting approval...";
-      break;
-    case "complete":
-      statusText = "Complete";
-      break;
-    case "error":
-      statusText = "Error";
-      break;
-  }
-
-  let description = `**${statusText}** • ${formatElapsedTime(elapsed)}`;
-  if (state.toolCounts.size > 0) {
-    const toolList = [...state.toolCounts.entries()]
-      .map(([tool, count]) =>
-        count > 1 ? `\`${tool}\` ×${count}` : `\`${tool}\``,
-      )
-      .join(" ");
-    description += `\n${toolList}`;
-  }
-
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setColor(getStatusColor(state.status))
-    .setDescription(description);
+    .setTitle(title)
+    .setDescription(description)
+    .setFooter({ text: `Active for ${formatElapsedTime(elapsed)}` });
+
+  const toolList = formatToolList(state.toolCounts);
+  if (toolList) {
+    embed.addFields({ name: "Used This Turn", value: toolList });
+  }
+
+  return embed;
 }
 
 /**
- * Manages the state of a chat session including typing indicators,
- * status embeds, and tool execution tracking.
+ * Manages a chat session's typing indicator and temporary tool-call embed.
  */
 export class ChatSession {
   private readonly state: StatusState;
   private typingInterval: ReturnType<typeof setInterval> | null = null;
-  private updateInterval: ReturnType<typeof setInterval> | null = null;
   private statusMessage: Message | null = null;
+  private statusMessagePromise: Promise<Message | null> | null = null;
+  private replyTarget: Message | null = null;
   private hasNotifiedStatus = false;
   private closed = false;
   private readonly channel: TextBasedChannel;
@@ -165,15 +157,35 @@ export class ChatSession {
     }
   }
 
-  /** Create and send the status embed as a reply */
-  async sendStatusEmbed(replyTo: Message): Promise<void> {
-    if (this.closed) return;
+  /** Set the message that temporary tool-call embeds should reply to. */
+  setReplyTarget(replyTo: Message): void {
+    this.replyTarget = replyTo;
+  }
 
-    let statusMessage: Message;
+  private shouldShowToolEmbed(): boolean {
+    return this.state.status === "tool";
+  }
+
+  private async createToolEmbed(): Promise<Message | null> {
+    if (this.closed) return null;
+    if (!this.replyTarget) return null;
+    if (!this.shouldShowToolEmbed()) return null;
+
+    const replyTo = this.replyTarget;
     try {
-      statusMessage = await replyTo.reply({
-        embeds: [buildStatusEmbed(this.state)],
+      const statusMessage = await replyTo.reply({
+        embeds: [buildToolStatusEmbed(this.state)],
       });
+      if (this.closed || !this.shouldShowToolEmbed()) {
+        await statusMessage.delete().catch((error: unknown) => {
+          botLogger.debug(
+            { error: (error as Error)?.message },
+            "Late tool embed delete failed",
+          );
+        });
+        return null;
+      }
+      return statusMessage;
     } catch (error) {
       botLogger.debug(
         {
@@ -181,77 +193,80 @@ export class ChatSession {
           channelId: replyTo.channel.id,
           messageId: replyTo.id,
         },
-        "Status embed send failed",
+        "Tool embed send failed",
       );
-      return;
+      return null;
     }
-
-    if (this.closed) {
-      await statusMessage.delete().catch((error: unknown) => {
-        botLogger.debug(
-          { error: (error as Error)?.message },
-          "Late status embed delete failed",
-        );
-      });
-      return;
-    }
-
-    this.statusMessage = statusMessage;
-    this.updateInterval = setInterval(() => {
-      if (this.closed) return;
-      if (this.state.status !== "complete" && this.state.status !== "error") {
-        this.updateEmbed();
-      }
-    }, CHAT_STATUS_UPDATE_INTERVAL_MS);
   }
 
-  /** Update the status embed */
-  private async updateEmbed(): Promise<void> {
-    if (this.closed) return;
-    if (!this.statusMessage) return;
+  private async ensureToolEmbed(): Promise<void> {
+    if (this.statusMessage || this.statusMessagePromise) return;
+
+    this.statusMessagePromise = this.createToolEmbed();
     try {
-      await this.statusMessage.edit({ embeds: [buildStatusEmbed(this.state)] });
+      this.statusMessage = await this.statusMessagePromise;
+    } finally {
+      this.statusMessagePromise = null;
+    }
+  }
+
+  /** Update the temporary tool-call embed. */
+  private async updateToolEmbed(): Promise<void> {
+    if (this.closed) return;
+    if (!this.shouldShowToolEmbed()) return;
+    if (!this.statusMessage) {
+      await this.ensureToolEmbed();
+      return;
+    }
+
+    try {
+      await this.statusMessage.edit({
+        embeds: [buildToolStatusEmbed(this.state)],
+      });
     } catch (error) {
       botLogger.debug(
         { error: (error as Error)?.message },
-        "Status embed update failed",
+        "Tool embed update failed",
       );
     }
   }
 
-  /** Delete the status embed */
+  private async deleteToolEmbed(): Promise<void> {
+    const pendingMessage = this.statusMessagePromise
+      ? await this.statusMessagePromise
+      : null;
+    const message = this.statusMessage ?? pendingMessage;
+    this.statusMessage = null;
+
+    if (!message) return;
+
+    try {
+      await message.delete();
+    } catch (error) {
+      botLogger.debug(
+        { error: (error as Error)?.message },
+        "Tool embed delete failed",
+      );
+    }
+  }
+
+  /** Delete the temporary tool-call embed and stop typing. */
   async deleteStatusEmbed(): Promise<void> {
     this.closed = true;
     this.stopTyping();
-
-    if (this.updateInterval) {
-      clearInterval(this.updateInterval);
-      this.updateInterval = null;
-    }
-    if (this.statusMessage) {
-      try {
-        await this.statusMessage.delete();
-      } catch (error) {
-        botLogger.debug(
-          { error: (error as Error)?.message },
-          "Status embed delete failed",
-        );
-      }
-      this.statusMessage = null;
-    }
+    await this.deleteToolEmbed();
   }
 
   /** Called when the AI is preparing a response, but not streaming text yet. */
   onThinking(): void {
     this.setStatus("thinking");
-    this.stopTyping();
+    this.startTyping();
   }
 
   /** Called when the SDK is actively streaming assistant text. */
   onTextGenerationStart(): void {
     this.setStatus("generating");
     this.startTyping();
-    this.updateEmbed();
   }
 
   /** Called when the current assistant text stream finishes. */
@@ -263,7 +278,7 @@ export class ChatSession {
   onToolStart(toolName: string, _args: Record<string, unknown>): void {
     this.setStatus("tool", toolName);
     this.stopTyping();
-    this.updateEmbed();
+    void this.updateToolEmbed();
   }
 
   /** Called when a tool finishes executing */
@@ -274,13 +289,13 @@ export class ChatSession {
       toolName,
       (this.state.toolCounts.get(toolName) ?? 0) + 1,
     );
+    void this.deleteToolEmbed();
   }
 
   /** Called when the SDK pauses for Discord-side tool approval. */
   onApprovalPending(): void {
     this.setStatus("approval");
     this.stopTyping();
-    this.updateEmbed();
   }
 
   /** Called when generation is complete */
@@ -299,10 +314,6 @@ export class ChatSession {
   cleanup(): void {
     this.closed = true;
     this.stopTyping();
-    if (this.updateInterval) {
-      clearInterval(this.updateInterval);
-      this.updateInterval = null;
-    }
   }
 
   /** Check if a self-responding tool was used */

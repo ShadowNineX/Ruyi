@@ -102,9 +102,15 @@ export class RuyiBot {
     username: string,
     snapshot: SessionStatusSnapshot,
   ): void {
+    const status = snapshot.status;
+    if (status === "complete") {
+      this.setDefaultPresence();
+      return;
+    }
+
     const toolName = snapshot.currentTool ?? "a tool";
     const activities: Record<
-      SessionStatusSnapshot["status"],
+      Exclude<SessionStatusSnapshot["status"], "complete">,
       PresenceActivity
     > = {
       thinking: {
@@ -123,17 +129,13 @@ export class RuyiBot {
         name: `approval from ${username}`,
         type: ActivityType.Watching,
       },
-      complete: {
-        name: `the finished reply for ${username}`,
-        type: ActivityType.Watching,
-      },
       error: {
         name: "for recovery",
         type: ActivityType.Watching,
       },
     };
 
-    this.setActivityPresence(activities[snapshot.status]);
+    this.setActivityPresence(activities[status]);
   }
 
   private clearPresenceResetTimer(presenceSession?: symbol): void {
@@ -287,8 +289,7 @@ export class RuyiBot {
       "Fetched message context",
     );
 
-    await session.sendStatusEmbed(message);
-    this.throwIfAborted(signal);
+    session.setReplyTarget(message);
 
     const userMessage = formatMessageForAI(message);
     const reply = await runWithToolContext(toolCtx, () =>
@@ -423,7 +424,7 @@ export class RuyiBot {
   ): Promise<void> {
     await this.withOperationTimeout(
       session.deleteStatusEmbed(),
-      "Status embed delete",
+      "Tool embed delete",
       context,
     );
   }
