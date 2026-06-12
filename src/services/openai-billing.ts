@@ -46,12 +46,14 @@ const openAICostsResponseSchema = z.looseObject({
           results: z.array(
             z
               .looseObject({
-                amount: z.object({
-                  value: z.number(),
-                  currency: z.string(),
-                }),
+                amount: z
+                  .looseObject({
+                    value: z.number().optional(),
+                    currency: z.string().optional(),
+                  })
+                  .optional(),
               }),
-          ),
+          ).optional().default([]),
         }),
     ),
   });
@@ -75,13 +77,13 @@ function collectTotals(body: OpenAICostsResponse): OpenAICostTotal[] {
 
   for (const bucket of body.data) {
     for (const result of bucket.results) {
-      const amount = {
-        value: result.amount.value,
-        currency: result.amount.currency.toUpperCase(),
-      };
+      const value = result.amount?.value;
+      const currency = result.amount?.currency?.trim().toUpperCase();
+      if (value === undefined || !currency) continue;
+
       totals.set(
-        amount.currency,
-        (totals.get(amount.currency) ?? 0) + amount.value,
+        currency,
+        (totals.get(currency) ?? 0) + value,
       );
     }
   }
