@@ -3,10 +3,12 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 import { env } from "../env";
 import { toolLogger } from "../logger";
-import { formatError } from "../utils/types";
+import { formatError, toolContextManager } from "../utils/types";
 import { configManager } from "../config";
 
 const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+const DEFAULT_MAX_OUTPUT_TOKENS = 900;
+const REVERSE_IMAGE_MAX_OUTPUT_TOKENS = 350;
 const DEFAULT_IMAGE_QUESTION =
   "Describe this image clearly. Include visible text, important objects, people, layout, and anything that seems relevant to the user's request. If the image is ambiguous, say what is uncertain.";
 
@@ -55,15 +57,30 @@ export const describeImageTool = tool({
   timeoutMs: 60_000,
   timeoutBehavior: "error_as_result",
   execute: async ({ image_url, question, detail }) => {
+    const budgetDecision = toolContextManager.consumeToolCall("describe_image");
+    if (!budgetDecision.allowed) {
+      return toolContextManager.budgetDeniedResult(budgetDecision);
+    }
+
     const model = getVisionModel();
-    const effectiveDetail = detail ?? "auto";
+    const reverseImageWorkflow =
+      toolContextManager.isReverseImageWorkflowActive();
+    const effectiveDetail = reverseImageWorkflow ? "low" : (detail ?? "auto");
+    const maxOutputTokens = reverseImageWorkflow
+      ? REVERSE_IMAGE_MAX_OUTPUT_TOKENS
+      : DEFAULT_MAX_OUTPUT_TOKENS;
 
     try {
       const normalizedUrl = normalizeImageUrl(image_url);
       const prompt = question?.trim() || DEFAULT_IMAGE_QUESTION;
 
       toolLogger.info(
-        { model, detail: effectiveDetail, imageUrlLength: normalizedUrl.length },
+        {
+          model,
+          detail: effectiveDetail,
+          imageUrlLength: normalizedUrl.length,
+          reverseImageWorkflow,
+        },
         "Describing image with OpenAI vision",
       );
 
@@ -82,7 +99,7 @@ export const describeImageTool = tool({
             ],
           },
         ],
-        max_output_tokens: 900,
+        max_output_tokens: maxOutputTokens,
       });
 
       const description = response.output_text.trim();

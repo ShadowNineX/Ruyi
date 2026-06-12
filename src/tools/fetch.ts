@@ -5,13 +5,15 @@ import { tool } from "@openai/agents";
 import { JSDOM, VirtualConsole } from "jsdom";
 import { z } from "zod";
 import { toolLogger } from "../logger";
-import { formatError } from "../utils/types";
+import { formatError, toolContextManager } from "../utils/types";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 5;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const REVERSE_IMAGE_MAX_RESPONSE_BYTES = 256 * 1024;
 const DEFAULT_TEXT_CHARS = 8_000;
 const MAX_TEXT_CHARS = 12_000;
+const REVERSE_IMAGE_FETCH_MAX_TEXT_CHARS = 3_000;
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
@@ -248,7 +250,10 @@ function isTextualContentType(contentType: string): boolean {
   ].includes(mediaType);
 }
 
-async function readResponseText(response: Response): Promise<ReadTextResult> {
+async function readResponseText(
+  response: Response,
+  maxResponseBytes = MAX_RESPONSE_BYTES,
+): Promise<ReadTextResult> {
   if (!response.body) {
     return { text: "", bytesRead: 0, byteTruncated: false };
   }
@@ -258,12 +263,12 @@ async function readResponseText(response: Response): Promise<ReadTextResult> {
   let bytesRead = 0;
   let byteTruncated = false;
 
-  while (bytesRead < MAX_RESPONSE_BYTES) {
+  while (bytesRead < maxResponseBytes) {
     const { value, done } = await reader.read();
     if (done) break;
     if (!value) continue;
 
-    const remaining = MAX_RESPONSE_BYTES - bytesRead;
+    const remaining = maxResponseBytes - bytesRead;
     if (value.byteLength > remaining) {
       chunks.push(value.slice(0, remaining));
       bytesRead += remaining;
@@ -276,7 +281,7 @@ async function readResponseText(response: Response): Promise<ReadTextResult> {
     bytesRead += value.byteLength;
   }
 
-  if (bytesRead >= MAX_RESPONSE_BYTES && !byteTruncated) {
+  if (bytesRead >= maxResponseBytes && !byteTruncated) {
     byteTruncated = true;
     await reader.cancel();
   }
@@ -469,10 +474,23 @@ export const fetchUrlTool = tool({
   timeoutMs: FETCH_TIMEOUT_MS + 5_000,
   timeoutBehavior: "error_as_result",
   execute: async ({ url, max_chars, raw, include_headers }) => {
-    const maxChars = clampMaxChars(max_chars);
+    const budgetDecision = toolContextManager.consumeToolCall("fetch_url");
+    if (!budgetDecision.allowed) {
+      return toolContextManager.budgetDeniedResult(budgetDecision);
+    }
+
+    const reverseImageWorkflow =
+      toolContextManager.isReverseImageWorkflowActive();
+    const maxChars = reverseImageWorkflow
+      ? Math.min(clampMaxChars(max_chars), REVERSE_IMAGE_FETCH_MAX_TEXT_CHARS)
+      : clampMaxChars(max_chars);
+    const effectiveRaw = reverseImageWorkflow ? false : raw === true;
 
     try {
-      toolLogger.info({ url, maxChars }, "Fetching URL");
+      toolLogger.info(
+        { url, maxChars, reverseImageWorkflow },
+        "Fetching URL",
+      );
 
       const { response, finalUrl, redirectCount } = await fetchWithRedirects(url);
       const contentType = response.headers.get("content-type") ?? "";
@@ -519,11 +537,16 @@ export const fetchUrlTool = tool({
         };
       }
 
-      const body = await readResponseText(response);
+      const body = await readResponseText(
+        response,
+        reverseImageWorkflow
+          ? REVERSE_IMAGE_MAX_RESPONSE_BYTES
+          : MAX_RESPONSE_BYTES,
+      );
       const prepared = prepareText(
         body.text,
         contentType.toLowerCase(),
-        raw === true,
+        effectiveRaw,
         maxChars,
         finalUrl,
       );

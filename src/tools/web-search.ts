@@ -9,7 +9,7 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 import { env } from "../env";
 import { toolLogger } from "../logger";
-import { formatError } from "../utils/types";
+import { formatError, toolContextManager } from "../utils/types";
 import { configManager, type SearchProvider } from "../config";
 
 const OPENAI_PROVIDER = "openai" satisfies SearchProvider;
@@ -376,8 +376,15 @@ export const webSearchTool = tool({
       .describe("Maximum Tavily results to return when Tavily is used. Defaults to 5; capped at 10."),
   }),
   execute: async ({ query, mode, max_results }) => {
+    const budgetDecision = toolContextManager.consumeToolCall("web_search");
+    if (!budgetDecision.allowed) {
+      return toolContextManager.budgetDeniedResult(budgetDecision);
+    }
+
     const searchMode = mode ?? "answer";
-    const maxResults = clampMaxResults(max_results);
+    const maxResults = toolContextManager.isReverseImageWorkflowActive()
+      ? Math.min(clampMaxResults(max_results), 3)
+      : clampMaxResults(max_results);
 
     try {
       const result = await searchWeb(query, searchMode, maxResults);

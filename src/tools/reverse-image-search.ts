@@ -254,11 +254,10 @@ function buildFollowUpQueries(
   }
 
   if (mode === "art") {
-    queries.add('"furry" "artist" "tumblr"');
-    queries.add('"Furbooru" "artist:" "canine"');
+    queries.add('"Furbooru" "artist:"');
   }
 
-  return [...queries].slice(0, 6);
+  return [...queries].slice(0, 2);
 }
 
 function buildNextToolCalls(
@@ -439,7 +438,7 @@ async function resolveImage(
 export const reverseImageSearchTool = tool({
   name: "reverse_image_search",
   description:
-    "Prepare reverse-image-search provider links and follow-up web-search queries for a public image URL or a Discord pasted/uploaded image attachment/embed from the current or replied message. Let the main agent continue with web_search/fetch_url before answering origin/source requests.",
+    "Prepare reverse-image-search provider links and a small number of follow-up web-search queries for a public image URL or a Discord pasted/uploaded image attachment/embed from the current or replied message. Use this once per image; if follow-up search cannot confirm the source quickly, answer with the manual provider links.",
   parameters: z.object({
     image_url: z
       .string()
@@ -484,6 +483,12 @@ export const reverseImageSearchTool = tool({
       ),
   }),
   execute: async ({ image_url, message_id, image_index, mode, services }) => {
+    const budgetDecision =
+      toolContextManager.consumeToolCall("reverse_image_search");
+    if (!budgetDecision.allowed) {
+      return toolContextManager.budgetDeniedResult(budgetDecision);
+    }
+
     const searchMode = mode ?? "broad";
 
     try {
@@ -539,7 +544,12 @@ export const reverseImageSearchTool = tool({
         recommended_next_tool_calls: nextToolCalls,
         should_continue_with_web_search:
           searchMode === "source" || searchMode === "art",
-        note: "Provider pages are interactive and may show visual/exact matches the bot cannot directly scrape. If the user asked for the image source/origin, do not stop here: call web_search with the recommended queries or visible result titles from the user's screenshot, then fetch likely candidate pages before answering. If follow-up tools still cannot confirm the source, include manual_reverse_search_markdown in the final answer so the user can open the exact reverse-search result pages.",
+        follow_up_budget: {
+          web_search: 2,
+          fetch_url: 1,
+          describe_image: 1,
+        },
+        note: "Provider pages are interactive and may show visual/exact matches the bot cannot directly scrape. For source/origin requests, use at most the listed follow-up budget: no more than two web_search calls, one fetch_url call, and one describe_image call. If that does not confirm the source, stop searching and include manual_reverse_search_markdown in the final answer so the user can open Google Lens/Bing/Yandex/TinEye/SauceNAO directly.",
       };
     } catch (error) {
       const errorMessage = formatError(error);

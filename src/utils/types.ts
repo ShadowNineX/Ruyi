@@ -2,17 +2,41 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Message, TextChannel, Guild } from "discord.js";
 import { toolLogger } from "../logger";
 
+type ReverseImageBudgetedTool =
+  | "reverse_image_search"
+  | "web_search"
+  | "fetch_url"
+  | "describe_image";
+
+type ToolCallCounts = Partial<Record<ReverseImageBudgetedTool, number>>;
+
+interface ToolTurnBudget {
+  reverseImageWorkflowActive: boolean;
+  calls: ToolCallCounts;
+}
+
 export interface ToolContext {
   message: Message | null;
   channel: TextChannel | null;
   guild: Guild | null;
   referencedMessage: Message | null;
+  toolBudget?: ToolTurnBudget;
 }
 
 // Shared result type for message resolution
 export type MessageResolutionResult =
   | { success: true; message: Message }
   | { success: false; error: string };
+
+export type ToolBudgetDecision =
+  | { allowed: true }
+  | {
+      allowed: false;
+      tool: ReverseImageBudgetedTool;
+      limit: number;
+      used: number;
+      instruction: string;
+    };
 
 const EMPTY_CONTEXT: ToolContext = {
   message: null,
@@ -22,6 +46,37 @@ const EMPTY_CONTEXT: ToolContext = {
 };
 
 const toolContextStore = new AsyncLocalStorage<ToolContext>();
+
+const REVERSE_IMAGE_WORKFLOW_LIMITS = {
+  reverse_image_search: 1,
+  web_search: 2,
+  fetch_url: 1,
+  describe_image: 1,
+} as const satisfies Record<ReverseImageBudgetedTool, number>;
+
+const REVERSE_IMAGE_BUDGETED_TOOLS = new Set<string>(
+  Object.keys(REVERSE_IMAGE_WORKFLOW_LIMITS),
+);
+
+function createToolTurnBudget(): ToolTurnBudget {
+  return {
+    reverseImageWorkflowActive: false,
+    calls: {},
+  };
+}
+
+function withToolTurnBudget(ctx: ToolContext): ToolContext {
+  return {
+    ...ctx,
+    toolBudget: ctx.toolBudget ?? createToolTurnBudget(),
+  };
+}
+
+function isReverseImageBudgetedTool(
+  toolName: string,
+): toolName is ReverseImageBudgetedTool {
+  return REVERSE_IMAGE_BUDGETED_TOOLS.has(toolName);
+}
 
 /**
  * Run `fn` with the given tool context bound to the current async scope.
@@ -35,7 +90,7 @@ export function runWithToolContext<T>(
   ctx: ToolContext,
   fn: () => Promise<T>,
 ): Promise<T> {
-  return toolContextStore.run(ctx, fn);
+  return toolContextStore.run(withToolTurnBudget(ctx), fn);
 }
 
 /**
@@ -46,6 +101,52 @@ export function runWithToolContext<T>(
 class ToolContextFacade {
   get(): ToolContext {
     return toolContextStore.getStore() ?? EMPTY_CONTEXT;
+  }
+
+  consumeToolCall(toolName: string): ToolBudgetDecision {
+    if (!isReverseImageBudgetedTool(toolName)) return { allowed: true };
+
+    const budget = this.get().toolBudget;
+    if (!budget) return { allowed: true };
+
+    const isReverseImageSearch = toolName === "reverse_image_search";
+    if (isReverseImageSearch) {
+      budget.reverseImageWorkflowActive = true;
+    } else if (!budget.reverseImageWorkflowActive) {
+      return { allowed: true };
+    }
+
+    const used = budget.calls[toolName] ?? 0;
+    const limit = REVERSE_IMAGE_WORKFLOW_LIMITS[toolName];
+    if (used >= limit) {
+      return {
+        allowed: false,
+        tool: toolName,
+        limit,
+        used,
+        instruction:
+          "Reverse image search follow-up budget exhausted. Stop calling tools for this image and answer using the evidence already gathered. If the origin is still unconfirmed, include the manual reverse-search links from reverse_image_search.",
+      };
+    }
+
+    budget.calls[toolName] = used + 1;
+    return { allowed: true };
+  }
+
+  isReverseImageWorkflowActive(): boolean {
+    return this.get().toolBudget?.reverseImageWorkflowActive === true;
+  }
+
+  budgetDeniedResult(decision: Exclude<ToolBudgetDecision, { allowed: true }>) {
+    return {
+      error: "Tool budget exhausted",
+      budget_exhausted: true,
+      final_answer_required: true,
+      tool: decision.tool,
+      limit: decision.limit,
+      used: decision.used,
+      instruction: decision.instruction,
+    };
   }
 
   async resolveTargetMessage(
