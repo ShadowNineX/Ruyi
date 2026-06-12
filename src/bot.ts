@@ -29,6 +29,8 @@ import {
   handleSmitheryCheckButton,
   handleSearchProviderSelect,
   isSearchProviderSelect,
+  handleModelSelect,
+  isModelSelect,
 } from "./slash-commands";
 import {
   ChatSession,
@@ -636,6 +638,11 @@ export class RuyiBot {
       isSearchProviderSelect(interaction.customId)
     ) {
       await handleSearchProviderSelect(interaction);
+    } else if (
+      interaction.isStringSelectMenu() &&
+      isModelSelect(interaction.customId)
+    ) {
+      await handleModelSelect(interaction);
     } else if (
       interaction.isStringSelectMenu() &&
       interaction.customId === "smithery_select_server"

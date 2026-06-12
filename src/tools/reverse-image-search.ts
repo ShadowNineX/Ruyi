@@ -1,4 +1,5 @@
 import { tool } from "@openai/agents";
+import type { Message } from "discord.js";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { getMessageImageInputs } from "../utils/messages";
@@ -24,6 +25,17 @@ interface ReverseImageProvider {
 interface ResolvedImage {
   url: string;
   source: string;
+  resolvedFrom: string;
+  messageId: string | null;
+  attempts: ImageResolutionAttempt[];
+}
+
+interface ImageResolutionAttempt {
+  target: string;
+  message_id: string | null;
+  image_count?: number;
+  selected?: boolean;
+  error?: string;
 }
 
 interface ReverseImageProviderVariant {
@@ -135,6 +147,58 @@ function normalizePublicImageUrl(value: string): string {
   return url.toString();
 }
 
+function imageResolutionAttempt(
+  target: string,
+  messageId: string | null,
+  details: Omit<ImageResolutionAttempt, "target" | "message_id">,
+): ImageResolutionAttempt {
+  return {
+    target,
+    message_id: messageId,
+    ...details,
+  };
+}
+
+function selectMessageImage(
+  message: Message,
+  target: string,
+  imageIndex: number | null,
+): { image: ResolvedImage; attempt: ImageResolutionAttempt } | {
+  image: null;
+  attempt: ImageResolutionAttempt;
+} {
+  const images = getMessageImageInputs(message, target);
+  const selectedIndex = Math.max((imageIndex ?? 1) - 1, 0);
+  const rawImage = images[selectedIndex];
+
+  if (!rawImage) {
+    return {
+      image: null,
+      attempt: imageResolutionAttempt(target, message.id, {
+        image_count: images.length,
+        error:
+          images.length === 0
+            ? "No image attachment, pasted upload, or embed image found."
+            : `Image ${selectedIndex + 1} was requested, but only ${images.length} image(s) exist.`,
+      }),
+    };
+  }
+
+  return {
+    image: {
+      url: normalizePublicImageUrl(rawImage.url),
+      source: rawImage.source,
+      resolvedFrom: target,
+      messageId: message.id,
+      attempts: [],
+    },
+    attempt: imageResolutionAttempt(target, message.id, {
+      image_count: images.length,
+      selected: true,
+    }),
+  };
+}
+
 function getUrlFileName(imageUrl: string): string | null {
   try {
     const url = new URL(imageUrl);
@@ -239,35 +303,115 @@ function chooseServices(
   return dedupeServices(MODE_SERVICES[mode]);
 }
 
-async function resolveMessageImage(
-  messageId: string | null,
-  imageIndex: number | null,
-): Promise<ResolvedImage> {
+async function resolveMessageById(
+  messageId: string,
+): Promise<Message | null> {
   const result = await toolContextManager.resolveTargetMessage(
     messageId,
     "reverse_image_search",
   );
-  if (!result.success) throw new Error(result.error);
+  return result.success ? result.message : null;
+}
 
-  const images = getMessageImageInputs(result.message);
-  if (images.length === 0) {
-    throw new Error(
-      "No image attachment or embed image was found on that message.",
+function addCandidate(
+  candidates: Array<{ target: string; message: Message }>,
+  seen: Set<string>,
+  target: string,
+  message: Message | null,
+): void {
+  if (!message || seen.has(message.id)) return;
+  seen.add(message.id);
+  candidates.push({ target, message });
+}
+
+async function collectRecentImageCandidates(
+  seen: Set<string>,
+): Promise<Array<{ target: string; message: Message }>> {
+  const ctx = toolContextManager.get();
+  const channel = ctx.channel;
+  if (!channel || !("messages" in channel)) return [];
+
+  try {
+    const messages = await channel.messages.fetch({ limit: 20 });
+    return [...messages.values()]
+      .sort((left, right) => right.createdTimestamp - left.createdTimestamp)
+      .filter((message) => !seen.has(message.id))
+      .filter((message) => getMessageImageInputs(message).length > 0)
+      .slice(0, 3)
+      .map((message, index) => ({
+        target: `recent channel image ${index + 1}`,
+        message,
+      }));
+  } catch (error) {
+    toolLogger.debug(
+      { error: formatError(error) },
+      "Could not collect recent image candidates",
+    );
+    return [];
+  }
+}
+
+async function collectImageCandidates(
+  messageId: string | null,
+): Promise<Array<{ target: string; message: Message }>> {
+  const ctx = toolContextManager.get();
+  const candidates: Array<{ target: string; message: Message }> = [];
+  const seen = new Set<string>();
+  const exactMessageId =
+    messageId && messageId !== "replied" ? messageId.trim() : null;
+
+  if (exactMessageId) {
+    addCandidate(
+      candidates,
+      seen,
+      "requested message",
+      await resolveMessageById(exactMessageId),
     );
   }
 
-  const index = Math.max((imageIndex ?? 1) - 1, 0);
-  const image = images[index];
-  if (!image) {
-    throw new Error(
-      `Image ${index + 1} was requested, but the message only has ${images.length} image(s).`,
-    );
+  if (messageId === "replied") {
+    addCandidate(candidates, seen, "replied message", ctx.referencedMessage);
+    addCandidate(candidates, seen, "current message", ctx.message);
+  } else {
+    addCandidate(candidates, seen, "current message", ctx.message);
+    addCandidate(candidates, seen, "replied message", ctx.referencedMessage);
   }
 
-  return {
-    url: normalizePublicImageUrl(image.url),
-    source: image.source,
-  };
+  candidates.push(...(await collectRecentImageCandidates(seen)));
+  return candidates;
+}
+
+async function resolveMessageImage(
+  messageId: string | null,
+  imageIndex: number | null,
+): Promise<ResolvedImage> {
+  const candidates = await collectImageCandidates(messageId);
+  const attempts: ImageResolutionAttempt[] = [];
+
+  for (const candidate of candidates) {
+    const result = selectMessageImage(
+      candidate.message,
+      candidate.target,
+      imageIndex,
+    );
+    attempts.push(result.attempt);
+    if (result.image) {
+      return {
+        ...result.image,
+        attempts,
+      };
+    }
+  }
+
+  throw new Error(
+    `No usable image found. Tried: ${
+      attempts.length > 0
+        ? attempts
+            .map((attempt) => `${attempt.target} (${attempt.error ?? "no image"})`)
+            .join("; ")
+        : "current, replied, and recent channel messages"
+    }.`,
+  );
 }
 
 async function resolveImage(
@@ -279,6 +423,13 @@ async function resolveImage(
     return {
       url: normalizePublicImageUrl(imageUrl),
       source: "provided image_url",
+      resolvedFrom: "provided image_url",
+      messageId: null,
+      attempts: [
+        imageResolutionAttempt("provided image_url", null, {
+          selected: true,
+        }),
+      ],
     };
   }
 
@@ -288,7 +439,7 @@ async function resolveImage(
 export const reverseImageSearchTool = tool({
   name: "reverse_image_search",
   description:
-    "Prepare reverse-image-search provider links and follow-up web-search queries for a public image URL or Discord image attachment/embed from the current or replied message. Let the main agent continue with web_search/fetch_url before answering origin/source requests.",
+    "Prepare reverse-image-search provider links and follow-up web-search queries for a public image URL or a Discord pasted/uploaded image attachment/embed from the current or replied message. Let the main agent continue with web_search/fetch_url before answering origin/source requests.",
   parameters: z.object({
     image_url: z
       .string()
@@ -302,7 +453,7 @@ export const reverseImageSearchTool = tool({
       .string()
       .nullable()
       .describe(
-        "Discord message to take the image from. Use null for the current message, 'replied' for the message the user replied to, or an exact message ID.",
+        "Discord message to take the image from. Use null for the current message, including when the user pasted/uploaded an image in the same message; use 'replied' for the message the user replied to, or an exact message ID.",
       ),
     image_index: z
       .number()
@@ -379,6 +530,9 @@ export const reverseImageSearchTool = tool({
         mode: searchMode,
         image_url: image.url,
         image_source: image.source,
+        image_message_id: image.messageId,
+        image_resolved_from: image.resolvedFrom,
+        image_resolution_attempts: image.attempts,
         searches,
         manual_reverse_search_markdown: manualReverseSearchMarkdown,
         follow_up_search_queries: followUpQueries,

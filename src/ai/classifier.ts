@@ -227,6 +227,7 @@ Set shouldReply to false if:
         name: "Ruyi reply classifier",
         instructions: systemPromptText,
         model: agentsRuntimeManager.model,
+        modelSettings: agentsRuntimeManager.modelSettings,
         outputType: ReplyDecisionSchema,
       });
 

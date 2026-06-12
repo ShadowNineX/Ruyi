@@ -446,6 +446,7 @@ export class ChatService {
       name: "Ruyi",
       instructions: systemPrompt,
       model: agentsRuntimeManager.model,
+      modelSettings: agentsRuntimeManager.modelSettings,
       tools: [...allTools],
       toolUseBehavior: "run_llm_again",
     });

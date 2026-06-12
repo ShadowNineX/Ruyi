@@ -9,6 +9,8 @@ const OBSOLETE_SMITHERY_TOKENS_COLLECTION = "smitherytokens";
 const SMITHERY_CONNECTIONS_COLLECTION = "smitheryconnections";
 const AGENT_SESSIONS_COLLECTION = "agentsessions";
 const CONVERSATIONS_COLLECTION = "conversations";
+const AI_MODEL_PRESET_CONFIG_KEY = "ai:model_preset";
+const DEFAULT_AI_MODEL_PRESET = "balanced";
 
 interface DatabaseMigration {
   id: string;
@@ -172,6 +174,25 @@ const migrations: DatabaseMigration[] = [
           agentSessionsInitialized,
         },
         "Message sync state normalization complete",
+      );
+    },
+  },
+  {
+    id: "2026-06-12-initialize-ai-model-preset",
+    run: async () => {
+      const currentPreset = await getConfigValue(AI_MODEL_PRESET_CONFIG_KEY, "");
+      const initialized = currentPreset.length === 0;
+      if (initialized) {
+        await setConfigValue(AI_MODEL_PRESET_CONFIG_KEY, DEFAULT_AI_MODEL_PRESET);
+      }
+
+      dbLogger.info(
+        {
+          key: AI_MODEL_PRESET_CONFIG_KEY,
+          initialized,
+          value: initialized ? DEFAULT_AI_MODEL_PRESET : currentPreset,
+        },
+        "AI model preset configuration initialized",
       );
     },
   },

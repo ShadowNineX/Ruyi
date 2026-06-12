@@ -15,6 +15,13 @@ bun run start
 
 For local development, use `bun run dev`.
 
+## Model Preset
+
+Ruyi's OpenAI model is selected in Discord with `/model`. The choice is stored
+in MongoDB and includes the chat model plus reasoning/verbosity settings, so
+model selection does not use `.env`. The default `High` intelligence level uses
+`gpt-5.5` with `medium` reasoning; `Pro` uses `gpt-5.5-pro`.
+
 ## Web Search
 
 Ruyi exposes one `web_search` tool. Default/current-info questions use the

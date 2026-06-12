@@ -4,6 +4,7 @@ import { z } from "zod";
 import { env } from "../env";
 import { toolLogger } from "../logger";
 import { formatError } from "../utils/types";
+import { configManager } from "../config";
 
 const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
 const DEFAULT_IMAGE_QUESTION =
@@ -25,7 +26,7 @@ function normalizeImageUrl(value: string): string {
 }
 
 function getVisionModel(): string {
-  return env.VISION_MODEL_NAME ?? env.MODEL_NAME;
+  return configManager.getVisionModel();
 }
 
 export const describeImageTool = tool({

@@ -236,6 +236,7 @@ async function summarizeCompactedItems(
       name: "Ruyi channel summarizer",
       instructions: SUMMARY_SYSTEM_PROMPT,
       model: agentsRuntimeManager.model,
+      modelSettings: agentsRuntimeManager.modelSettings,
     });
 
     const result = await agentsRuntimeManager
@@ -553,11 +554,12 @@ export class SessionManager {
     });
 
     if (persistedSession) {
-      const versionMatches =
+      const promptVersionMatches =
         !persistedSession.promptVersion ||
         persistedSession.promptVersion === systemPromptVersion;
+      const modelMatches = persistedSession.model === agentsRuntimeManager.model;
 
-      if (versionMatches) {
+      if (promptVersionMatches && modelMatches) {
         const compactedSession = await compactPersistedItemsIfNeeded(
           channelId,
           toAgentItems(persistedSession),
@@ -585,8 +587,10 @@ export class SessionManager {
           sessionId: persistedSession.sessionId,
           storedVersion: persistedSession.promptVersion,
           currentVersion: systemPromptVersion,
+          storedModel: persistedSession.model,
+          currentModel: agentsRuntimeManager.model,
         },
-        "System prompt changed; creating fresh agent session",
+        "Agent session configuration changed; creating fresh agent session",
       );
       await AgentSession.updateOne(
         { channelId },
@@ -673,6 +677,24 @@ export class SessionManager {
     );
 
     aiLogger.debug({ channelId }, "Agent session invalidated");
+  }
+
+  async invalidateAll(reason: string): Promise<void> {
+    const activeCount = this.activeSessions.size;
+    for (const session of this.activeSessions.values()) {
+      session.markInvalidated();
+    }
+    this.activeSessions.clear();
+
+    const result = await AgentSession.updateMany(
+      { isActive: true, provider: "openai-agents" },
+      { $set: { isActive: false } },
+    );
+
+    aiLogger.info(
+      { reason, activeCount, modifiedCount: result.modifiedCount },
+      "All active agent sessions invalidated",
+    );
   }
 
   async recordAssistantMessages(

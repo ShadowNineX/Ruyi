@@ -158,7 +158,7 @@ async function openAIWebSearch(
   mode: SearchMode,
 ): Promise<Omit<WebSearchResult, "attempts">> {
   const response = await openai.responses.create({
-    model: env.MODEL_NAME,
+    model: configManager.getChatModel(),
     instructions:
       "Answer using current web information. Include concise citations in the response when sources are available.",
     input: query,

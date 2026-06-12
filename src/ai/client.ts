@@ -1,11 +1,24 @@
-import { OpenAIProvider, Runner, setTracingDisabled } from "@openai/agents";
+import {
+  OpenAIProvider,
+  Runner,
+  setTracingDisabled,
+  type ModelSettings,
+} from "@openai/agents";
 import { aiLogger } from "../logger";
 import { env } from "../env";
+import { configManager } from "../config";
 
 export class AgentsRuntimeManager {
   private provider: OpenAIProvider | null = null;
   private runner: Runner | null = null;
-  readonly model = env.MODEL_NAME;
+
+  get model(): string {
+    return configManager.getChatModel();
+  }
+
+  get modelSettings(): ModelSettings {
+    return configManager.getModelSettings();
+  }
 
   getProviderConfig() {
     return {
@@ -25,6 +38,7 @@ export class AgentsRuntimeManager {
     this.provider = new OpenAIProvider(this.getProviderConfig());
     this.runner = new Runner({
       model: this.model,
+      modelSettings: this.modelSettings,
       modelProvider: this.provider,
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
@@ -33,7 +47,11 @@ export class AgentsRuntimeManager {
     });
 
     aiLogger.info(
-      { model: this.model },
+      {
+        model: this.model,
+        preset: configManager.getModelPreset(),
+        modelSettings: this.modelSettings,
+      },
       "OpenAI Agents runtime initialized",
     );
   }

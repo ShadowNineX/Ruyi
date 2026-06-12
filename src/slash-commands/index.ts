@@ -4,6 +4,12 @@ import { smitheryCommand, handleSmitheryCommand } from "./smithery";
 import { memoriesCommand, handleMemoriesCommand } from "./memories";
 import { creditsCommand, handleCreditsCommand } from "./credits";
 import {
+  modelCommand,
+  handleModelCommand,
+  handleModelSelect,
+  isModelSelect,
+} from "./model";
+import {
   searchProviderCommand,
   handleSearchProviderCommand,
   handleSearchProviderSelect,
@@ -12,6 +18,7 @@ import {
 
 export const slashCommands = [
   prefixCommand,
+  modelCommand,
   searchProviderCommand,
   creditsCommand,
   smitheryCommand,
@@ -29,6 +36,8 @@ export {
   isSearchProviderSelect,
 } from "./search-provider";
 
+export { handleModelSelect, isModelSelect } from "./model";
+
 export async function handleSlashCommand(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
@@ -38,6 +47,9 @@ export async function handleSlashCommand(
       break;
     case "search-provider":
       await handleSearchProviderCommand(interaction);
+      break;
+    case "model":
+      await handleModelCommand(interaction);
       break;
     case "credits":
       await handleCreditsCommand(interaction);

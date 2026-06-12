@@ -150,6 +150,7 @@ Extract durable facts about ${username}. Return an empty facts array if nothing 
       name: "Ruyi memory extractor",
       instructions: EXTRACTION_SYSTEM_PROMPT,
       model: agentsRuntimeManager.model,
+      modelSettings: agentsRuntimeManager.modelSettings,
       outputType: ExtractionOutputSchema,
     });
 
