@@ -21,7 +21,6 @@ export interface ChatMessage {
 
 export class ConversationContext {
   private readonly lastInteractionCache = new Map<string, number>();
-  // Per (channelId, username) counters for auto-extraction
   private readonly userMessageCounters = new Map<string, number>();
   private readonly lastExtractionAt = new Map<string, number>();
 
@@ -34,7 +33,7 @@ export class ConversationContext {
     author: string,
     content: string,
     isBot: boolean,
-    messageId?: string,
+    messageId: string,
   ): Promise<void> {
     if (isBot) {
       aiLogger.debug(
@@ -66,30 +65,6 @@ export class ConversationContext {
     }
   }
 
-  async pruneLegacyBotMessages(): Promise<void> {
-    try {
-      const result = await Conversation.updateMany(
-        { "messages.isBot": true },
-        { $pull: { messages: { isBot: true } } },
-      );
-
-      if (result.modifiedCount > 0) {
-        aiLogger.info(
-          {
-            matched: result.matchedCount,
-            modified: result.modifiedCount,
-          },
-          "Pruned legacy bot messages from human conversation archive",
-        );
-      }
-    } catch (error) {
-      aiLogger.error(
-        { error: (error as Error).message },
-        "Failed to prune legacy bot messages from conversation archive",
-      );
-    }
-  }
-
   async getMemoryContext(channelId: string, limit = 20): Promise<string> {
     try {
       const conversation = await Conversation.findOne({ channelId });
@@ -109,11 +84,6 @@ export class ConversationContext {
     return Date.now() - lastTime < ONGOING_CONVERSATION_WINDOW_MS;
   }
 
-  /**
-   * Track a non-bot user message and report whether auto-extraction should
-   * fire now. Caller is responsible for invoking the extractor and then
-   * calling `markExtracted` on success.
-   */
   trackUserMessage(
     channelId: string,
     username: string,
@@ -253,15 +223,20 @@ export class ConversationContext {
   }
 
   buildConversationHistory(chatHistory: ChatMessage[]): string {
-    // The persistent AgentSession already retains every turn we sent it,
-    // so we deliberately do NOT re-inject the bot's own past replies here.
-    // We only surface:
+    // The persistent AgentSession normally retains the bot's own turns.
+    // We still surface a tiny slice of visible bot replies so a freshly
+    // rebuilt session can recover continuity after Discord deletions.
+    // We surface:
     //   - the reply chain the user explicitly cited (might be older or
     //     external messages the session has not seen)
     //   - recent ambient channel activity from other humans (the session
     //     never saw these because the bot didn't reply to them)
+    //   - a few visible bot replies for ambiguous follow-ups/mention-only pings
     const replyChain = chatHistory.filter((m) => m.isReplyContext && !m.isBot);
     const ambient = chatHistory.filter((m) => !m.isReplyContext && !m.isBot);
+    const visibleBotReplies = chatHistory.filter(
+      (m) => !m.isReplyContext && m.isBot,
+    );
 
     const sections: string[] = [];
 
@@ -282,6 +257,16 @@ export class ConversationContext {
         .join("\n");
       sections.push(
         `Recent channel activity (other people talking, for situational awareness — do NOT respond to these directly unless the user asks):\n${lines}`,
+      );
+    }
+
+    if (visibleBotReplies.length > 0) {
+      const lines = visibleBotReplies
+        .slice(-5)
+        .map((m) => `${m.author}: ${m.content}`)
+        .join("\n");
+      sections.push(
+        `Recent visible bot replies (for continuity and ambiguous follow-ups; do not repeat them):\n${lines}`,
       );
     }
 

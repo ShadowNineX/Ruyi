@@ -2,10 +2,16 @@ import {
   Agent,
   user,
   type AgentInputItem,
+  type ResponseStreamEvent,
   type RunStreamEvent,
+  type StreamEventTextStream,
   type RunToolApprovalItem,
   type Tool,
 } from "@openai/agents";
+import {
+  isOpenAIChatCompletionsRawModelStreamEvent,
+  isOpenAIResponsesRawModelStreamEvent,
+} from "@openai/agents-openai";
 import type { GuildTextBasedChannel } from "discord.js";
 import { z } from "zod";
 import { allTools, externalToolNames } from "../tools";
@@ -30,9 +36,6 @@ const MAX_AGENT_IMAGE_INPUTS = 4;
 const ToolCallSchema = z.looseObject({
   arguments: z.unknown().optional(),
 });
-const RawStreamEventSchema = z.looseObject({
-  type: z.string(),
-});
 
 export interface ChatOptions {
   userMessage: string;
@@ -43,7 +46,7 @@ export interface ChatOptions {
   session: ChatSession;
   chatHistory?: ChatMessage[];
   imageInputs?: MessageImageInput[];
-  messageId?: string;
+  messageId: string;
   signal?: AbortSignal;
 }
 
@@ -94,22 +97,81 @@ function getLifecycleToolArgs(toolCall: unknown): Record<string, unknown> {
   return parseArguments(parsed.success ? parsed.data.arguments : undefined);
 }
 
-function rawEventType(event: RunStreamEvent): string | null {
-  if (event.type !== "raw_model_stream_event") return null;
-  return RawStreamEventSchema.safeParse(event.data).data?.type ?? null;
+function isCoreTextDeltaEvent(
+  event: ResponseStreamEvent,
+): event is StreamEventTextStream {
+  return event.type === "output_text_delta";
+}
+
+function isCoreTextDoneEvent(event: ResponseStreamEvent): boolean {
+  return event.type === "response_done";
+}
+
+function isCoreRawTextDeltaEvent(event: RunStreamEvent): boolean {
+  return (
+    event.type === "raw_model_stream_event" && isCoreTextDeltaEvent(event.data)
+  );
+}
+
+function isCoreRawTextDoneEvent(event: RunStreamEvent): boolean {
+  return event.type === "raw_model_stream_event" && isCoreTextDoneEvent(event.data);
+}
+
+function isResponseTextDeltaEvent(event: RunStreamEvent): boolean {
+  return (
+    isOpenAIResponsesRawModelStreamEvent(event) &&
+    (event.data.event.type === "response.output_text.delta" ||
+      event.data.event.type === "response.refusal.delta")
+  );
+}
+
+function isResponseTextDoneEvent(event: RunStreamEvent): boolean {
+  return (
+    isOpenAIResponsesRawModelStreamEvent(event) &&
+    (event.data.event.type === "response.output_text.done" ||
+      event.data.event.type === "response.refusal.done")
+  );
+}
+
+function isChatCompletionTextDeltaEvent(event: RunStreamEvent): boolean {
+  return (
+    isOpenAIChatCompletionsRawModelStreamEvent(event) &&
+    event.data.event.choices.some((choice) => {
+      const content = choice.delta.content;
+      const refusal =
+        "refusal" in choice.delta ? choice.delta.refusal : undefined;
+      return Boolean(content || refusal);
+    })
+  );
+}
+
+function isChatCompletionTextDoneEvent(event: RunStreamEvent): boolean {
+  return (
+    isOpenAIChatCompletionsRawModelStreamEvent(event) &&
+    event.data.event.choices.some((choice) => choice.finish_reason !== null)
+  );
 }
 
 function isTextDeltaEvent(event: RunStreamEvent): boolean {
-  const type = rawEventType(event);
   return (
-    type === "response.output_text.delta" || type === "response.refusal.delta"
+    isCoreRawTextDeltaEvent(event) ||
+    isResponseTextDeltaEvent(event) ||
+    isChatCompletionTextDeltaEvent(event)
   );
 }
 
 function isTextDoneEvent(event: RunStreamEvent): boolean {
-  const type = rawEventType(event);
   return (
-    type === "response.output_text.done" || type === "response.refusal.done"
+    isCoreRawTextDoneEvent(event) ||
+    isResponseTextDoneEvent(event) ||
+    isChatCompletionTextDoneEvent(event)
+  );
+}
+
+function isMessageOutputCreatedEvent(event: RunStreamEvent): boolean {
+  return (
+    event.type === "run_item_stream_event" &&
+    event.name === "message_output_created"
   );
 }
 
@@ -185,7 +247,11 @@ export class ChatService {
       signal,
     } = options;
 
-    permissionManager.setContext(channelId, { channel, userId });
+    permissionManager.setContext(channelId, {
+      channel,
+      turnId: messageId,
+      userId,
+    });
 
     const abortController = new AbortController();
     const abortFromParent = (): void => {
@@ -246,7 +312,7 @@ export class ChatService {
         "Chat input received",
       );
 
-      conversationContext.rememberMessage(
+      await conversationContext.rememberMessage(
         channelId,
         username,
         userMessage,
@@ -259,13 +325,16 @@ export class ChatService {
         username,
       );
       if (shouldExtract) {
-        conversationContext.markExtracted(channelId, username);
-        void autoExtractFacts(username, channelId).catch((error) =>
-          aiLogger.warn(
-            { error: (error as Error).message, username, channelId },
-            "Background fact extraction crashed",
-          ),
-        );
+        void autoExtractFacts(username, channelId)
+          .then((completed) => {
+            if (completed) conversationContext.markExtracted(channelId, username);
+          })
+          .catch((error: unknown) =>
+            aiLogger.warn(
+              { error: (error as Error).message, username, channelId },
+              "Background fact extraction crashed",
+            ),
+          );
       }
 
       const agentSession = await sessionManager.getOrCreate(
@@ -413,6 +482,8 @@ export class ChatService {
       session.onTextGenerationStart();
     } else if (isTextDoneEvent(event)) {
       session.onTextGenerationEnd();
+    } else if (isMessageOutputCreatedEvent(event)) {
+      session.onTextGenerationStart();
     }
   }
 

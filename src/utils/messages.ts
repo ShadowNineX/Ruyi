@@ -5,6 +5,10 @@ import { botLogger } from "../logger";
 const MAX_ATTACHMENT_DESCRIPTION_LENGTH = 120;
 const MAX_EMBED_DESCRIPTION_LENGTH = 240;
 const MAX_EMBED_FIELD_LENGTH = 120;
+const DISCORD_UNKNOWN_MESSAGE_CODE = 10008;
+const DISCORD_INVALID_FORM_BODY_CODE = 50035;
+const MENTION_ONLY_PROMPT =
+  "[The user mentioned Ruyi without any additional text. Infer their intent from the replied message and recent channel context instead of treating the mention as content.]";
 
 export interface MessageImageInput {
   url: string;
@@ -61,6 +65,38 @@ function formatBytes(bytes: number): string {
 function truncateMetadata(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength - 3)}...`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+}
+
+function removeBotMention(message: Message, content: string): string {
+  const botId = message.client.user?.id;
+  if (!botId) return content;
+
+  return content.replace(new RegExp(`<@!?${escapeRegExp(botId)}>`, "g"), "");
+}
+
+function isOnlyBotMention(message: Message, content: string): boolean {
+  const botId = message.client.user?.id;
+  if (!botId) return false;
+
+  const mentionsBot = new RegExp(`<@!?${escapeRegExp(botId)}>`).test(content);
+  return mentionsBot && removeBotMention(message, content).trim().length === 0;
+}
+
+function normalizeDiscordMentions(message: Message, content: string): string {
+  let normalized = content;
+
+  for (const [userId, user] of message.mentions.users) {
+    normalized = normalized.replace(
+      new RegExp(`<@!?${escapeRegExp(userId)}>`, "g"),
+      `@${user.username}`,
+    );
+  }
+
+  return normalized.trim();
 }
 
 function formatAttachmentDimensions(
@@ -134,7 +170,10 @@ function formatMessageEmbeds(message: Message): string[] {
 
 export function formatMessageForAI(message: Message): string {
   const sections: string[] = [];
-  const content = message.content.trim();
+  const rawContent = message.content.trim();
+  const content = isOnlyBotMention(message, rawContent)
+    ? MENTION_ONLY_PROMPT
+    : normalizeDiscordMentions(message, rawContent);
 
   if (content) sections.push(content);
 
@@ -284,7 +323,11 @@ export async function sendReplyChunks(
       } catch (error) {
         // If reply fails (e.g., original message was deleted), send as regular message
         const err = error as { code?: number };
-        if (err.code === 50035 && "send" in message.channel) {
+        if (
+          (err.code === DISCORD_UNKNOWN_MESSAGE_CODE ||
+            err.code === DISCORD_INVALID_FORM_BODY_CODE) &&
+          "send" in message.channel
+        ) {
           botLogger.debug(
             "Original message unavailable, sending as regular message",
           );

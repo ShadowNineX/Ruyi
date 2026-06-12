@@ -30,7 +30,6 @@ logger.info(
 
 // Load config and conversation cache from DB
 await configManager.load();
-await conversationContext.pruneLegacyBotMessages();
 await conversationContext.loadLastInteractions();
 
 // Initialize the OpenAI Agents runtime and inspect persisted sessions

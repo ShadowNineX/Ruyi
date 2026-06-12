@@ -17,6 +17,7 @@ import { PERMISSION_TIMEOUT_MS } from "../constants";
 
 export interface PermissionContext {
   channel: GuildTextBasedChannel;
+  turnId: string;
   userId: string;
 }
 
@@ -37,13 +38,25 @@ const DENY_ONCE_RESULT: PermissionResult = {
   rememberTool: false,
   decision: "deny_once",
 };
+const DISCORD_UNKNOWN_MESSAGE_CODE = 10008;
 const SMITHERY_SERVICE_NAMES: Record<string, string> = {
   youtube: "YouTube",
 };
+const EMBED_DESCRIPTION_LIMIT = 4096;
+const ARGUMENT_LINE_LIMIT = 8;
+
+type DiscordTimestampStyle = "R" | "T";
 
 function truncate(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength - 3)}...`;
+}
+
+function formatDiscordTimestamp(
+  timestampMs: number,
+  style: DiscordTimestampStyle,
+): string {
+  return `<t:${Math.floor(timestampMs / 1000)}:${style}>`;
 }
 
 export function getApprovalToolName(
@@ -102,12 +115,6 @@ function parseApprovalArguments(
   }
 }
 
-function formatArguments(rawArguments: string | undefined): string {
-  const parsed = parseApprovalArguments(rawArguments);
-  if (parsed) return JSON.stringify(parsed, null, 2);
-  return rawArguments ?? "";
-}
-
 function getStringField(
   record: Record<string, unknown>,
   key: string,
@@ -116,15 +123,52 @@ function getStringField(
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+function isPrimitiveValue(value: unknown): boolean {
+  return (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
 function formatReadableValue(value: unknown): string {
   if (value === null) return "null";
   if (typeof value === "string") return truncate(value.replace(/\s+/g, " "), 700);
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
-  if (Array.isArray(value)) return `${value.length} item(s)`;
-  if (isRecord(value)) return `fields: ${Object.keys(value).join(", ") || "none"}`;
+  if (Array.isArray(value)) return formatReadableArray(value);
+  if (isRecord(value)) return formatReadableRecord(value);
   return String(value);
+}
+
+function formatReadableArray(values: unknown[]): string {
+  if (values.length === 0) return "none";
+  if (values.length <= 3 && values.every(isPrimitiveValue)) {
+    return values.map(formatReadableValue).join(", ");
+  }
+  return `${values.length} item(s)`;
+}
+
+function formatReadableRecord(record: Record<string, unknown>): string {
+  const entries = Object.entries(record).filter((entry) =>
+    isMeaningfulArgumentValue(entry[1]),
+  );
+  if (entries.length === 0) return "fields: none";
+
+  const simpleEntries = entries.filter((entry) => isPrimitiveValue(entry[1]));
+  if (simpleEntries.length > 0) {
+    const preview = simpleEntries
+      .slice(0, 4)
+      .map(([key, value]) => `${key}: ${formatReadableValue(value)}`)
+      .join("; ");
+    return simpleEntries.length > 4 ? `${preview}; ...` : preview;
+  }
+
+  return `fields: ${entries
+    .slice(0, 6)
+    .map(([key]) => key)
+    .join(", ")}${entries.length > 6 ? ", ..." : ""}`;
 }
 
 function parseJsonArgumentValue(value: unknown): unknown {
@@ -171,21 +215,91 @@ function getSmitheryToolArguments(
   const directArgs = approvalArgs.arguments;
   if (isRecord(directArgs)) return directArgs;
 
-  const legacyJson = approvalArgs.arguments_json;
-  if (typeof legacyJson !== "string") return {};
+  const argumentsJson = approvalArgs.arguments_json;
+  if (typeof argumentsJson !== "string") return {};
 
   try {
-    const parsed: unknown = JSON.parse(legacyJson);
+    const parsed: unknown = JSON.parse(argumentsJson);
     return isRecord(parsed) ? parsed : {};
   } catch {
     return {};
   }
 }
 
-function formatSmitheryToolArguments(args: Record<string, unknown>): string[] {
-  return Object.entries(args).map(
+function isMeaningfulArgumentValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (isRecord(value)) return Object.keys(value).length > 0;
+  return true;
+}
+
+function formatArgumentLines(args: Record<string, unknown>): string[] {
+  const entries = Object.entries(args).filter((entry) =>
+    isMeaningfulArgumentValue(entry[1]),
+  );
+  const lines = entries.slice(0, ARGUMENT_LINE_LIMIT).map(
     ([key, value]) => `- ${key}: ${formatReadableValue(value)}`,
   );
+
+  if (entries.length > ARGUMENT_LINE_LIMIT) {
+    lines.push(`- ...and ${entries.length - ARGUMENT_LINE_LIMIT} more`);
+  }
+
+  return lines;
+}
+
+function getGenericToolArguments(
+  approvalArgs: Record<string, unknown>,
+): Record<string, unknown> {
+  const toolArgumentEntries = argumentEntriesToRecord(approvalArgs.tool_arguments);
+  if (toolArgumentEntries) return toolArgumentEntries;
+
+  const directArgs = approvalArgs.arguments;
+  if (isRecord(directArgs)) return directArgs;
+
+  const parsedDirectArgs = parseJsonArgumentValue(directArgs);
+  if (isRecord(parsedDirectArgs)) return parsedDirectArgs;
+
+  return approvalArgs;
+}
+
+function formatRawArgumentLine(rawArguments: string | undefined): string | null {
+  if (!rawArguments?.trim()) return null;
+
+  return `- input: ${truncate(rawArguments.replace(/\s+/g, " "), 700)}`;
+}
+
+function appendArgumentLines(
+  lines: string[],
+  argumentLines: string[],
+): void {
+  if (argumentLines.length === 0) return;
+  lines.push("", "Request details:", ...argumentLines);
+}
+
+function getGenericPermissionDescription(
+  approvalItem: RunToolApprovalItem,
+  approvalArgs: Record<string, unknown> | null,
+): string {
+  const toolName = getApprovalToolName(approvalItem);
+  const lines = [`Tool: \`${toolName}\``];
+
+  if (approvalArgs) {
+    appendArgumentLines(
+      lines,
+      formatArgumentLines(getGenericToolArguments(approvalArgs)),
+    );
+  } else {
+    const rawArgumentLine = formatRawArgumentLine(approvalItem.arguments);
+    if (rawArgumentLine) appendArgumentLines(lines, [rawArgumentLine]);
+  }
+
+  return truncate(lines.join("\n"), 3900);
+}
+
+function formatSmitheryToolArguments(args: Record<string, unknown>): string[] {
+  return formatArgumentLines(args);
 }
 
 function getSmitheryPermissionDescription(
@@ -201,9 +315,7 @@ function getSmitheryPermissionDescription(
   ];
 
   const argumentLines = formatSmitheryToolArguments(mcpArgs);
-  if (argumentLines.length > 0) {
-    lines.push("", "Request details:", ...argumentLines);
-  }
+  appendArgumentLines(lines, argumentLines);
 
   return truncate(lines.join("\n"), 3900);
 }
@@ -228,14 +340,22 @@ function getPermissionDescription(approvalItem: RunToolApprovalItem): string {
     return getSmitheryPermissionDescription(approvalArgs);
   }
 
-  const formattedArgs = formatArguments(approvalItem.arguments);
-  const lines = [`Tool: \`${toolName}\``];
+  return getGenericPermissionDescription(approvalItem, approvalArgs);
+}
 
-  if (formattedArgs) {
-    lines.push("", "Arguments:", "```json", truncate(formattedArgs, 3000), "```");
-  }
+function getPermissionDescriptionWithExpiration(
+  approvalItem: RunToolApprovalItem,
+  expiresAtMs: number | undefined,
+): string {
+  const description = getPermissionDescription(approvalItem);
+  if (!expiresAtMs) return description;
 
-  return truncate(lines.join("\n"), 3900);
+  const expirationLine = `\n\nExpires ${formatDiscordTimestamp(
+    expiresAtMs,
+    "R",
+  )} (${formatDiscordTimestamp(expiresAtMs, "T")})`;
+  const descriptionLimit = EMBED_DESCRIPTION_LIMIT - expirationLine.length;
+  return `${truncate(description, descriptionLimit)}${expirationLine}`;
 }
 
 function createPermissionEmbed(
@@ -243,13 +363,21 @@ function createPermissionEmbed(
   approvalItem: RunToolApprovalItem,
   color: number,
   footer: string,
+  expiresAtMs?: number,
 ): EmbedBuilder {
   return new EmbedBuilder()
     .setTitle(title)
-    .setDescription(getPermissionDescription(approvalItem))
+    .setDescription(
+      getPermissionDescriptionWithExpiration(approvalItem, expiresAtMs),
+    )
     .setColor(color)
     .setFooter({ text: footer })
     .setTimestamp();
+}
+
+function getErrorCode(error: unknown): number | null {
+  const code = (error as { code?: unknown })?.code;
+  return typeof code === "number" ? code : null;
 }
 
 interface ApprovalPromptArgs {
@@ -438,6 +566,7 @@ function waitForApproval(args: ApprovalPromptArgs): Promise<PermissionResult> {
 
 export class PermissionManager {
   private readonly contexts = new Map<string, PermissionContext>();
+  private readonly promptMessages = new Map<string, Set<Message>>();
 
   setContext(channelId: string, context: PermissionContext): void {
     this.contexts.set(channelId, context);
@@ -445,6 +574,54 @@ export class PermissionManager {
 
   clearContext(channelId: string): void {
     this.contexts.delete(channelId);
+  }
+
+  private trackPromptMessage(turnId: string, message: Message): void {
+    const messages = this.promptMessages.get(turnId) ?? new Set<Message>();
+    messages.add(message);
+    this.promptMessages.set(turnId, messages);
+  }
+
+  async deletePromptMessages(turnId: string): Promise<void> {
+    const messages = this.promptMessages.get(turnId);
+    if (!messages || messages.size === 0) return;
+
+    this.promptMessages.delete(turnId);
+
+    const deleteResults = await Promise.allSettled(
+      [...messages].map((message) => message.delete()),
+    );
+    let deletedCount = 0;
+
+    for (const result of deleteResults) {
+      if (result.status === "fulfilled") {
+        deletedCount += 1;
+        continue;
+      }
+
+      const error = result.reason as Error;
+      const code = getErrorCode(error);
+      if (code === DISCORD_UNKNOWN_MESSAGE_CODE) continue;
+
+      aiLogger.debug(
+        {
+          code,
+          error: error.message,
+          name: error.name,
+          turnId,
+        },
+        "Failed to delete permission prompt",
+      );
+    }
+
+    aiLogger.debug(
+      {
+        deletedCount,
+        promptCount: messages.size,
+        turnId,
+      },
+      "Deleted permission prompts for completed chat turn",
+    );
   }
 
   async requestToolApproval(
@@ -464,14 +641,16 @@ export class PermissionManager {
       return DENY_ONCE_RESULT;
     }
 
-    const { channel, userId } = context;
+    const { channel, turnId, userId } = context;
 
     try {
+      const expiresAtMs = Date.now() + timeoutMs;
       const embed = createPermissionEmbed(
         `Permission Required: ${getPermissionDisplayName(approvalItem)}`,
         approvalItem,
         0xffa500,
-        `Choose once for one call, or tool this turn for repeats. Expires in ${Math.round(timeoutMs / 1000)}s`,
+        "Choose once for one call, or tool this turn for repeats",
+        expiresAtMs,
       );
 
       const buttonId = randomUUID().slice(0, 12);
@@ -498,6 +677,7 @@ export class PermissionManager {
         embeds: [embed],
         components: [row],
       });
+      this.trackPromptMessage(turnId, promptMessage);
 
       aiLogger.info(
         { channelId, sessionId, tool: toolName, userId },

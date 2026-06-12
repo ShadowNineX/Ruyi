@@ -1,5 +1,6 @@
 import {
   Agent,
+  assistant,
   user,
   type AgentInputItem,
   type OpenAIResponsesCompactionArgs,
@@ -19,6 +20,8 @@ import {
 } from "../constants";
 import { agentsRuntimeManager } from "./client";
 import { systemPromptVersion } from "./prompt";
+
+const TRACKED_MESSAGE_ID_CAP = 200;
 
 const SUMMARY_SYSTEM_PROMPT = `You maintain Ruyi's compacted Discord channel memory.
 
@@ -258,6 +261,11 @@ interface SessionCompactionResult {
   compactedCount: number;
 }
 
+interface SeedSessionData {
+  items: AgentInputItem[];
+  messageIds: string[];
+}
+
 async function compactItemsIntoSummary(
   items: AgentInputItem[],
   existingSummary: string | null,
@@ -280,6 +288,8 @@ async function compactItemsIntoSummary(
 }
 
 class MongoAgentSession implements Session {
+  private invalidated = false;
+
   constructor(
     private readonly channelId: string,
     private readonly sessionId: string,
@@ -287,32 +297,44 @@ class MongoAgentSession implements Session {
     private summary: string | null,
   ) {}
 
+  markInvalidated(): void {
+    this.invalidated = true;
+    this.items = [];
+    this.summary = null;
+  }
+
   async getSessionId(): Promise<string> {
     return this.sessionId;
   }
 
   async getItems(limit?: number): Promise<AgentInputItem[]> {
+    if (this.invalidated) return [];
     if (limit === undefined) return [...this.items];
     return this.items.slice(-limit);
   }
 
   async addItems(items: AgentInputItem[]): Promise<void> {
+    if (this.invalidated) return;
     this.items = [...this.items, ...items];
     await this.persist();
   }
 
   async popItem(): Promise<AgentInputItem | undefined> {
+    if (this.invalidated) return undefined;
     const item = this.items.pop();
     await this.persist();
     return item;
   }
 
   async clearSession(): Promise<void> {
+    if (this.invalidated) return;
     this.items = [];
     await this.persist();
   }
 
   async runCompaction(args?: OpenAIResponsesCompactionArgs): Promise<void> {
+    if (this.invalidated) return;
+
     const shouldCompact =
       args?.force === true ||
       this.items.length > AGENT_SESSION_COMPACTION_TRIGGER_ITEMS;
@@ -353,6 +375,8 @@ class MongoAgentSession implements Session {
   }
 
   private async persist(): Promise<void> {
+    if (this.invalidated) return;
+
     await AgentSession.updateOne(
       { channelId: this.channelId },
       {
@@ -372,6 +396,8 @@ class MongoAgentSession implements Session {
   }
 
   private async persistCompaction(): Promise<void> {
+    if (this.invalidated) return;
+
     await AgentSession.updateOne(
       { channelId: this.channelId },
       {
@@ -388,6 +414,7 @@ class MongoAgentSession implements Session {
   }
 
   private async trimAfterFailedCompaction(): Promise<void> {
+    if (this.invalidated) return;
     if (this.items.length <= AGENT_SESSION_ITEM_CAP) return;
 
     const originalCount = this.items.length;
@@ -465,21 +492,32 @@ async function compactPersistedItemsIfNeeded(
   }
 }
 
-async function buildSeedItems(
+function normalizeMessageIds(messageIds: Array<string | undefined>): string[] {
+  return [...new Set(messageIds.filter((id): id is string => Boolean(id)))];
+}
+
+async function buildSeedSessionData(
   channelId: string,
   currentMessageId?: string,
-): Promise<AgentInputItem[]> {
+): Promise<SeedSessionData> {
   const conversation = await Conversation.findOne({ channelId });
-  if (!conversation || conversation.messages.length === 0) return [];
+  if (!conversation || conversation.messages.length === 0) {
+    return { items: [], messageIds: [] };
+  }
 
   const messages = conversation.messages
     .filter((message) => message.messageId !== currentMessageId)
-    .filter((message) => !message.isBot)
     .slice(-AGENT_SESSION_SEED_MESSAGE_LIMIT);
 
-  return messages.map((message) => {
-    return user(`${message.author}: ${message.content}`);
+  const items = messages.map((message) => {
+    const content = `${message.author}: ${message.content}`;
+    return message.isBot ? assistant(content) : user(content);
   });
+
+  return {
+    items,
+    messageIds: normalizeMessageIds(messages.map((message) => message.messageId)),
+  };
 }
 
 export class SessionManager {
@@ -504,10 +542,7 @@ export class SessionManager {
     const existingSession = this.activeSessions.get(channelId);
     if (existingSession) {
       aiLogger.debug({ channelId }, "Using cached agent session");
-      await AgentSession.updateOne(
-        { channelId },
-        { $set: { lastUsed: new Date() } },
-      );
+      await this.touchSession(channelId, currentMessageId);
       return existingSession;
     }
 
@@ -535,15 +570,7 @@ export class SessionManager {
           compactedSession.summary,
         );
         this.activeSessions.set(channelId, session);
-        await AgentSession.updateOne(
-          { channelId },
-          {
-            $set: {
-              lastUsed: new Date(),
-              model: agentsRuntimeManager.model,
-            },
-          },
-        );
+        await this.touchSession(channelId, currentMessageId);
 
         aiLogger.debug(
           { channelId, sessionId: persistedSession.sessionId },
@@ -568,8 +595,17 @@ export class SessionManager {
     }
 
     const sessionId = `ruyi-${channelId}-${Date.now()}`;
-    const seedItems = await buildSeedItems(channelId, currentMessageId);
-    const session = new MongoAgentSession(channelId, sessionId, seedItems, null);
+    const seedData = await buildSeedSessionData(channelId, currentMessageId);
+    const userMessageIds = normalizeMessageIds([
+      ...seedData.messageIds,
+      currentMessageId,
+    ]).slice(-TRACKED_MESSAGE_ID_CAP);
+    const session = new MongoAgentSession(
+      channelId,
+      sessionId,
+      seedData.items,
+      null,
+    );
 
     await AgentSession.findOneAndUpdate(
       { channelId },
@@ -578,7 +614,8 @@ export class SessionManager {
           sessionId,
           provider: "openai-agents",
           model: agentsRuntimeManager.model,
-          items: seedItems,
+          items: seedData.items,
+          userMessageIds,
           lastUsed: new Date(),
           isActive: true,
           promptVersion: systemPromptVersion,
@@ -591,14 +628,43 @@ export class SessionManager {
     this.activeSessions.set(channelId, session);
 
     aiLogger.info(
-      { channelId, sessionId, seedCount: seedItems.length },
+      { channelId, sessionId, seedCount: seedData.items.length },
       "Created new agent session",
     );
 
     return session;
   }
 
+  private async touchSession(
+    channelId: string,
+    currentMessageId?: string,
+  ): Promise<void> {
+    const update =
+      currentMessageId && currentMessageId.length > 0
+        ? {
+            $push: {
+              userMessageIds: {
+                $each: [currentMessageId],
+                $slice: -TRACKED_MESSAGE_ID_CAP,
+              },
+            },
+            $set: {
+              lastUsed: new Date(),
+              model: agentsRuntimeManager.model,
+            },
+          }
+        : {
+            $set: {
+              lastUsed: new Date(),
+              model: agentsRuntimeManager.model,
+            },
+          };
+
+    await AgentSession.updateOne({ channelId }, update);
+  }
+
   async invalidate(channelId: string): Promise<void> {
+    this.activeSessions.get(channelId)?.markInvalidated();
     this.activeSessions.delete(channelId);
 
     await AgentSession.updateOne(
@@ -625,7 +691,7 @@ export class SessionManager {
         $push: {
           assistantMessageIds: {
             $each: messageIds,
-            $slice: -100,
+            $slice: -TRACKED_MESSAGE_ID_CAP,
           },
         },
         $set: { lastUsed: new Date() },
@@ -637,19 +703,39 @@ export class SessionManager {
     channelId: string,
     messageId: string,
   ): Promise<boolean> {
+    return this.invalidateIfAssistantMessagesDeleted(channelId, [messageId]);
+  }
+
+  async invalidateIfAssistantMessagesDeleted(
+    channelId: string,
+    messageIds: string[],
+  ): Promise<boolean> {
+    return this.invalidateIfTrackedMessagesDeleted(channelId, messageIds);
+  }
+
+  async invalidateIfTrackedMessagesDeleted(
+    channelId: string,
+    messageIds: string[],
+  ): Promise<boolean> {
+    const uniqueMessageIds = [...new Set(messageIds)].filter(Boolean);
+    if (uniqueMessageIds.length === 0) return false;
+
     const session = await AgentSession.exists({
       channelId,
       isActive: true,
       provider: "openai-agents",
-      assistantMessageIds: messageId,
+      $or: [
+        { assistantMessageIds: { $in: uniqueMessageIds } },
+        { userMessageIds: { $in: uniqueMessageIds } },
+      ],
     });
 
     if (!session) return false;
 
     await this.invalidate(channelId);
     aiLogger.info(
-      { channelId, messageId },
-      "Invalidated agent session because a tracked assistant reply was deleted",
+      { channelId, messageIds: uniqueMessageIds },
+      "Invalidated agent session because tracked Discord messages were deleted",
     );
     return true;
   }

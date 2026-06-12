@@ -20,11 +20,11 @@ Ruyi is a Discord bot (Nine Sols themed AI companion) built on Bun + TypeScript 
    - `client.ts` — OpenAI Agents runtime manager (one shared runner/provider).
    - `session.ts` — `sessionManager` keyed by Discord channel id; persists/restores `AgentSession` rows.
    - `chat.ts` — `chatService.chat()`. Returns `string | null`; **throws on error** so [src/bot.ts](src/bot.ts) can surface a meaningful message via `getErrorMessage()` in [src/utils/messages.ts](src/utils/messages.ts). `null` means "model returned empty" only.
-   - `context.ts` — splits incoming chat history into a "Reply context" (cited thread, non-bot only) and "Recent channel activity" (ambient, non-bot only). The bot's own past replies come from `AgentSession`, not from re-feeding history.
+   - `context.ts` — splits incoming chat history into a "Reply context" (cited thread, non-bot only), "Recent channel activity" (ambient, non-bot only), and a tiny slice of visible recent bot replies for mention-only/ambiguous continuity after session rebuilds. The bot's full past replies come from `AgentSession`.
    - `prompt.ts` — Ruyi persona + tool-usage hints. Wraps everything in XML-like `<context>` / `<instructions>` blocks.
    - `classifier.ts` — `replyClassifier.shouldReply()` lightweight LLM structured boolean gate. Failures default to no-response.
    - `permissions.ts` — interactive Discord prompt for sensitive tool calls (`permissionManager`).
-   - `extraction.ts` — c.ai-style auto memory extraction (background fact storage).
+   - `extraction.ts` — c.ai-style semantic auto memory extraction (background fact storage). It is scheduled by message count/cooldown only; do not add hardcoded phrase triggers.
 4. [src/utils/chat-session.ts](src/utils/chat-session.ts) — `ChatSession` owns the live status embed + typing interval; tool start/finish events update the embed and pause typing.
 5. [src/utils/messages.ts](src/utils/messages.ts) — `fetchReplyChain`, `fetchChatHistory`, `fetchReferencedMessage`, `sendReplyChunks` (≤2000 chars per chunk, protects URLs/code blocks), `getErrorMessage` (maps 402/429/502/503 → friendly text).
 
@@ -35,13 +35,14 @@ Ruyi is a Discord bot (Nine Sols themed AI companion) built on Bun + TypeScript 
 - Pattern: build directly with `tool({ name, description, parameters: z.object({...}), execute })` from `@openai/agents`. Discord context (channel/guild/message/referencedMessage) flows through `runWithToolContext()` + `toolContextManager.get()` in [src/utils/types.ts](src/utils/types.ts) — [src/bot.ts](src/bot.ts) wraps each chat turn in `runWithToolContext(toolCtx, () => chatService.chat(...))` so tools see the active context via `AsyncLocalStorage`. Tools must guard against null channel/guild and return structured error objects (not throw). Use the SDK's `needsApproval` option for sensitive tools.
 - MCP-backed tools live in [src/mcp/](src/mcp/) and [src/tools/](src/tools/). GitHub uses GitHub's official `github/github-mcp-server` as a hosted MCP server tool configured by `GITHUB_PERSONAL_ACCESS_TOKEN` and `GITHUB_MCP_URL`. Smithery Connect is still used for non-GitHub hosted MCP services, configured with `SMITHERY_API_KEY` + `SMITHERY_NAMESPACE`; `/smithery` creates hosted Smithery setup links and stores connection IDs/statuses. Do not route GitHub through Smithery.
 - Web search is exposed as one local `web_search` tool. It uses the Mongo-backed search provider setting first for answer-mode queries, then the other built-in provider when the first one errors or produces weak/no sources. Research-mode queries go directly to Tavily first. Change the preferred provider from Discord with `/search-provider`.
-- Memory tools enforce per-user scope by Discord username, truncate values to `MEMORY_VALUE_MAX_LEN`, and evict past `USER_MEMORY_CAP` / global cap. See [src/tools/memory.ts](src/tools/memory.ts).
+- Memory tools enforce per-user scope by Discord username, truncate values to `MEMORY_VALUE_MAX_LEN`, and evict past `USER_MEMORY_CAP` / global cap. Ruyi stores explicit memories through the main agent's `memory_store` tool and also runs semantic c.ai-style background extraction after enough user messages. See [src/tools/memory.ts](src/tools/memory.ts) and [src/ai/extraction.ts](src/ai/extraction.ts).
 
 ## Persistence
 
-- Mongoose models in [src/db/models/](src/db/models/): `Config`, `Conversation` (channel history, 100-message cap), `Memory` (global + user), `AgentSession` (per-channel OpenAI Agents session state — source of truth for the bot's own past replies; bot replies are stored once anchored to the first chunk's id), `SmitheryConnection`.
+- Mongoose models in [src/db/models/](src/db/models/): `Config`, `Conversation` (channel history, 100-message cap), `Memory` (global + user), `AgentSession` (per-channel OpenAI Agents session state; tracks both user message IDs sent to the agent and final assistant reply IDs so Discord deletions invalidate stale sessions), `SmitheryConnection`.
 - Startup migrations live in [src/db/migrations.ts](src/db/migrations.ts), run immediately after `connectDB()`, and record completion in `Config` keys prefixed with `db:migration:`. Keep migrations idempotent and use them to remove obsolete collections or safely reshape stored data.
-- [src/services/message-sync.ts](src/services/message-sync.ts) periodically prunes DB rows for messages deleted in Discord. Rate-limited; do not duplicate this work elsewhere.
+- Any change to Mongo models, stored document shape, indexes, provider IDs, persisted config keys, or message/session tracking data must include an idempotent DB migration before runtime code depends on the new shape. Data cleanup and backfills belong in migrations.
+- [src/services/message-sync.ts](src/services/message-sync.ts) is the single path for Discord deletion sync: message delete events, bulk-delete events, the `delete_messages` tool, and the periodic sweep all remove archived message IDs and invalidate affected `AgentSession` rows. Rate-limited; do not duplicate this work elsewhere.
 - `connectDB()` exits the process on disconnect/error after the initial connect.
 
 ## Commands
@@ -66,5 +67,6 @@ Ruyi speaks with authentic Nine Sols cadence (formal, deferential — "your humb
 - When adding a tool: append to `allTools`, mark self-responding/external-service if applicable, and ensure the tool only accesses Discord context via `toolContextManager.get()`.
 - Keep cognitive complexity under 15 per function. Extract handlers from large switch statements (see [src/tools/role.ts](src/tools/role.ts), [src/tools/memory.ts](src/tools/memory.ts)).
 - Mongo writes must be bounded (slices, caps) — never unbounded growth.
+- NEVER add runtime legacy compatibility paths, old-field fallbacks, or "maybe legacy" branches. Normalize old data with a migration, then keep application code strict and current.
 
 If a section here looks stale relative to the current code, fix it — this file is the contract for new agents.

@@ -1,7 +1,7 @@
 import mongoose, { Schema, type Document } from "mongoose";
 
 export interface IConversationMessage {
-  messageId?: string;
+  messageId: string;
   author: string;
   content: string;
   isBot: boolean;
@@ -16,7 +16,7 @@ export interface IConversation extends Document {
 
 const MessageSchema = new Schema<IConversationMessage>(
   {
-    messageId: { type: String, index: true },
+    messageId: { type: String, required: true, index: true },
     author: { type: String, required: true },
     content: { type: String, required: true },
     isBot: { type: Boolean, required: true },

@@ -4,7 +4,7 @@ import type {
   NewsChannel,
   ThreadChannel,
 } from "discord.js";
-import { Conversation, type IConversation } from "../db/models";
+import { AgentSession, Conversation, type IConversation } from "../db/models";
 import { sessionManager } from "../ai/session";
 import { syncLogger } from "../logger";
 
@@ -15,15 +15,11 @@ const BATCH_DELAY_MS = 1000;
 type MessageableChannel = TextChannel | NewsChannel | ThreadChannel;
 type MessagePresence = "exists" | "deleted" | "unknown";
 type SyncConversation = Pick<IConversation, "channelId" | "messages">;
-type SyncMessageWithId = SyncConversation["messages"][number] & {
-  messageId: string;
+type SyncAgentSession = {
+  channelId: string;
+  userMessageIds: string[];
+  assistantMessageIds: string[];
 };
-
-function hasMessageId(
-  message: SyncConversation["messages"][number],
-): message is SyncMessageWithId {
-  return typeof message.messageId === "string" && message.messageId.length > 0;
-}
 
 function isMessageableChannel(channel: unknown): channel is MessageableChannel {
   return (
@@ -82,30 +78,54 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeMessageIds(messageIds: string[]): string[] {
+  return [...new Set(messageIds.map((id) => id.trim()).filter(Boolean))];
+}
+
+async function removeDeletedMessageReferences(
+  channelId: string,
+  messageIds: string[],
+): Promise<{ conversationModified: boolean; sessionInvalidated: boolean }> {
+  const normalizedIds = normalizeMessageIds(messageIds);
+  if (normalizedIds.length === 0) {
+    return { conversationModified: false, sessionInvalidated: false };
+  }
+
+  const result = await Conversation.updateOne(
+    { channelId },
+    { $pull: { messages: { messageId: { $in: normalizedIds } } } },
+  );
+  const conversationModified = result.modifiedCount > 0;
+  const sessionInvalidated =
+    await sessionManager.invalidateIfTrackedMessagesDeleted(
+      channelId,
+      normalizedIds,
+    );
+
+  if (conversationModified && !sessionInvalidated) {
+    await sessionManager.invalidate(channelId);
+  }
+
+  return { conversationModified, sessionInvalidated };
+}
+
 async function syncConversation(
   client: Client,
   conversation: SyncConversation,
 ): Promise<{ channelId: string; deleted: number; skipped: number }> {
   const channelId = conversation.channelId;
-  const messagesWithIds = conversation.messages.filter(hasMessageId);
-  const messagesWithoutIds =
-    conversation.messages.length - messagesWithIds.length;
+  const messageIds = normalizeMessageIds(
+    conversation.messages.map((message) => message.messageId),
+  );
 
-  if (messagesWithIds.length === 0) {
-    if (messagesWithoutIds > 0) {
-      syncLogger.debug(
-        { channelId, messagesWithoutIds },
-        "No messages with IDs to sync (legacy messages)",
-      );
-    }
-    return { channelId, deleted: 0, skipped: messagesWithoutIds };
+  if (messageIds.length === 0) {
+    return { channelId, deleted: 0, skipped: 0 };
   }
 
   syncLogger.debug(
     {
       channelId,
-      withIds: messagesWithIds.length,
-      withoutIds: messagesWithoutIds,
+      messageCount: messageIds.length,
     },
     "Syncing channel",
   );
@@ -115,7 +135,7 @@ async function syncConversation(
     const fetchedChannel = await client.channels.fetch(channelId);
     if (!isMessageableChannel(fetchedChannel)) {
       syncLogger.debug({ channelId }, "Channel is not messageable, skipping");
-      return { channelId, deleted: 0, skipped: messagesWithIds.length };
+      return { channelId, deleted: 0, skipped: messageIds.length };
     }
     channel = fetchedChannel;
   } catch (error) {
@@ -123,10 +143,9 @@ async function syncConversation(
       { channelId, error: (error as Error).message },
       "Could not fetch channel, skipping",
     );
-    return { channelId, deleted: 0, skipped: messagesWithIds.length };
+    return { channelId, deleted: 0, skipped: messageIds.length };
   }
 
-  const messageIds = messagesWithIds.map((m) => m.messageId);
   const deletedIds: string[] = [];
   let skippedFetches = 0;
 
@@ -149,11 +168,7 @@ async function syncConversation(
       { channelId, deletedIds },
       "Removing deleted messages from DB",
     );
-    await Conversation.updateOne(
-      { channelId },
-      { $pull: { messages: { messageId: { $in: deletedIds } } } },
-    );
-    await sessionManager.invalidate(channelId);
+    await removeDeletedMessageReferences(channelId, deletedIds);
     syncLogger.info(
       { channelId },
       "Invalidated agent session after archived Discord messages were deleted",
@@ -163,8 +178,64 @@ async function syncConversation(
   return {
     channelId,
     deleted: deletedIds.length,
-    skipped: messagesWithoutIds + skippedFetches,
+    skipped: skippedFetches,
   };
+}
+
+async function syncAgentSessionMessages(
+  client: Client,
+  session: SyncAgentSession,
+): Promise<{ channelId: string; deleted: number; skipped: number }> {
+  const channelId = session.channelId;
+  const messageIds = normalizeMessageIds([
+    ...session.assistantMessageIds,
+    ...session.userMessageIds,
+  ]);
+  if (messageIds.length === 0) {
+    return { channelId, deleted: 0, skipped: 0 };
+  }
+
+  let channel: MessageableChannel;
+  try {
+    const fetchedChannel = await client.channels.fetch(channelId);
+    if (!isMessageableChannel(fetchedChannel)) {
+      syncLogger.debug({ channelId }, "Channel is not messageable, skipping");
+      return { channelId, deleted: 0, skipped: messageIds.length };
+    }
+    channel = fetchedChannel;
+  } catch (error) {
+    syncLogger.debug(
+      { channelId, error: (error as Error).message },
+      "Could not fetch channel for agent session message sync, skipping",
+    );
+    return { channelId, deleted: 0, skipped: messageIds.length };
+  }
+
+  const deletedIds: string[] = [];
+  let skippedFetches = 0;
+
+  for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
+    const batch = messageIds.slice(i, i + BATCH_SIZE);
+    const { deletedIds: deleted, skipped } = await findDeletedMessages(
+      channel,
+      batch,
+    );
+    deletedIds.push(...deleted);
+    skippedFetches += skipped;
+
+    if (i + BATCH_SIZE < messageIds.length) {
+      await sleep(BATCH_DELAY_MS);
+    }
+  }
+
+  if (deletedIds.length > 0) {
+    await sessionManager.invalidateIfTrackedMessagesDeleted(
+      channelId,
+      deletedIds,
+    );
+  }
+
+  return { channelId, deleted: deletedIds.length, skipped: skippedFetches };
 }
 
 export class MessageSyncService {
@@ -186,6 +257,17 @@ export class MessageSyncService {
         {},
         { channelId: 1, "messages.messageId": 1 },
       ).lean<SyncConversation[]>();
+      const agentSessions = await AgentSession.find(
+        {
+          isActive: true,
+          provider: "openai-agents",
+          $or: [
+            { assistantMessageIds: { $exists: true, $ne: [] } },
+            { userMessageIds: { $exists: true, $ne: [] } },
+          ],
+        },
+        { channelId: 1, assistantMessageIds: 1, userMessageIds: 1, _id: 0 },
+      ).lean<SyncAgentSession[]>();
       let totalDeleted = 0;
       let totalSkipped = 0;
       let channelsProcessed = 0;
@@ -197,6 +279,17 @@ export class MessageSyncService {
         channelsProcessed++;
 
         if (channelsProcessed < conversations.length) {
+          await sleep(500);
+        }
+      }
+
+      for (const session of agentSessions) {
+        const result = await syncAgentSessionMessages(client, session);
+        totalDeleted += result.deleted;
+        totalSkipped += result.skipped;
+        channelsProcessed++;
+
+        if (channelsProcessed < conversations.length + agentSessions.length) {
           await sleep(500);
         }
       }
@@ -249,39 +342,36 @@ export class MessageSyncService {
   }
 
   async deleteMessage(channelId: string, messageId: string): Promise<void> {
-    try {
-      const result = await Conversation.updateOne(
-        { channelId },
-        { $pull: { messages: { messageId } } },
-      );
-      const assistantDeleted =
-        await sessionManager.invalidateIfAssistantMessageDeleted(
-          channelId,
-          messageId,
-        );
+    await this.deleteMessages(channelId, [messageId]);
+  }
 
-      if (result.modifiedCount > 0) {
-        if (!assistantDeleted) {
-          await sessionManager.invalidate(channelId);
-        }
+  async deleteMessages(channelId: string, messageIds: string[]): Promise<void> {
+    const normalizedIds = normalizeMessageIds(messageIds);
+    if (normalizedIds.length === 0) return;
+
+    try {
+      const { conversationModified, sessionInvalidated } =
+        await removeDeletedMessageReferences(channelId, normalizedIds);
+
+      if (conversationModified) {
         syncLogger.info(
-          { channelId, messageId },
+          { channelId, messageIds: normalizedIds },
           "Deleted archived Discord message and invalidated agent session",
         );
-      } else if (assistantDeleted) {
+      } else if (sessionInvalidated) {
         syncLogger.info(
-          { channelId, messageId },
-          "Deleted tracked assistant reply and invalidated agent session",
+          { channelId, messageIds: normalizedIds },
+          "Deleted tracked agent session message and invalidated agent session",
         );
       } else {
         syncLogger.debug(
-          { channelId, messageId },
-          "Message not found in DB (may be legacy or not tracked)",
+          { channelId, messageIds: normalizedIds },
+          "Message not found in tracked DB state",
         );
       }
     } catch (error) {
       syncLogger.error(
-        { error, channelId, messageId },
+        { error, channelId, messageIds: normalizedIds },
         "Failed to delete message from DB",
       );
     }

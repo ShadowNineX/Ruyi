@@ -5,12 +5,28 @@ import { getConfigValue, setConfigValue } from "./models";
 const MIGRATION_CONFIG_PREFIX = "db:migration:";
 const COMPLETE = "complete";
 const PENDING = "pending";
-const LEGACY_SMITHERY_TOKENS_COLLECTION = "smitherytokens";
+const OBSOLETE_SMITHERY_TOKENS_COLLECTION = "smitherytokens";
 const SMITHERY_CONNECTIONS_COLLECTION = "smitheryconnections";
+const AGENT_SESSIONS_COLLECTION = "agentsessions";
+const CONVERSATIONS_COLLECTION = "conversations";
 
 interface DatabaseMigration {
   id: string;
   run: () => Promise<void>;
+}
+
+interface ConversationMigrationMessage {
+  messageId?: string | null;
+  isBot?: boolean;
+}
+
+interface ConversationMigrationDocument {
+  messages?: ConversationMigrationMessage[];
+}
+
+interface AgentSessionMigrationDocument {
+  userMessageIds?: string[];
+  assistantMessageIds?: string[];
 }
 
 function getDb() {
@@ -41,15 +57,15 @@ const migrations: DatabaseMigration[] = [
     id: "2026-06-11-drop-legacy-smitherytokens",
     run: async () => {
       const dropped = await dropCollectionIfExists(
-        LEGACY_SMITHERY_TOKENS_COLLECTION,
+        OBSOLETE_SMITHERY_TOKENS_COLLECTION,
       );
 
       dbLogger.info(
         {
-          collection: LEGACY_SMITHERY_TOKENS_COLLECTION,
+          collection: OBSOLETE_SMITHERY_TOKENS_COLLECTION,
           dropped,
         },
-        "Legacy Smithery OAuth token collection cleanup complete",
+        "Obsolete Smithery OAuth token collection cleanup complete",
       );
     },
   },
@@ -98,6 +114,64 @@ const migrations: DatabaseMigration[] = [
           deletedCount: result.deletedCount,
         },
         "GitHub Smithery connection cleanup complete",
+      );
+    },
+  },
+  {
+    id: "2026-06-12-normalize-message-sync-state",
+    run: async () => {
+      let conversationMatched = 0;
+      let conversationModified = 0;
+      let agentSessionsInitialized = 0;
+
+      if (await collectionExists(CONVERSATIONS_COLLECTION)) {
+        const conversationsCollection =
+          getDb().collection<ConversationMigrationDocument>(
+            CONVERSATIONS_COLLECTION,
+          );
+        const result = await conversationsCollection.updateMany(
+          {},
+          {
+            $pull: {
+              messages: {
+                $or: [
+                  { messageId: { $exists: false } },
+                  { messageId: null },
+                  { messageId: "" },
+                  { isBot: true },
+                ],
+              },
+            },
+          },
+        );
+        conversationMatched = result.matchedCount;
+        conversationModified = result.modifiedCount;
+      }
+
+      if (await collectionExists(AGENT_SESSIONS_COLLECTION)) {
+        const agentSessionsCollection =
+          getDb().collection<AgentSessionMigrationDocument>(
+            AGENT_SESSIONS_COLLECTION,
+          );
+        const userIdsResult = await agentSessionsCollection.updateMany(
+          { userMessageIds: { $exists: false } },
+          { $set: { userMessageIds: [] } },
+        );
+        const assistantIdsResult = await agentSessionsCollection.updateMany(
+          { assistantMessageIds: { $exists: false } },
+          { $set: { assistantMessageIds: [] } },
+        );
+        agentSessionsInitialized =
+          userIdsResult.modifiedCount + assistantIdsResult.modifiedCount;
+      }
+
+      dbLogger.info(
+        {
+          conversationMatched,
+          conversationModified,
+          agentSessionsInitialized,
+        },
+        "Message sync state normalization complete",
       );
     },
   },

@@ -68,12 +68,9 @@ async function storeFact(username: string, fact: ExtractedFact): Promise<void> {
   const value = truncateValue(fact.value.trim());
   if (!value) return;
 
-  // Don't overwrite a pinned fact with the same key, and don't evict another
-  // memory if this extraction will be skipped anyway.
   const existing = await Memory.findOne({ scope: "user", username, key });
   if (existing?.pinned) return;
 
-  // Evict oldest non-pinned, non-auto-pinned memory if at cap.
   const count = await Memory.countDocuments({ scope: "user", username });
   if (count >= USER_MEMORY_CAP) {
     const oldest = await Memory.findOne({
@@ -104,18 +101,18 @@ async function fetchExistingMemoryKeys(username: string): Promise<string[]> {
     { scope: "user", username },
     { key: 1, value: 1, _id: 0 },
   ).limit(40);
-  return memories.map((m) => `${m.key}: ${m.value}`);
+  return memories.map((memory) => `${memory.key}: ${memory.value}`);
 }
 
 /**
  * Background extraction pass. Reads recent channel history, asks the model
  * for durable facts, and stores them as `source: "auto"` user memories.
- * Failures are logged and swallowed (best-effort, never throws).
+ * Returns true only when the extraction pass completed.
  */
 export async function autoExtractFacts(
   username: string,
   channelId: string,
-): Promise<void> {
+): Promise<boolean> {
   const history = await conversationContext.getMemoryContext(
     channelId,
     AUTO_EXTRACT_HISTORY_WINDOW,
@@ -125,11 +122,11 @@ export async function autoExtractFacts(
       { username, channelId },
       "Skip extraction: history too short",
     );
-    return;
+    return false;
   }
 
   const existing = await fetchExistingMemoryKeys(username);
-  const existingList = existing.map((e) => `- ${e}`).join("\n");
+  const existingList = existing.map((entry) => `- ${entry}`).join("\n");
   const existingBlock =
     existing.length > 0
       ? `\nExisting memories about ${username} (do NOT restate these):\n${existingList}`
@@ -178,6 +175,8 @@ Extract durable facts about ${username}. Return an empty facts array if nothing 
         );
       }
     }
+
+    return true;
   } catch (error) {
     aiLogger.warn(
       {
@@ -189,6 +188,7 @@ Extract durable facts about ${username}. Return an empty facts array if nothing 
       },
       "Auto-extraction failed",
     );
+    return false;
   } finally {
     clearTimeout(timeout);
   }

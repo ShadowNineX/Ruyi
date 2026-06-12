@@ -97,6 +97,7 @@ export class ChatSession {
   private updateInterval: ReturnType<typeof setInterval> | null = null;
   private statusMessage: Message | null = null;
   private hasNotifiedStatus = false;
+  private closed = false;
   private readonly channel: TextBasedChannel;
   private readonly onStatusChange?: SessionStatusListener;
 
@@ -114,6 +115,8 @@ export class ChatSession {
   }
 
   private notifyStatusChange(): void {
+    if (this.closed) return;
+
     this.hasNotifiedStatus = true;
     this.onStatusChange?.({
       status: this.state.status,
@@ -122,6 +125,8 @@ export class ChatSession {
   }
 
   private setStatus(status: SessionStatus, currentTool?: string): void {
+    if (this.closed) return;
+
     const changed =
       this.state.status !== status || this.state.currentTool !== currentTool;
     this.state.status = status;
@@ -142,6 +147,7 @@ export class ChatSession {
 
   /** Start the typing indicator */
   startTyping(): void {
+    if (this.closed) return;
     if (this.typingInterval) return;
     if ("sendTyping" in this.channel) {
       this.sendTypingOnce("initial");
@@ -161,8 +167,11 @@ export class ChatSession {
 
   /** Create and send the status embed as a reply */
   async sendStatusEmbed(replyTo: Message): Promise<void> {
+    if (this.closed) return;
+
+    let statusMessage: Message;
     try {
-      this.statusMessage = await replyTo.reply({
+      statusMessage = await replyTo.reply({
         embeds: [buildStatusEmbed(this.state)],
       });
     } catch (error) {
@@ -177,7 +186,19 @@ export class ChatSession {
       return;
     }
 
+    if (this.closed) {
+      await statusMessage.delete().catch((error: unknown) => {
+        botLogger.debug(
+          { error: (error as Error)?.message },
+          "Late status embed delete failed",
+        );
+      });
+      return;
+    }
+
+    this.statusMessage = statusMessage;
     this.updateInterval = setInterval(() => {
+      if (this.closed) return;
       if (this.state.status !== "complete" && this.state.status !== "error") {
         this.updateEmbed();
       }
@@ -186,6 +207,7 @@ export class ChatSession {
 
   /** Update the status embed */
   private async updateEmbed(): Promise<void> {
+    if (this.closed) return;
     if (!this.statusMessage) return;
     try {
       await this.statusMessage.edit({ embeds: [buildStatusEmbed(this.state)] });
@@ -199,6 +221,9 @@ export class ChatSession {
 
   /** Delete the status embed */
   async deleteStatusEmbed(): Promise<void> {
+    this.closed = true;
+    this.stopTyping();
+
     if (this.updateInterval) {
       clearInterval(this.updateInterval);
       this.updateInterval = null;
@@ -243,6 +268,8 @@ export class ChatSession {
 
   /** Called when a tool finishes executing */
   onToolEnd(toolName: string): void {
+    if (this.closed) return;
+
     this.state.toolCounts.set(
       toolName,
       (this.state.toolCounts.get(toolName) ?? 0) + 1,
@@ -270,6 +297,7 @@ export class ChatSession {
 
   /** Clean up all resources */
   cleanup(): void {
+    this.closed = true;
     this.stopTyping();
     if (this.updateInterval) {
       clearInterval(this.updateInterval);

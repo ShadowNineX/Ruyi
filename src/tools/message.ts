@@ -7,6 +7,7 @@ import {
   type ToolContext,
 } from "../utils/types";
 import { ChannelType, type TextChannel, type Message } from "discord.js";
+import { messageSyncService } from "../services/message-sync";
 
 interface ReactionInfo {
   emoji: string;
@@ -383,11 +384,16 @@ async function fetchFilteredMessages(
   return filtered.slice(0, clampedCount);
 }
 
+interface DeletionResult {
+  count: number;
+  messageIds: string[];
+}
+
 // Helper: Delete messages with bulk delete for recent, individual for old
 async function performDeletion(
   channel: TextChannel,
   messages: Message[],
-): Promise<number> {
+): Promise<DeletionResult> {
   const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
   const recentMessages = messages.filter(
     (m) => m.createdTimestamp > twoWeeksAgo,
@@ -395,14 +401,17 @@ async function performDeletion(
   const oldMessages = messages.filter((m) => m.createdTimestamp <= twoWeeksAgo);
 
   let deletedCount = 0;
+  const deletedMessageIds: string[] = [];
 
   // Bulk delete recent messages (faster)
   if (recentMessages.length > 1) {
-    await channel.bulkDelete(recentMessages);
-    deletedCount += recentMessages.length;
+    const deletedMessages = await channel.bulkDelete(recentMessages);
+    deletedCount += deletedMessages.size;
+    deletedMessageIds.push(...deletedMessages.keys());
   } else if (recentMessages.length === 1 && recentMessages[0]) {
     await recentMessages[0].delete();
     deletedCount += 1;
+    deletedMessageIds.push(recentMessages[0].id);
   }
 
   // Delete old messages one by one
@@ -410,6 +419,7 @@ async function performDeletion(
     try {
       await msg.delete();
       deletedCount++;
+      deletedMessageIds.push(msg.id);
     } catch (error) {
       toolLogger.debug(
         { messageId: msg.id, error: formatError(error) },
@@ -418,7 +428,10 @@ async function performDeletion(
     }
   }
 
-  return deletedCount;
+  return {
+    count: deletedCount,
+    messageIds: deletedMessageIds,
+  };
 }
 
 export const deleteMessagesTool = tool({
@@ -426,13 +439,13 @@ export const deleteMessagesTool = tool({
   description: `Delete messages from the current channel. Requires Manage Messages permission.
 
 HOW TO USE:
-- To clean/purge a channel: Set count=100 (max) to delete recent messages. Repeat if needed.
+- To clean/purge/clear a channel: Set count=100 (max) to delete recent messages. Repeat if needed.
 - To delete specific messages: Provide message_ids array.
 - To delete a user's messages: Set author="username" and count=50.
 - To delete messages with certain text: Set contains="text" and count=50.
 
 IMPORTANT: You MUST specify either message_ids OR count. Without count, nothing will be deleted.
-For "clean this channel" or "delete all messages" requests, use count=100.`,
+For "clean this channel", "clear chat", or "delete all messages" requests, use count=100.`,
   parameters: z.object({
     message_ids: z
       .array(z.string())
@@ -481,14 +494,20 @@ For "clean this channel" or "delete all messages" requests, use count=100.`,
         return { error: "No messages found matching criteria" };
       }
 
-      const deletedCount = await performDeletion(channel, messagesToDelete);
+      const deletion = await performDeletion(channel, messagesToDelete);
+      await messageSyncService.deleteMessages(channel.id, deletion.messageIds);
 
-      toolLogger.info({ deletedCount, author, contains }, "Messages deleted");
+      toolLogger.info(
+        { deletedCount: deletion.count, author, contains },
+        "Messages deleted",
+      );
 
       return {
         success: true,
-        deleted: deletedCount,
-        message: `Deleted ${deletedCount} message${deletedCount === 1 ? "" : "s"}`,
+        deleted: deletion.count,
+        message: `Deleted ${deletion.count} message${
+          deletion.count === 1 ? "" : "s"
+        }`,
       };
     } catch (error) {
       const errorMessage = formatError(error);

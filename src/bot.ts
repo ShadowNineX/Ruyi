@@ -10,7 +10,12 @@ import {
   type GuildTextBasedChannel,
   type TextChannel,
 } from "discord.js";
-import { chatService, replyClassifier, sessionManager } from "./ai";
+import {
+  chatService,
+  permissionManager,
+  replyClassifier,
+  sessionManager,
+} from "./ai";
 import { runWithToolContext, type ToolContext } from "./utils/types";
 import { env } from "./env";
 import { selfRespondingToolNames } from "./tools";
@@ -55,6 +60,10 @@ interface PresenceActivity {
 export class RuyiBot {
   private activePresenceSession: symbol | null = null;
   private readonly activeChatTurns = new Map<string, AbortController>();
+  private presenceResetTimer: {
+    session: symbol;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
 
   readonly client = new Client({
     intents: [
@@ -125,6 +134,45 @@ export class RuyiBot {
     };
 
     this.setActivityPresence(activities[snapshot.status]);
+  }
+
+  private clearPresenceResetTimer(presenceSession?: symbol): void {
+    if (!this.presenceResetTimer) return;
+    if (
+      presenceSession &&
+      this.presenceResetTimer.session !== presenceSession
+    ) {
+      return;
+    }
+
+    clearTimeout(this.presenceResetTimer.timer);
+    this.presenceResetTimer = null;
+  }
+
+  private resetPresenceSession(presenceSession: symbol): void {
+    if (this.activePresenceSession !== presenceSession) return;
+
+    this.activePresenceSession = null;
+    this.setDefaultPresence();
+  }
+
+  private schedulePresenceReset(
+    presenceSession: symbol,
+    context: Record<string, unknown>,
+  ): void {
+    this.clearPresenceResetTimer();
+
+    const timeoutMs = CHAT_TURN_TIMEOUT_MS + DISCORD_OPERATION_TIMEOUT_MS + 5000;
+    const timer = setTimeout(() => {
+      if (this.activePresenceSession !== presenceSession) return;
+
+      botLogger.warn(
+        { ...context, timeoutMs },
+        "Presence session fallback reset fired",
+      );
+      this.resetPresenceSession(presenceSession);
+    }, timeoutMs);
+    this.presenceResetTimer = { session: presenceSession, timer };
   }
 
   // ---- Reply gating --------------------------------------------------------
@@ -380,6 +428,17 @@ export class RuyiBot {
     );
   }
 
+  private async deletePermissionPromptsSafely(
+    turnId: string,
+    context: Record<string, unknown>,
+  ): Promise<void> {
+    await this.withOperationTimeout(
+      permissionManager.deletePromptMessages(turnId),
+      "Permission prompt cleanup",
+      context,
+    );
+  }
+
   private async replySafely(
     message: Message,
     content: string,
@@ -465,6 +524,11 @@ export class RuyiBot {
     const abortController = new AbortController();
     this.activeChatTurns.set(message.channel.id, abortController);
     this.activePresenceSession = presenceSession;
+    this.schedulePresenceReset(presenceSession, {
+      user: message.author.username,
+      channelId: message.channel.id,
+      messageId: message.id,
+    });
     const session = new ChatSession(message.channel, (state) => {
       if (this.activePresenceSession !== presenceSession) return;
       this.setSessionPresence(displayName, state);
@@ -511,13 +575,17 @@ export class RuyiBot {
         await this.replySafely(message, getErrorMessage(error), logPayload);
       }
     } finally {
+      session.cleanup();
+      this.resetPresenceSession(presenceSession);
+      this.clearPresenceResetTimer(presenceSession);
+
+      await this.deletePermissionPromptsSafely(message.id, {
+        user: message.author.username,
+        channelId: message.channel.id,
+        messageId: message.id,
+      });
       if (this.activeChatTurns.get(message.channel.id) === abortController) {
         this.activeChatTurns.delete(message.channel.id);
-      }
-      session.cleanup();
-      if (this.activePresenceSession === presenceSession) {
-        this.activePresenceSession = null;
-        this.setDefaultPresence();
       }
     }
   }
@@ -603,6 +671,13 @@ export class RuyiBot {
       if (message.id && message.channelId) {
         await messageSyncService.deleteMessage(message.channelId, message.id);
       }
+    });
+
+    this.client.on(Events.MessageBulkDelete, async (messages, channel) => {
+      const messageIds = [...messages.keys()];
+      if (messageIds.length === 0) return;
+
+      await messageSyncService.deleteMessages(channel.id, messageIds);
     });
   }
 

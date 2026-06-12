@@ -97,7 +97,7 @@ function containsHttpUrl(text: string): boolean {
 const DIRECT_ACTION_RULES: ReadonlyArray<(text: string) => boolean> = [
   (text) => startsWithAnyWord(text, ["pin", "unpin"]),
   (text) =>
-    startsWithAnyWord(text, ["delete", "remove", "purge", "clean"]) &&
+    startsWithAnyWord(text, ["clear", "delete", "remove", "purge", "clean"]) &&
     containsAnyWord(text, MESSAGE_TARGET_WORDS),
   (text) =>
     startsWithAnyWord(text, ["react"]) ||
