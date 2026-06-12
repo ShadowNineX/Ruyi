@@ -14,6 +14,7 @@ export {
 export { embedTool } from "./embed";
 export { fetchUrlTool } from "./fetch";
 export { webSearchTool } from "./web-search";
+export { reverseImageSearchTool } from "./reverse-image-search";
 export { generateImageTool } from "./image";
 export { describeImageTool } from "./vision";
 export {
@@ -42,6 +43,7 @@ import {
 import { embedTool } from "./embed";
 import { fetchUrlTool } from "./fetch";
 import { webSearchTool } from "./web-search";
+import { reverseImageSearchTool } from "./reverse-image-search";
 import { generateImageTool } from "./image";
 import { describeImageTool } from "./vision";
 import {
@@ -93,6 +95,7 @@ const baseToolRegistry: readonly ToolRegistration[] = [
   { tool: embedTool, producesDiscordOutput: true },
   { tool: fetchUrlTool },
   { tool: webSearchTool, externalService: true },
+  { tool: reverseImageSearchTool, externalService: true },
   { tool: generateImageTool, producesDiscordOutput: true },
   { tool: describeImageTool },
   { tool: memoryStoreTool },
