@@ -18,7 +18,7 @@ interface ReverseImageProvider {
   label: string;
   bestFor: string;
   buildUrl: (imageUrl: string) => string;
-  variants?: readonly ReverseImageLinkVariant[];
+  variants?: readonly ReverseImageProviderVariant[];
 }
 
 interface ResolvedImage {
@@ -26,10 +26,24 @@ interface ResolvedImage {
   source: string;
 }
 
-interface ReverseImageLinkVariant {
+interface ReverseImageProviderVariant {
   label: string;
   url: string;
   bestFor: string;
+}
+
+interface ReverseImageLinkVariant {
+  label: string;
+  url: string;
+  best_for: string;
+}
+
+interface ReverseImageSearchLink {
+  service: ReverseImageService;
+  label: string;
+  url: string;
+  best_for: string;
+  variants: ReverseImageLinkVariant[];
 }
 
 const SERVICE_ORDER: readonly ReverseImageService[] = [
@@ -132,8 +146,11 @@ function getUrlFileName(imageUrl: string): string | null {
 }
 
 function getSourceFileName(source: string): string | null {
-  const match = /:\s*([^:]+)$/.exec(source);
-  return match?.[1]?.trim() || null;
+  const separatorIndex = source.lastIndexOf(":");
+  if (separatorIndex < 0) return null;
+
+  const fileName = source.slice(separatorIndex + 1).trim();
+  return fileName || null;
 }
 
 function stripFileExtension(fileName: string): string {
@@ -189,6 +206,22 @@ function buildNextToolCalls(
     query,
     mode: "research",
   }));
+}
+
+function buildManualReverseSearchMarkdown(
+  searches: ReverseImageSearchLink[],
+): string {
+  return searches
+    .map((search) => {
+      const variantLinks =
+        search.variants.length > 0
+          ? ` (${search.variants
+              .map((variant) => `[${variant.label}](${variant.url})`)
+              .join(", ")})`
+          : "";
+      return `- [${search.label}](${search.url}) - ${search.best_for}${variantLinks}`;
+    })
+    .join("\n");
 }
 
 function dedupeServices(
@@ -305,7 +338,7 @@ export const reverseImageSearchTool = tool({
     try {
       const image = await resolveImage(image_url, message_id, image_index);
       const selectedServices = chooseServices(services, searchMode);
-      const searches = selectedServices.map((service) => {
+      const searches: ReverseImageSearchLink[] = selectedServices.map((service) => {
         const provider = PROVIDERS[service];
         const primaryUrl = provider.buildUrl(image.url);
         const variants =
@@ -328,6 +361,8 @@ export const reverseImageSearchTool = tool({
       });
       const followUpQueries = buildFollowUpQueries(searchMode, image);
       const nextToolCalls = buildNextToolCalls(searchMode, image);
+      const manualReverseSearchMarkdown =
+        buildManualReverseSearchMarkdown(searches);
 
       toolLogger.info(
         {
@@ -345,11 +380,12 @@ export const reverseImageSearchTool = tool({
         image_url: image.url,
         image_source: image.source,
         searches,
+        manual_reverse_search_markdown: manualReverseSearchMarkdown,
         follow_up_search_queries: followUpQueries,
         recommended_next_tool_calls: nextToolCalls,
         should_continue_with_web_search:
           searchMode === "source" || searchMode === "art",
-        note: "Provider pages are interactive and may show visual/exact matches the bot cannot directly scrape. If the user asked for the image source/origin, do not stop here: call web_search with the recommended queries or visible result titles from the user's screenshot, then fetch likely candidate pages before answering.",
+        note: "Provider pages are interactive and may show visual/exact matches the bot cannot directly scrape. If the user asked for the image source/origin, do not stop here: call web_search with the recommended queries or visible result titles from the user's screenshot, then fetch likely candidate pages before answering. If follow-up tools still cannot confirm the source, include manual_reverse_search_markdown in the final answer so the user can open the exact reverse-search result pages.",
       };
     } catch (error) {
       const errorMessage = formatError(error);
