@@ -17,7 +17,7 @@ import { z } from "zod";
 import { allTools, externalToolNames } from "../tools";
 import { aiLogger } from "../logger";
 import { env } from "../env";
-import { CHAT_TIMEOUT_MS } from "../constants";
+import { AGENT_MAX_TURNS, CHAT_TIMEOUT_MS } from "../constants";
 import type { ChatSession } from "../utils/chat-session";
 import type { MessageImageInput } from "../utils/messages";
 import { systemPrompt } from "./prompt";
@@ -350,7 +350,7 @@ export class ChatService {
       const runOptions = {
         stream: true,
         session: agentSession,
-        maxTurns: 12,
+        maxTurns: AGENT_MAX_TURNS,
         signal: abortController.signal,
         toolExecution: { maxFunctionToolConcurrency: 1 },
       } as const;
@@ -360,6 +360,7 @@ export class ChatService {
           channelId,
           sessionId: agentSessionId,
           localToolCount: allTools.length,
+          maxTurns: AGENT_MAX_TURNS,
         },
         "Using persistent OpenAI Agents session",
       );

@@ -18,11 +18,18 @@ interface ReverseImageProvider {
   label: string;
   bestFor: string;
   buildUrl: (imageUrl: string) => string;
+  variants?: readonly ReverseImageLinkVariant[];
 }
 
 interface ResolvedImage {
   url: string;
   source: string;
+}
+
+interface ReverseImageLinkVariant {
+  label: string;
+  url: string;
+  bestFor: string;
 }
 
 const SERVICE_ORDER: readonly ReverseImageService[] = [
@@ -33,12 +40,13 @@ const SERVICE_ORDER: readonly ReverseImageService[] = [
   "saucenao",
 ];
 
-const MODE_SERVICES: Record<ReverseSearchMode, readonly ReverseImageService[]> = {
-  broad: ["google_lens", "bing_visual_search", "yandex_images", "tineye"],
-  source: ["tineye", "google_lens", "yandex_images", "bing_visual_search"],
-  product: ["google_lens", "bing_visual_search", "yandex_images"],
-  art: ["saucenao", "google_lens", "yandex_images", "tineye"],
-};
+const MODE_SERVICES: Record<ReverseSearchMode, readonly ReverseImageService[]> =
+  {
+    broad: ["google_lens", "bing_visual_search", "yandex_images", "tineye"],
+    source: ["tineye", "google_lens", "yandex_images", "bing_visual_search"],
+    product: ["google_lens", "bing_visual_search", "yandex_images"],
+    art: ["saucenao", "google_lens", "yandex_images", "tineye"],
+  };
 
 function withQuery(baseUrl: string, params: Record<string, string>): string {
   return `${baseUrl}?${new URLSearchParams(params).toString()}`;
@@ -48,9 +56,17 @@ const PROVIDERS: Record<ReverseImageService, ReverseImageProvider> = {
   google_lens: {
     service: "google_lens",
     label: "Google Lens",
-    bestFor: "general matches, products, landmarks, text, and broad visual search",
+    bestFor:
+      "general matches, products, landmarks, text, and broad visual search",
     buildUrl: (imageUrl) =>
       withQuery("https://lens.google.com/uploadbyurl", { url: imageUrl }),
+    variants: [
+      {
+        label: "Google Search by Image",
+        bestFor: "older Google image-search flow; may redirect into Lens",
+        url: "https://www.google.com/searchbyimage",
+      },
+    ],
   },
   bing_visual_search: {
     service: "bing_visual_search",
@@ -68,14 +84,16 @@ const PROVIDERS: Record<ReverseImageService, ReverseImageProvider> = {
   tineye: {
     service: "tineye",
     label: "TinEye",
-    bestFor: "exact matches, older copies, modified versions, and source hunting",
+    bestFor:
+      "exact matches, older copies, modified versions, and source hunting",
     buildUrl: (imageUrl) =>
       withQuery("https://tineye.com/search", { url: imageUrl }),
   },
   yandex_images: {
     service: "yandex_images",
     label: "Yandex Images",
-    bestFor: "similar images, source pages, and visual matches outside Google/Bing",
+    bestFor:
+      "similar images, source pages, and visual matches outside Google/Bing",
     buildUrl: (imageUrl) =>
       withQuery("https://yandex.com/images/search", {
         rpt: "imageview",
@@ -101,6 +119,76 @@ function normalizePublicImageUrl(value: string): string {
   }
 
   return url.toString();
+}
+
+function getUrlFileName(imageUrl: string): string | null {
+  try {
+    const url = new URL(imageUrl);
+    const lastSegment = url.pathname.split("/").findLast(Boolean);
+    return lastSegment ? decodeURIComponent(lastSegment) : null;
+  } catch {
+    return null;
+  }
+}
+
+function getSourceFileName(source: string): string | null {
+  const match = /:\s*([^:]+)$/.exec(source);
+  return match?.[1]?.trim() || null;
+}
+
+function stripFileExtension(fileName: string): string {
+  return fileName.replace(/\.[a-z0-9]{2,5}$/i, "");
+}
+
+function getImageClues(image: ResolvedImage): string[] {
+  const fileNames = [getSourceFileName(image.source), getUrlFileName(image.url)]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const clues = new Set<string>();
+
+  for (const fileName of fileNames) {
+    clues.add(fileName);
+    clues.add(stripFileExtension(fileName));
+  }
+
+  return [...clues].filter((clue) => clue.length > 2);
+}
+
+function buildFollowUpQueries(
+  mode: ReverseSearchMode,
+  image: ResolvedImage,
+): string[] {
+  const clues = getImageClues(image);
+  const queries = new Set<string>();
+
+  for (const clue of clues.slice(0, 3)) {
+    queries.add(`"${clue}"`);
+    if (mode === "art") {
+      queries.add(`"${clue}" artist`);
+      queries.add(`"${clue}" tumblr OR furbooru OR "fur affinity"`);
+    } else if (mode === "source") {
+      queries.add(`"${clue}" source OR original`);
+    }
+  }
+
+  if (mode === "art") {
+    queries.add('"furry" "artist" "tumblr"');
+    queries.add('"Furbooru" "artist:" "canine"');
+  }
+
+  return [...queries].slice(0, 6);
+}
+
+function buildNextToolCalls(
+  mode: ReverseSearchMode,
+  image: ResolvedImage,
+): Array<{ tool: "web_search"; query: string; mode: "research" }> {
+  return buildFollowUpQueries(mode, image).map((query) => ({
+    tool: "web_search",
+    query,
+    mode: "research",
+  }));
 }
 
 function dedupeServices(
@@ -130,7 +218,9 @@ async function resolveMessageImage(
 
   const images = getMessageImageInputs(result.message);
   if (images.length === 0) {
-    throw new Error("No image attachment or embed image was found on that message.");
+    throw new Error(
+      "No image attachment or embed image was found on that message.",
+    );
   }
 
   const index = Math.max((imageIndex ?? 1) - 1, 0);
@@ -165,7 +255,7 @@ async function resolveImage(
 export const reverseImageSearchTool = tool({
   name: "reverse_image_search",
   description:
-    "Create reverse image search links for a public image URL or a Discord image attachment/embed from the current or replied message. Let the AI choose Google Lens, Bing Visual Search, TinEye, Yandex Images, or SauceNAO based on the user's goal. This returns search links, not scraped search results.",
+    "Prepare reverse-image-search provider links and follow-up web-search queries for a public image URL or Discord image attachment/embed from the current or replied message. Let the main agent continue with web_search/fetch_url before answering origin/source requests.",
   parameters: z.object({
     image_url: z
       .string()
@@ -185,7 +275,9 @@ export const reverseImageSearchTool = tool({
       .number()
       .int()
       .nullable()
-      .describe("1-based image index if a message has multiple images. Defaults to 1."),
+      .describe(
+        "1-based image index if a message has multiple images. Defaults to 1.",
+      ),
     mode: z
       .enum(["broad", "source", "product", "art"])
       .nullable()
@@ -215,19 +307,34 @@ export const reverseImageSearchTool = tool({
       const selectedServices = chooseServices(services, searchMode);
       const searches = selectedServices.map((service) => {
         const provider = PROVIDERS[service];
+        const primaryUrl = provider.buildUrl(image.url);
+        const variants =
+          provider.variants?.map((variant) => ({
+            label: variant.label,
+            url:
+              provider.service === "google_lens"
+                ? withQuery(variant.url, { image_url: image.url })
+                : variant.url,
+            best_for: variant.bestFor,
+          })) ?? [];
+
         return {
           service: provider.service,
           label: provider.label,
-          url: provider.buildUrl(image.url),
+          url: primaryUrl,
           best_for: provider.bestFor,
+          variants,
         };
       });
+      const followUpQueries = buildFollowUpQueries(searchMode, image);
+      const nextToolCalls = buildNextToolCalls(searchMode, image);
 
       toolLogger.info(
         {
           mode: searchMode,
           services: selectedServices,
           imageSource: image.source,
+          followUpQueryCount: followUpQueries.length,
         },
         "Prepared reverse image search links",
       );
@@ -238,7 +345,11 @@ export const reverseImageSearchTool = tool({
         image_url: image.url,
         image_source: image.source,
         searches,
-        note: "These providers expose interactive reverse-search pages. Open the returned links to inspect matches; do not claim exact matches unless the user or a later tool result confirms them.",
+        follow_up_search_queries: followUpQueries,
+        recommended_next_tool_calls: nextToolCalls,
+        should_continue_with_web_search:
+          searchMode === "source" || searchMode === "art",
+        note: "Provider pages are interactive and may show visual/exact matches the bot cannot directly scrape. If the user asked for the image source/origin, do not stop here: call web_search with the recommended queries or visible result titles from the user's screenshot, then fetch likely candidate pages before answering.",
       };
     } catch (error) {
       const errorMessage = formatError(error);
