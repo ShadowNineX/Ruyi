@@ -3,6 +3,7 @@ import { channelInfoTool } from "./channel";
 import { serverInfoTool } from "./server";
 import { userInfoTool } from "./user";
 import { resolveTimeTool } from "./time";
+import { getEventsTool, manageEventTool } from "./events";
 import { manageRoleTool } from "./role";
 import { reactionTool } from "./reaction";
 import { pinTool } from "./pin";
@@ -58,6 +59,8 @@ const baseToolRegistry: readonly ToolRegistration[] = [
   { tool: serverInfoTool },
   { tool: userInfoTool },
   { tool: resolveTimeTool },
+  { tool: getEventsTool },
+  { tool: manageEventTool },
   { tool: manageRoleTool },
   { tool: reactionTool },
   { tool: pinTool },
