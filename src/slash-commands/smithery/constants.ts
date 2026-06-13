@@ -2,7 +2,6 @@ export {
   SMITHERY_SERVER_IDS,
   SMITHERY_SERVERS,
   parseSmitheryServerId,
-  type SmitheryServerInfo,
 } from "../../mcp/smithery-catalog";
 
 export const DISCORD_BUTTON_URL_MAX_LENGTH = 512;

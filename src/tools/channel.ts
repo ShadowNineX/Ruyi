@@ -13,11 +13,15 @@ export const channelInfoTool = tool({
       toolLogger.warn("get_channel_info called without channel context");
       return { error: "No channel context" };
     }
-    toolLogger.info({ channel: channel.name }, "Got channel info");
+    const name = "name" in channel ? channel.name : "Direct Message";
+    const topic = "topic" in channel ? (channel.topic ?? "No topic") : null;
+
+    toolLogger.info({ channel: name }, "Got channel info");
     return {
-      name: channel.name,
+      name,
       id: channel.id,
-      topic: channel.topic || "No topic",
+      type: channel.type,
+      topic,
     };
   },
 });

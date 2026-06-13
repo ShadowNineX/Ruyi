@@ -1,7 +1,23 @@
 import { tool } from "@openai/agents";
 import { z } from "zod";
+import { PermissionFlagsBits, type Message } from "discord.js";
 import { toolLogger } from "../logger";
 import { toolContextManager, formatError } from "../utils/types";
+
+function requesterCanManagePins(targetMessage: Message): boolean {
+  const { guild, message } = toolContextManager.get();
+  if (!guild) return true;
+
+  const requester = message?.author;
+  const channel = targetMessage.channel;
+  if (!requester || !("permissionsFor" in channel)) return false;
+
+  return (
+    channel
+      .permissionsFor(requester)
+      ?.has(PermissionFlagsBits.ManageMessages) ?? false
+  );
+}
 
 export const pinTool = tool({
   name: "manage_pin",
@@ -29,6 +45,12 @@ export const pinTool = tool({
     }
 
     const targetMessage = result.message;
+    if (!requesterCanManagePins(targetMessage)) {
+      return {
+        error:
+          "You need Manage Messages permission in this channel to pin or unpin messages.",
+      };
+    }
 
     try {
       if (action === "pin") {

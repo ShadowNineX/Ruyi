@@ -6,8 +6,16 @@ import {
   toolContextManager,
   type ToolContext,
 } from "../utils/types";
-import { ChannelType, type TextChannel, type Message } from "discord.js";
+import {
+  ChannelType,
+  PermissionFlagsBits,
+  type DMChannel,
+  type Message,
+  type TextBasedChannel,
+  type TextChannel,
+} from "discord.js";
 import { messageSyncService } from "../services/message-sync";
+import { requesterHasChannelPermission } from "../utils/discord-permissions";
 
 interface ReactionInfo {
   emoji: string;
@@ -25,6 +33,30 @@ interface FoundMessage {
 }
 
 type BotMessageTarget = "last" | "replied";
+type MessageHistoryChannel = TextChannel | DMChannel;
+
+function hasMessageHistory(
+  channel: TextBasedChannel | null,
+): channel is MessageHistoryChannel {
+  return Boolean(channel && "messages" in channel);
+}
+
+function isGuildTextChannel(
+  channel: TextBasedChannel | null,
+): channel is TextChannel {
+  return channel?.type === ChannelType.GuildText;
+}
+
+function canReadMessageHistory(channel: MessageHistoryChannel): boolean {
+  return requesterHasChannelPermission(channel, [
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.ReadMessageHistory,
+  ]);
+}
+
+function canManageMessages(channel: TextBasedChannel | null): boolean {
+  return requesterHasChannelPermission(channel, PermissionFlagsBits.ManageMessages);
+}
 
 // Helper: Check if author matches filter
 function matchesAuthor(msg: Message, authorFilter: string): boolean {
@@ -67,11 +99,12 @@ async function getChannelsToSearch(
   channelName: string | null,
   searchAllChannels: boolean | null,
   ctx: ToolContext,
-): Promise<TextChannel[] | string> {
+): Promise<MessageHistoryChannel[] | string> {
   if (searchAllChannels && ctx.guild) {
     const channels = await ctx.guild.channels.fetch();
     const textChannels = channels
       .filter((c): c is TextChannel => c?.type === ChannelType.GuildText)
+      .filter(canReadMessageHistory)
       .map((c) => c);
     toolLogger.info(
       { channelCount: textChannels.length },
@@ -90,10 +123,16 @@ async function getChannelsToSearch(
     if (!targetChannel) {
       return `Channel "${channelName}" not found`;
     }
+    if (!canReadMessageHistory(targetChannel)) {
+      return `You do not have permission to read message history in #${targetChannel.name}`;
+    }
     return [targetChannel];
   }
 
-  if (ctx.channel && "messages" in ctx.channel) {
+  if (hasMessageHistory(ctx.channel)) {
+    if (!canReadMessageHistory(ctx.channel)) {
+      return "You need Read Message History permission to search this channel.";
+    }
     return [ctx.channel];
   }
 
@@ -131,7 +170,7 @@ function buildFoundMessage(
 
 // Helper: Search a single channel and collect results
 async function searchChannel(
-  channel: TextChannel,
+  channel: MessageHistoryChannel,
   query: string | null,
   author: string | null,
   searchLimit: number,
@@ -148,9 +187,10 @@ async function searchChannel(
   const messages = await channel.messages.fetch({ limit: fetchLimit });
   const filtered = filterMessages([...messages.values()], author, query);
 
+  const displayChannel = "name" in channel ? channel.name : "Direct Message";
   for (const msg of filtered.slice(0, remaining)) {
     results.push(
-      buildFoundMessage(msg, showReactions, includeChannel, channel.name),
+      buildFoundMessage(msg, showReactions, includeChannel, displayChannel),
     );
   }
 
@@ -262,7 +302,7 @@ export const searchMessagesTool = tool({
 
 // Helper: Fetch messages by IDs
 async function fetchMessagesByIds(
-  channel: TextChannel,
+  channel: MessageHistoryChannel,
   messageIds: string[],
 ): Promise<Message[]> {
   const messages: Message[] = [];
@@ -284,7 +324,9 @@ async function fetchMessagesByIds(
   return messages;
 }
 
-async function fetchLastBotMessage(channel: TextChannel): Promise<Message | null> {
+async function fetchLastBotMessage(
+  channel: MessageHistoryChannel,
+): Promise<Message | null> {
   const botUserId = channel.client.user?.id;
   if (!botUserId) return null;
 
@@ -293,7 +335,7 @@ async function fetchLastBotMessage(channel: TextChannel): Promise<Message | null
 }
 
 async function resolveBotMessageToEdit(
-  channel: TextChannel,
+  channel: MessageHistoryChannel,
   messageId: string | null,
 ): Promise<Message | string> {
   const normalized = messageId?.trim() || "last";
@@ -338,8 +380,14 @@ export const editBotMessageTool = tool({
   execute: async ({ message_id, content }) => {
     const ctx = toolContextManager.get();
 
-    if (!ctx.channel || !("messages" in ctx.channel)) {
+    if (!hasMessageHistory(ctx.channel)) {
       return { error: "No valid channel context for editing messages" };
+    }
+    if (!canManageMessages(ctx.channel)) {
+      return {
+        error:
+          "You need Manage Messages permission in this channel to ask Ruyi to edit bot messages.",
+      };
     }
 
     try {
@@ -468,11 +516,20 @@ For "clean this channel", "clear chat", or "delete all messages" requests, use c
   execute: async ({ message_ids, author, count, contains }) => {
     const ctx = toolContextManager.get();
 
-    if (!ctx.channel || !("messages" in ctx.channel)) {
-      return { error: "No valid channel context for message deletion" };
+    if (!isGuildTextChannel(ctx.channel)) {
+      return {
+        error:
+          "Message deletion is only available in server text channels, not private chats.",
+      };
     }
 
     const channel = ctx.channel;
+    if (!canManageMessages(channel)) {
+      return {
+        error:
+          "You need Manage Messages permission in this channel to delete messages.",
+      };
+    }
 
     try {
       let messagesToDelete: Message[];

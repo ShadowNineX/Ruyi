@@ -1,5 +1,6 @@
 import {
   getAllSmitheryConnections,
+  type SmitheryConnectionScope,
   type SmitheryServerId,
 } from "../../db/models";
 import { refreshKnownSmitheryConnections } from "../../mcp/smithery-api";
@@ -11,10 +12,12 @@ export interface SmitheryLinkState {
   unlinkedServerIds: SmitheryServerId[];
 }
 
-export async function getSmitheryLinkState(): Promise<SmitheryLinkState> {
-  await refreshKnownSmitheryConnections();
+export async function getSmitheryLinkState(
+  scope: SmitheryConnectionScope,
+): Promise<SmitheryLinkState> {
+  await refreshKnownSmitheryConnections(scope);
 
-  const connections = await getAllSmitheryConnections();
+  const connections = await getAllSmitheryConnections(scope);
   const linkedSet = new Set(
     connections
       .filter((connection) => connection.status === "connected")

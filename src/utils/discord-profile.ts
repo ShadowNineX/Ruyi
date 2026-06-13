@@ -297,6 +297,77 @@ export async function buildDiscordProfile(member: GuildMember): Promise<DiscordP
   };
 }
 
+export async function buildDiscordUserProfile(user: User): Promise<DiscordProfile> {
+  const fetchedUser = await user.fetch(true);
+  const avatarUrl = fetchedUser.avatarURL({ extension: "png", size: 1024 });
+  const bannerUrl = fetchedUser.bannerURL({ extension: "png", size: 1024 });
+  const guildBadgeUrl = fetchedUser.guildTagBadgeURL({
+    extension: "png",
+    size: 256,
+  });
+
+  const profileBase: DiscordProfileBase = {
+    id: fetchedUser.id,
+    username: fetchedUser.username,
+    globalName: fetchedUser.globalName,
+    displayName: fetchedUser.globalName ?? fetchedUser.username,
+    nickname: null,
+    tag: fetchedUser.tag,
+    bot: fetchedUser.bot,
+    system: fetchedUser.system,
+    createdAt: fetchedUser.createdAt.toISOString(),
+    joinedServerAt: null,
+    accentColor: fetchedUser.accentColor ?? null,
+    hexAccentColor: fetchedUser.hexAccentColor ?? null,
+    publicFlags: formatFlags(fetchedUser),
+    avatar: {
+      user: image(
+        avatarUrl,
+        "Global Discord avatar. Null means the user is using their default avatar.",
+      ),
+      server: image(null, "Server-specific avatar is unavailable in a private chat."),
+      display: image(avatarUrl ?? fetchedUser.defaultAvatarURL, "Global avatar/profile picture."),
+      default: image(fetchedUser.defaultAvatarURL, "Discord default avatar fallback."),
+    },
+    banner: {
+      user: image(
+        bannerUrl,
+        "Global profile banner. Null means no global banner is visible to the bot.",
+      ),
+      server: image(null, "Server-specific profile banner is unavailable in a private chat."),
+      display: image(bannerUrl, "Global profile banner."),
+    },
+    avatarDecoration: {
+      user: decorationFrom(
+        fetchedUser.avatarDecorationURL(),
+        fetchedUser.avatarDecorationData,
+      ),
+      server: decorationFrom(null, null),
+      display: decorationFrom(
+        fetchedUser.avatarDecorationURL(),
+        fetchedUser.avatarDecorationData,
+      ),
+    },
+    collectibles: {
+      nameplate: getNameplate(fetchedUser),
+    },
+    primaryGuild: fetchedUser.primaryGuild
+      ? {
+          tag: fetchedUser.primaryGuild.tag,
+          badgeUrl: guildBadgeUrl,
+          identityEnabled: fetchedUser.primaryGuild.identityEnabled,
+          identityGuildId: fetchedUser.primaryGuild.identityGuildId,
+        }
+      : null,
+  };
+
+  return {
+    ...profileBase,
+    availableImageTargets: profileImageTargets(profileBase),
+    unavailable: unavailableProfileFields(profileBase),
+  };
+}
+
 export function formatProfileContext(profile: DiscordProfile): string {
   const lines = [
     `Discord profile for current user:`,

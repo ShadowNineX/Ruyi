@@ -1,5 +1,6 @@
 import { Agent } from "@openai/agents";
 import { z } from "zod";
+import type { ConfigScope } from "../config";
 import { CLASSIFIER_TIMEOUT_MS } from "../constants";
 import { aiLogger } from "../logger";
 import {
@@ -26,8 +27,12 @@ Set should_regenerate=true for ordinary questions, explanations, factual correct
 
 Return only the structured decision.`;
 
-export class EditClassifier {
-  async classifyEdit(before: string, after: string): Promise<MessageEditAssessment> {
+class EditClassifier {
+  async classifyEdit(
+    before: string,
+    after: string,
+    configScope?: ConfigScope | null,
+  ): Promise<MessageEditAssessment> {
     const deterministic = assessMessageEdit(before, after);
     if (deterministic.reason !== "needs_semantic_classification") {
       return deterministic;
@@ -43,19 +48,17 @@ export class EditClassifier {
       const agent = new Agent({
         name: "Ruyi message edit classifier",
         instructions: EDIT_CLASSIFIER_PROMPT,
-        model: agentsRuntimeManager.model,
-        modelSettings: agentsRuntimeManager.modelSettings,
+        model: agentsRuntimeManager.getModel(configScope),
+        modelSettings: agentsRuntimeManager.getModelSettings(configScope),
         outputType: EditDecisionSchema,
       });
 
-      const result = await agentsRuntimeManager.getRunner().run(
-        agent,
-        `Before edit:\n${before}\n\nAfter edit:\n${after}`,
-        {
+      const result = await agentsRuntimeManager
+        .getRunner()
+        .run(agent, `Before edit:\n${before}\n\nAfter edit:\n${after}`, {
           maxTurns: 1,
           signal: abortController.signal,
-        },
-      );
+        });
 
       const decision = result.finalOutput;
       if (!decision) {

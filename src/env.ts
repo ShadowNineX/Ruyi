@@ -71,7 +71,7 @@ const envSchema = z.object({
     .transform((v) => v === "1" || v === "true"),
 });
 
-export type Env = z.infer<typeof envSchema>;
+type Env = z.infer<typeof envSchema>;
 
 function loadEnv(): Env {
   const parsed = envSchema.safeParse(Bun.env);

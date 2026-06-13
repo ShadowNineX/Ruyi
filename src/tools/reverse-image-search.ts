@@ -1,9 +1,10 @@
 import { tool } from "@openai/agents";
-import type { Message } from "discord.js";
+import { PermissionFlagsBits, type Message } from "discord.js";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { getMessageImageInputs } from "../utils/messages";
 import { formatError, toolContextManager } from "../utils/types";
+import { requesterHasChannelPermission } from "../utils/discord-permissions";
 
 type ReverseImageService =
   | "google_lens"
@@ -309,7 +310,16 @@ async function resolveMessageById(
     messageId,
     "reverse_image_search",
   );
-  return result.success ? result.message : null;
+  if (!result.success) return null;
+  if (
+    !requesterHasChannelPermission(result.message.channel, [
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.ReadMessageHistory,
+    ])
+  ) {
+    return null;
+  }
+  return result.message;
 }
 
 function addCandidate(
@@ -329,6 +339,14 @@ async function collectRecentImageCandidates(
   const ctx = toolContextManager.get();
   const channel = ctx.channel;
   if (!channel || !("messages" in channel)) return [];
+  if (
+    !requesterHasChannelPermission(channel, [
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.ReadMessageHistory,
+    ])
+  ) {
+    return [];
+  }
 
   try {
     const messages = await channel.messages.fetch({ limit: 20 });

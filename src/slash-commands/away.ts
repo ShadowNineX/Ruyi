@@ -4,7 +4,12 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from "discord.js";
-import { configManager } from "../config";
+import {
+  configManager,
+  formatConfigScope,
+  userConfigScope,
+  type ConfigScope,
+} from "../config";
 import {
   AWAY_MESSAGE_MAX_COOLDOWN_HOURS,
   AWAY_MESSAGE_MAX_DELAY_MINUTES,
@@ -70,16 +75,18 @@ function hasManageGuild(interaction: ChatInputCommandInteraction): boolean {
   );
 }
 
-async function formatStatus(userId: string): Promise<string> {
-  const settings = configManager.getAwaySettings();
-  const userEnabled = await configManager.isAwayEnabledForUser(userId);
-  const lastSentAt = await configManager.getAwayLastSentAt(userId);
+async function formatStatus(scope: ConfigScope, userId: string): Promise<string> {
+  const settings = configManager.getAwaySettings(scope);
+  const userEnabled = await configManager.isAwayEnabledForUser(scope, userId);
+  const lastSentAt = await configManager.getAwayLastSentAt(scope, userId);
   const lastSentLine = lastSentAt
     ? `Last ping to you: <t:${Math.floor(lastSentAt / 1000)}:R>`
     : "Last ping to you: never";
+  const scopeLabel =
+    scope.kind === "guild" ? "Server away messages" : "Private-chat away messages";
 
   return [
-    `Server away messages: **${settings.globalEnabled ? "enabled" : "disabled"}**`,
+    `${scopeLabel}: **${settings.scopeEnabled ? "enabled" : "disabled"}**`,
     `Your away pings: **${userEnabled ? "enabled" : "disabled"}**`,
     `Delay: **${settings.delayMinutes} minutes**`,
     `Cooldown: **${settings.cooldownHours} hours**`,
@@ -103,11 +110,21 @@ async function handleServerSubcommand(
   interaction: ChatInputCommandInteraction,
   subcommand: string,
 ): Promise<void> {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await interaction.reply({
+      content: "Server-wide away settings can only be changed in a server.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const scope = userConfigScope(guildId, interaction.user.id);
   if (!(await requireManageGuild(interaction))) return;
 
   if (subcommand === "enable" || subcommand === "disable") {
     const enabled = subcommand === "enable";
-    await configManager.setAwayGlobalEnabled(enabled);
+    await configManager.setAwayScopeEnabled(scope, enabled);
     await interaction.reply({
       content: `Server away messages are now **${enabled ? "enabled" : "disabled"}**.`,
       flags: MessageFlags.Ephemeral,
@@ -115,14 +132,14 @@ async function handleServerSubcommand(
     return;
   }
 
-  const settings = configManager.getAwaySettings();
+  const settings = configManager.getAwaySettings(scope);
   const delayMinutes =
     interaction.options.getInteger("delay_minutes") ?? settings.delayMinutes;
   const cooldownHours =
     interaction.options.getInteger("cooldown_hours") ?? settings.cooldownHours;
-  await configManager.setAwayTiming(delayMinutes, cooldownHours);
+  await configManager.setAwayTiming(scope, delayMinutes, cooldownHours);
 
-  const updated = configManager.getAwaySettings();
+  const updated = configManager.getAwaySettings(scope);
   await interaction.reply({
     content: [
       "Away message timing updated.",
@@ -139,6 +156,7 @@ export async function handleAwayCommand(
   try {
     const group = interaction.options.getSubcommandGroup(false);
     const subcommand = interaction.options.getSubcommand();
+    const scope = userConfigScope(interaction.guildId, interaction.user.id);
 
     if (group === "server") {
       await handleServerSubcommand(interaction, subcommand);
@@ -147,18 +165,18 @@ export async function handleAwayCommand(
 
     if (subcommand === "status") {
       await interaction.reply({
-        content: await formatStatus(interaction.user.id),
+        content: await formatStatus(scope, interaction.user.id),
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
     const enabled = subcommand === "enable";
-    await configManager.setAwayUserEnabled(interaction.user.id, enabled);
+    await configManager.setAwayUserEnabled(scope, interaction.user.id, enabled);
     await interaction.reply({
       content: enabled
-        ? "Away pings are enabled for you. I will only send them after the quiet delay and cooldown."
-        : "Away pings are disabled for you.",
+        ? `Away pings are enabled for you in ${formatConfigScope(scope)}. I will only send them after the quiet delay and cooldown.`
+        : `Away pings are disabled for you in ${formatConfigScope(scope)}.`,
       flags: MessageFlags.Ephemeral,
     });
   } catch (error) {

@@ -15,9 +15,6 @@ export const MAX_AGENT_IMAGE_INPUTS = 10;
 
 export const ONGOING_CONVERSATION_WINDOW_MS = 30 * 60 * 1000;
 
-export const HISTORY_DB_CAP = 100;
-export const HISTORY_PROMPT_LIMIT = 20;
-export const MEMORY_CONTEXT_LIMIT = 20;
 export const AGENT_SESSION_ITEM_CAP = 80;
 export const AGENT_SESSION_SEED_MESSAGE_LIMIT = 40;
 export const AGENT_SESSION_COMPACTION_TRIGGER_ITEMS = 70;
@@ -28,7 +25,6 @@ export const AGENT_SESSION_COMPACTION_TIMEOUT_MS = 60 * 1000;
 export const CHANNEL_SUMMARY_CONTEXT_MAX_LEN = 3000;
 
 export const USER_MEMORY_CAP = 30;
-export const GLOBAL_MEMORY_CAP = 50;
 export const MEMORY_VALUE_MAX_LEN = 500;
 
 // Auto-extraction (c.ai-style long-term memory)
@@ -51,4 +47,3 @@ export const AWAY_MESSAGE_MAX_LENGTH = 700;
 // Context tiering
 export const PINNED_CONTEXT_LIMIT = 15;
 export const RECENT_USER_MEMORY_LIMIT = 8;
-export const GLOBAL_CONTEXT_LIMIT = 8;

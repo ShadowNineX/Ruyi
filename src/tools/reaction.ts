@@ -1,8 +1,9 @@
 import { tool } from "@openai/agents";
 import { z } from "zod";
-import type { Message, MessageReaction } from "discord.js";
+import { PermissionFlagsBits, type Message, type MessageReaction } from "discord.js";
 import { toolLogger } from "../logger";
 import { toolContextManager, formatError } from "../utils/types";
+import { requesterHasChannelPermission } from "../utils/discord-permissions";
 
 // Find a reaction by emoji (handles unicode and custom emojis)
 function findReaction(
@@ -52,6 +53,18 @@ export const reactionTool = tool({
 
     const targetMessage = result.message;
     const ctx = toolContextManager.get();
+    if (
+      !requesterHasChannelPermission(targetMessage.channel, [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.AddReactions,
+      ])
+    ) {
+      return {
+        error:
+          "You need View Channel, Read Message History, and Add Reactions permission in this channel to ask Ruyi to manage reactions.",
+      };
+    }
 
     try {
       if (action === "add") {

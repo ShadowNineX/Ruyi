@@ -19,6 +19,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
     "@openai/agents": "^0.11.6",
+    "@openai/agents-openai": "^0.11.6",
     "@smithery/api": "^0.67.0",
     "discord.js": "^14.26.4",
     "jsdom": "^29.1.1",

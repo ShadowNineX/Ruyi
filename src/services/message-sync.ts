@@ -14,12 +14,16 @@ const BATCH_DELAY_MS = 1000;
 
 type MessageableChannel = TextChannel | NewsChannel | ThreadChannel;
 type MessagePresence = "exists" | "deleted" | "unknown";
+type SyncResult = { channelId: string; deleted: number; skipped: number };
 type SyncConversation = Pick<IConversation, "channelId" | "messages">;
 type SyncAgentSession = {
   channelId: string;
   userMessageIds: string[];
   assistantMessageIds: string[];
 };
+type ChannelResolutionResult =
+  | { ok: true; channel: MessageableChannel }
+  | { ok: false; result: SyncResult };
 
 function isMessageableChannel(channel: unknown): channel is MessageableChannel {
   return (
@@ -82,6 +86,58 @@ function normalizeMessageIds(messageIds: string[]): string[] {
   return [...new Set(messageIds.map((id) => id.trim()).filter(Boolean))];
 }
 
+async function fetchMessageableChannel(
+  client: Client,
+  channelId: string,
+  skippedMessageCount: number,
+  fetchErrorMessage: string,
+): Promise<ChannelResolutionResult> {
+  try {
+    const fetchedChannel = await client.channels.fetch(channelId);
+    if (!isMessageableChannel(fetchedChannel)) {
+      syncLogger.debug({ channelId }, "Channel is not messageable, skipping");
+      return {
+        ok: false,
+        result: { channelId, deleted: 0, skipped: skippedMessageCount },
+      };
+    }
+    return { ok: true, channel: fetchedChannel };
+  } catch (error) {
+    syncLogger.debug(
+      { channelId, error: (error as Error).message },
+      fetchErrorMessage,
+    );
+    return {
+      ok: false,
+      result: { channelId, deleted: 0, skipped: skippedMessageCount },
+    };
+  }
+}
+
+async function findDeletedMessagesInBatches(
+  channel: MessageableChannel,
+  messageIds: string[],
+): Promise<{ deletedIds: string[]; skipped: number }> {
+  const deletedIds: string[] = [];
+  let skippedFetches = 0;
+
+  for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
+    const batch = messageIds.slice(i, i + BATCH_SIZE);
+    const { deletedIds: deleted, skipped } = await findDeletedMessages(
+      channel,
+      batch,
+    );
+    deletedIds.push(...deleted);
+    skippedFetches += skipped;
+
+    if (i + BATCH_SIZE < messageIds.length) {
+      await sleep(BATCH_DELAY_MS);
+    }
+  }
+
+  return { deletedIds, skipped: skippedFetches };
+}
+
 async function removeDeletedMessageReferences(
   channelId: string,
   messageIds: string[],
@@ -112,7 +168,7 @@ async function removeDeletedMessageReferences(
 async function syncConversation(
   client: Client,
   conversation: SyncConversation,
-): Promise<{ channelId: string; deleted: number; skipped: number }> {
+): Promise<SyncResult> {
   const channelId = conversation.channelId;
   const messageIds = normalizeMessageIds(
     conversation.messages.map((message) => message.messageId),
@@ -130,38 +186,19 @@ async function syncConversation(
     "Syncing channel",
   );
 
-  let channel: MessageableChannel;
-  try {
-    const fetchedChannel = await client.channels.fetch(channelId);
-    if (!isMessageableChannel(fetchedChannel)) {
-      syncLogger.debug({ channelId }, "Channel is not messageable, skipping");
-      return { channelId, deleted: 0, skipped: messageIds.length };
-    }
-    channel = fetchedChannel;
-  } catch (error) {
-    syncLogger.debug(
-      { channelId, error: (error as Error).message },
-      "Could not fetch channel, skipping",
-    );
-    return { channelId, deleted: 0, skipped: messageIds.length };
+  const channelResolution = await fetchMessageableChannel(
+    client,
+    channelId,
+    messageIds.length,
+    "Could not fetch channel, skipping",
+  );
+  if (!channelResolution.ok) {
+    return channelResolution.result;
   }
-
-  const deletedIds: string[] = [];
-  let skippedFetches = 0;
-
-  for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
-    const batch = messageIds.slice(i, i + BATCH_SIZE);
-    const { deletedIds: deleted, skipped } = await findDeletedMessages(
-      channel,
-      batch,
-    );
-    deletedIds.push(...deleted);
-    skippedFetches += skipped;
-
-    if (i + BATCH_SIZE < messageIds.length) {
-      await sleep(BATCH_DELAY_MS);
-    }
-  }
+  const { deletedIds, skipped } = await findDeletedMessagesInBatches(
+    channelResolution.channel,
+    messageIds,
+  );
 
   if (deletedIds.length > 0) {
     syncLogger.info(
@@ -178,14 +215,14 @@ async function syncConversation(
   return {
     channelId,
     deleted: deletedIds.length,
-    skipped: skippedFetches,
+    skipped,
   };
 }
 
 async function syncAgentSessionMessages(
   client: Client,
   session: SyncAgentSession,
-): Promise<{ channelId: string; deleted: number; skipped: number }> {
+): Promise<SyncResult> {
   const channelId = session.channelId;
   const messageIds = normalizeMessageIds([
     ...session.assistantMessageIds,
@@ -195,38 +232,19 @@ async function syncAgentSessionMessages(
     return { channelId, deleted: 0, skipped: 0 };
   }
 
-  let channel: MessageableChannel;
-  try {
-    const fetchedChannel = await client.channels.fetch(channelId);
-    if (!isMessageableChannel(fetchedChannel)) {
-      syncLogger.debug({ channelId }, "Channel is not messageable, skipping");
-      return { channelId, deleted: 0, skipped: messageIds.length };
-    }
-    channel = fetchedChannel;
-  } catch (error) {
-    syncLogger.debug(
-      { channelId, error: (error as Error).message },
-      "Could not fetch channel for agent session message sync, skipping",
-    );
-    return { channelId, deleted: 0, skipped: messageIds.length };
+  const channelResolution = await fetchMessageableChannel(
+    client,
+    channelId,
+    messageIds.length,
+    "Could not fetch channel for agent session message sync, skipping",
+  );
+  if (!channelResolution.ok) {
+    return channelResolution.result;
   }
-
-  const deletedIds: string[] = [];
-  let skippedFetches = 0;
-
-  for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
-    const batch = messageIds.slice(i, i + BATCH_SIZE);
-    const { deletedIds: deleted, skipped } = await findDeletedMessages(
-      channel,
-      batch,
-    );
-    deletedIds.push(...deleted);
-    skippedFetches += skipped;
-
-    if (i + BATCH_SIZE < messageIds.length) {
-      await sleep(BATCH_DELAY_MS);
-    }
-  }
+  const { deletedIds, skipped } = await findDeletedMessagesInBatches(
+    channelResolution.channel,
+    messageIds,
+  );
 
   if (deletedIds.length > 0) {
     await sessionManager.invalidateIfTrackedMessagesDeleted(
@@ -235,10 +253,10 @@ async function syncAgentSessionMessages(
     );
   }
 
-  return { channelId, deleted: deletedIds.length, skipped: skippedFetches };
+  return { channelId, deleted: deletedIds.length, skipped };
 }
 
-export class MessageSyncService {
+class MessageSyncService {
   private syncInterval: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
 

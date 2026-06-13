@@ -7,16 +7,16 @@ import {
   type ButtonInteraction,
   ComponentType,
   EmbedBuilder,
-  type GuildTextBasedChannel,
   type InteractionCollector,
   type Message,
   MessageFlags,
+  type SendableChannels,
 } from "discord.js";
 import { aiLogger } from "../logger";
 import { PERMISSION_TIMEOUT_MS } from "../constants";
 
-export interface PermissionContext {
-  channel: GuildTextBasedChannel;
+interface PermissionContext {
+  channel: SendableChannels;
   turnId: string;
   userId: string;
 }
@@ -564,7 +564,7 @@ function waitForApproval(args: ApprovalPromptArgs): Promise<PermissionResult> {
   });
 }
 
-export class PermissionManager {
+class PermissionManager {
   private readonly contexts = new Map<string, PermissionContext>();
   private readonly promptMessages = new Map<string, Set<Message>>();
 

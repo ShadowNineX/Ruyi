@@ -6,18 +6,26 @@ import {
 } from "@openai/agents";
 import { aiLogger } from "../logger";
 import { env } from "../env";
-import { configManager } from "../config";
+import { configManager, type ConfigScope } from "../config";
 
-export class AgentsRuntimeManager {
+class AgentsRuntimeManager {
   private provider: OpenAIProvider | null = null;
   private runner: Runner | null = null;
 
   get model(): string {
-    return configManager.getChatModel();
+    return configManager.getChatModel(null);
   }
 
   get modelSettings(): ModelSettings {
-    return configManager.getModelSettings();
+    return configManager.getModelSettings(null);
+  }
+
+  getModel(scope: ConfigScope | null | undefined): string {
+    return configManager.getChatModel(scope);
+  }
+
+  getModelSettings(scope: ConfigScope | null | undefined): ModelSettings {
+    return configManager.getModelSettings(scope);
   }
 
   getProviderConfig() {
@@ -49,7 +57,7 @@ export class AgentsRuntimeManager {
     aiLogger.info(
       {
         model: this.model,
-        preset: configManager.getModelPreset(),
+        preset: configManager.getModelPreset(null),
         modelSettings: this.modelSettings,
       },
       "OpenAI Agents runtime initialized",

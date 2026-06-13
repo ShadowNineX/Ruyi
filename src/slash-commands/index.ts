@@ -4,17 +4,10 @@ import { smitheryCommand, handleSmitheryCommand } from "./smithery";
 import { memoriesCommand, handleMemoriesCommand } from "./memories";
 import { creditsCommand, handleCreditsCommand } from "./credits";
 import { awayCommand, handleAwayCommand } from "./away";
-import {
-  modelCommand,
-  handleModelCommand,
-  handleModelSelect,
-  isModelSelect,
-} from "./model";
+import { modelCommand, handleModelCommand } from "./model";
 import {
   searchProviderCommand,
   handleSearchProviderCommand,
-  handleSearchProviderSelect,
-  isSearchProviderSelect,
 } from "./search-provider";
 
 export const slashCommands = [

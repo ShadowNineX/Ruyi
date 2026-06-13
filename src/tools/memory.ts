@@ -1,42 +1,114 @@
 import { tool } from "@openai/agents";
 import { z } from "zod";
+import {
+  PermissionFlagsBits,
+  type Guild,
+  type TextBasedChannel,
+} from "discord.js";
 import { toolLogger } from "../logger";
 import { Memory, Conversation } from "../db/models";
 import { toolContextManager, formatError } from "../utils/types";
+import { requesterHasChannelPermission } from "../utils/discord-permissions";
+import { getCurrentToolConfigScope } from "../utils/discord-scope";
 import {
-  GLOBAL_MEMORY_CAP,
-  MEMORY_VALUE_MAX_LEN,
-  USER_MEMORY_CAP,
-} from "../constants";
+  buildUserMemoryFilter,
+  formatUserMemoryContext,
+  type UserMemoryFilter,
+} from "../utils/memory-scope";
+import {
+  sanitizeMemoryKey,
+  truncateMemoryValue,
+} from "../utils/memory-normalization";
+import { USER_MEMORY_CAP } from "../constants";
 
 type MemorySearchFilter = Record<string, unknown>;
 
-// Get the actual Discord username from context - don't trust model's username parameter
-function getContextUsername(): string | null {
-  const ctx = toolContextManager.get();
-  return ctx.message?.author.username ?? null;
+type MemoryOwnerFilter = UserMemoryFilter;
+
+interface MemoryUserIdentity {
+  userId: string;
+  username: string;
 }
 
-function truncateValue(value: string, maxLength = MEMORY_VALUE_MAX_LEN): string {
-  if (value.length <= maxLength) return value;
-  return value.slice(0, maxLength - 3) + "...";
+interface MemoryOwnerContext {
+  createdBy: string;
+  filter: MemoryOwnerFilter;
+  label: string;
+  limit: number;
+  username: string | null;
+}
+
+// Get the actual Discord user identity from context - don't trust model parameters.
+function getContextUserIdentity(): MemoryUserIdentity | null {
+  const ctx = toolContextManager.get();
+  const author = ctx.message?.author;
+  return author ? { userId: author.id, username: author.username } : null;
 }
 
 function normalizeMemoryKey(key: string | null): string | null {
-  const trimmed = key?.trim();
-  return trimmed || null;
+  const sanitized = sanitizeMemoryKey(key ?? "");
+  return sanitized || null;
 }
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 }
 
+function resolveMemoryOwner(
+  user: MemoryUserIdentity | null,
+): MemoryOwnerContext | string {
+  if (!user) {
+    return "Discord user context required for memories";
+  }
+
+  const { guild } = toolContextManager.get();
+  const scope = getCurrentToolConfigScope();
+  if (!scope) {
+    return "Discord scope required for memories";
+  }
+
+  return {
+    createdBy: user.username,
+    filter: buildUserMemoryFilter(user.userId, scope),
+    label: formatUserMemoryContext(user.username, scope, guild?.name),
+    limit: USER_MEMORY_CAP,
+    username: user.username,
+  };
+}
+
+function buildMemoryKeyFilter(
+  key: string,
+  user: MemoryUserIdentity | null,
+): ({ key: string } & MemoryOwnerFilter) | string {
+  const owner = resolveMemoryOwner(user);
+  return typeof owner === "string" ? owner : { key, ...owner.filter };
+}
+
+async function evictMemoryIfNeeded(
+  owner: MemoryOwnerContext,
+  existing: unknown,
+): Promise<string | null> {
+  if (existing || (await Memory.countDocuments(owner.filter)) < owner.limit) {
+    return null;
+  }
+
+  // Evict oldest non-pinned entry first; pinned entries are protected.
+  const oldest = await Memory.findOne({ ...owner.filter, pinned: false }).sort({
+    updatedAt: 1,
+  });
+  if (!oldest) {
+    return `Memory cap reached for ${owner.filter.scope}. Unpin or delete an existing memory before saving more.`;
+  }
+
+  await oldest.deleteOne();
+  return null;
+}
+
 // Extracted action handlers for memoryStoreTool
 async function handleSaveMemory(
   key: string | null,
   value: string | null,
-  scope: "global" | "user",
-  username: string | null,
+  user: MemoryUserIdentity | null,
   pinned: boolean,
 ) {
   const normalizedKey = normalizeMemoryKey(key);
@@ -45,35 +117,17 @@ async function handleSaveMemory(
   if (!normalizedKey || !normalizedValue) {
     return { error: "Key and value are required for save" };
   }
-  if (scope === "user" && !username) {
-    return { error: "Username required for user-scoped memories" };
+
+  const truncatedValue = truncateMemoryValue(normalizedValue);
+  const owner = resolveMemoryOwner(user);
+  if (typeof owner === "string") {
+    return { error: owner };
   }
-
-  const truncatedValue = truncateValue(normalizedValue);
-  const limit = scope === "global" ? GLOBAL_MEMORY_CAP : USER_MEMORY_CAP;
-  const query =
-    scope === "global"
-      ? { scope: "global" as const }
-      : { scope: "user" as const, username };
-  const filter = {
-    key: normalizedKey,
-    scope,
-    username: scope === "global" ? null : username,
-  };
+  const filter = { key: normalizedKey, ...owner.filter };
   const existing = await Memory.findOne(filter);
-
-  if (!existing && (await Memory.countDocuments(query)) >= limit) {
-    // Evict oldest non-pinned entry first; pinned entries are protected.
-    const oldest = await Memory.findOne({ ...query, pinned: false }).sort({
-      updatedAt: 1,
-    });
-    if (!oldest) {
-      return {
-        error:
-          `Memory cap reached for ${scope}. Unpin or delete an existing memory before saving more.`,
-      };
-    }
-    await oldest.deleteOne();
+  const evictionError = await evictMemoryIfNeeded(owner, existing);
+  if (evictionError) {
+    return { error: evictionError };
   }
 
   await Memory.updateOne(
@@ -81,9 +135,12 @@ async function handleSaveMemory(
     {
       key: normalizedKey,
       value: truncatedValue,
-      scope,
-      username: scope === "global" ? null : username,
-      createdBy: username ?? "unknown",
+      scope: owner.filter.scope,
+      scopeKind: owner.filter.scopeKind,
+      scopeId: owner.filter.scopeId,
+      userId: owner.filter.userId,
+      username: owner.username,
+      createdBy: owner.createdBy,
       pinned,
       source: "user",
     },
@@ -92,25 +149,21 @@ async function handleSaveMemory(
 
   return {
     success: true,
-    message: `${pinned ? "Pinned" : "Remembered"} "${normalizedKey}" for ${scope === "global" ? "everyone" : username}`,
+    message: `${pinned ? "Pinned" : "Remembered"} "${normalizedKey}" for ${owner.label}`,
   };
 }
 
 async function handlePinMemory(
   key: string | null,
-  scope: "global" | "user",
-  username: string | null,
+  user: MemoryUserIdentity | null,
   pinned: boolean,
 ) {
   const normalizedKey = normalizeMemoryKey(key);
   if (!normalizedKey) return { error: "Key is required" };
-  if (scope === "user" && !username) {
-    return { error: "Username required for user-scoped memories" };
+  const filter = buildMemoryKeyFilter(normalizedKey, user);
+  if (typeof filter === "string") {
+    return { error: filter };
   }
-  const filter =
-    scope === "global"
-      ? { key: normalizedKey, scope: "global" as const }
-      : { key: normalizedKey, scope: "user" as const, username };
   const result = await Memory.updateOne(filter, { $set: { pinned } });
   if (result.matchedCount === 0) {
     return {
@@ -126,17 +179,16 @@ async function handlePinMemory(
 
 async function handleGetMemory(
   key: string | null,
-  scope: "global" | "user",
-  username: string | null,
+  user: MemoryUserIdentity | null,
 ) {
   const normalizedKey = normalizeMemoryKey(key);
   if (!normalizedKey) {
     return { error: "Key is required for get" };
   }
-  const query =
-    scope === "global"
-      ? { key: normalizedKey, scope: "global" as const }
-      : { key: normalizedKey, scope: "user" as const, username };
+  const query = buildMemoryKeyFilter(normalizedKey, user);
+  if (typeof query === "string") {
+    return { error: query };
+  }
   const item = await Memory.findOne(query);
 
   if (!item) {
@@ -154,17 +206,16 @@ async function handleGetMemory(
 
 async function handleDeleteMemory(
   key: string | null,
-  scope: "global" | "user",
-  username: string | null,
+  user: MemoryUserIdentity | null,
 ) {
   const normalizedKey = normalizeMemoryKey(key);
   if (!normalizedKey) {
     return { error: "Key is required for delete" };
   }
-  const query =
-    scope === "global"
-      ? { key: normalizedKey, scope: "global" as const }
-      : { key: normalizedKey, scope: "user" as const, username };
+  const query = buildMemoryKeyFilter(normalizedKey, user);
+  if (typeof query === "string") {
+    return { error: query };
+  }
   const result = await Memory.deleteOne(query);
 
   if (result.deletedCount > 0) {
@@ -173,9 +224,15 @@ async function handleDeleteMemory(
   return { success: false, message: `No memory found for "${normalizedKey}"` };
 }
 
-async function handleListMemories(username: string | null) {
+async function handleListMemories(
+  user: MemoryUserIdentity | null,
+) {
+  const owner = resolveMemoryOwner(user);
+  if (typeof owner === "string") {
+    return { error: owner };
+  }
+
   const memories: {
-    scope: string;
     key: string;
     value: string;
     createdBy: string;
@@ -183,10 +240,12 @@ async function handleListMemories(username: string | null) {
     source: string;
   }[] = [];
 
-  const globalMemories = await Memory.find({ scope: "global" });
-  for (const m of globalMemories) {
+  const storedMemories = await Memory.find(owner.filter).sort({
+    pinned: -1,
+    updatedAt: -1,
+  });
+  for (const m of storedMemories) {
     memories.push({
-      scope: "global",
       key: m.key,
       value: m.value,
       createdBy: m.createdBy,
@@ -195,27 +254,13 @@ async function handleListMemories(username: string | null) {
     });
   }
 
-  if (username) {
-    const userMemories = await Memory.find({ scope: "user", username });
-    for (const m of userMemories) {
-      memories.push({
-        scope: "user",
-        key: m.key,
-        value: m.value,
-        createdBy: m.createdBy,
-        pinned: m.pinned,
-        source: m.source,
-      });
-    }
-  }
-
-  return { count: memories.length, memories };
+  return { count: memories.length, context: owner.label, memories };
 }
 
 export const memoryStoreTool = tool({
   name: "memory_store",
   description:
-    "Store, retrieve, pin, or delete memories. PINNED memories are always loaded into context (treat them as the user's persona/core facts). Use 'pin' to mark an existing memory as pinned, 'unpin' to remove that flag. The username is automatically detected.",
+    "Store, retrieve, pin, or delete memories. PINNED memories are always loaded into context (treat them as the user's persona/core facts). Use 'pin' to mark an existing memory as pinned, 'unpin' to remove that flag. The Discord user is automatically detected.",
   parameters: z.object({
     action: z
       .enum(["save", "get", "delete", "list", "pin", "unpin"])
@@ -230,11 +275,6 @@ export const memoryStoreTool = tool({
       .string()
       .nullable()
       .describe("The information to remember (e.g. 'Alexander', 'shadow123')."),
-    scope: z
-      .enum(["global", "user"])
-      .describe(
-        "Where to store the memory. Use 'user' for personal info about the current user.",
-      ),
     pinned: z
       .boolean()
       .nullable()
@@ -242,10 +282,16 @@ export const memoryStoreTool = tool({
         "For 'save': whether to pin the memory so it always appears in context. Defaults to false.",
       ),
   }),
-  execute: async ({ action, key, value, scope, pinned }) => {
-    const username = getContextUsername();
+  execute: async ({ action, key, value, pinned }) => {
+    const user = getContextUserIdentity();
     toolLogger.info(
-      { action, key, scope, username, pinned },
+      {
+        action,
+        key,
+        userId: user?.userId,
+        username: user?.username,
+        pinned,
+      },
       "Memory store operation",
     );
 
@@ -255,20 +301,19 @@ export const memoryStoreTool = tool({
           return await handleSaveMemory(
             key,
             value,
-            scope,
-            username,
+            user,
             pinned ?? false,
           );
         case "get":
-          return await handleGetMemory(key, scope, username);
+          return await handleGetMemory(key, user);
         case "delete":
-          return await handleDeleteMemory(key, scope, username);
+          return await handleDeleteMemory(key, user);
         case "list":
-          return await handleListMemories(username);
+          return await handleListMemories(user);
         case "pin":
-          return await handlePinMemory(key, scope, username, true);
+          return await handlePinMemory(key, user, true);
         case "unpin":
-          return await handlePinMemory(key, scope, username, false);
+          return await handlePinMemory(key, user, false);
         default:
           return { error: `Unknown action: ${action}` };
       }
@@ -316,46 +361,33 @@ function collectMemoryLines(
 export const memoryRecallTool = tool({
   name: "memory_recall",
   description:
-    "Recall all stored memories for the current user. Use this when you need to remember what you know about the user. Username is automatically detected.",
-  parameters: z.object({
-    include_global: z.boolean().describe("Whether to include global memories."),
-  }),
-  execute: async ({ include_global }) => {
-    const username = getContextUsername();
-    toolLogger.info({ username, include_global }, "Recalling memories");
+    "Recall stored memories for the current Discord context and current user. Discord context and user identity are automatically detected.",
+  parameters: z.object({}),
+  execute: async () => {
+    const user = getContextUserIdentity();
+    toolLogger.info(
+      { userId: user?.userId, username: user?.username },
+      "Recalling memories",
+    );
 
     const maxTotalLength = 2000;
     const allLines: string[] = [];
-    let currentLength = 0;
-
-    if (include_global) {
-      const globalMemories = await Memory.find({ scope: "global" }).sort({
-        pinned: -1,
-        updatedAt: -1,
-      });
-      const { lines, newLength } = collectMemoryLines(
-        globalMemories,
-        "=== Global Memories ===",
-        currentLength,
-        maxTotalLength,
-      );
-      allLines.push(...lines);
-      currentLength = newLength;
+    const owner = resolveMemoryOwner(user);
+    if (typeof owner === "string") {
+      return { error: owner };
     }
 
-    if (username) {
-      const userMemories = await Memory.find({ scope: "user", username }).sort({
-        pinned: -1,
-        updatedAt: -1,
-      });
-      const { lines } = collectMemoryLines(
-        userMemories,
-        `=== Memories about ${username} ===`,
-        currentLength,
-        maxTotalLength,
-      );
-      allLines.push(...lines);
-    }
+    const userMemories = await Memory.find(owner.filter).sort({
+      pinned: -1,
+      updatedAt: -1,
+    });
+    const { lines } = collectMemoryLines(
+      userMemories,
+      `=== Memories for ${owner.label} ===`,
+      0,
+      maxTotalLength,
+    );
+    allLines.push(...lines);
 
     if (allLines.length === 0) {
       return { hasMemories: false, message: "No memories stored yet." };
@@ -363,7 +395,11 @@ export const memoryRecallTool = tool({
 
     const result = { hasMemories: true, summary: allLines.join("\n") };
     toolLogger.info(
-      { username, include_global, lineCount: allLines.length },
+      {
+        userId: user?.userId,
+        username: user?.username,
+        lineCount: allLines.length,
+      },
       "Memory recall complete",
     );
     return result;
@@ -378,20 +414,17 @@ export const searchMemoryTool = tool({
     query: z
       .string()
       .describe("Search query to find in memory keys and values."),
-    scope: z
-      .enum(["global", "user", "all"])
-      .nullable()
-      .describe(
-        "Filter by scope: 'user' for current user only, 'global' for global only, 'all' or null for both.",
-      ),
   }),
-  execute: async ({ query, scope }) => {
-    const username = getContextUsername();
-    toolLogger.info({ query, username, scope }, "Searching memories");
+  execute: async ({ query }) => {
+    const user = getContextUserIdentity();
+    toolLogger.info(
+      { query, userId: user?.userId, username: user?.username },
+      "Searching memories",
+    );
 
     try {
       const regex = new RegExp(escapeRegExp(query), "i");
-      const filter = buildMemorySearchFilter(regex, scope, username);
+      const filter = buildMemorySearchFilter(regex, user);
       if (typeof filter === "string") {
         return { error: filter };
       }
@@ -410,8 +443,6 @@ export const searchMemoryTool = tool({
       const memories = results.map((m) => ({
         key: m.key,
         value: m.value,
-        scope: m.scope,
-        username: m.username,
         createdBy: m.createdBy,
       }));
 
@@ -431,6 +462,11 @@ interface ConversationMatch {
   isBot: boolean;
   timestamp: Date;
 }
+
+const CONVERSATION_SEARCH_PERMISSIONS = [
+  PermissionFlagsBits.ViewChannel,
+  PermissionFlagsBits.ReadMessageHistory,
+] as const;
 
 function messageMatchesCriteria(
   content: string,
@@ -491,10 +527,89 @@ function extractMatchingMessages(
   return matches;
 }
 
+function getConversationSearchPermissionError(
+  channel: TextBasedChannel,
+  label: string,
+): string | null {
+  return requesterHasChannelPermission(channel, CONVERSATION_SEARCH_PERMISSIONS)
+    ? null
+    : `You need View Channel and Read Message History permission to search archived history for ${label}.`;
+}
+
+function resolveCurrentConversationChannel(
+  requestedChannelId: string | null,
+  channel: TextBasedChannel | null,
+): string[] | string | null {
+  if (requestedChannelId && requestedChannelId !== channel?.id) return null;
+  if (!channel) {
+    return "Conversation search needs active Discord channel context";
+  }
+
+  const permissionError = getConversationSearchPermissionError(
+    channel,
+    "this channel",
+  );
+  return permissionError ?? [channel.id];
+}
+
+async function resolveGuildConversationChannel(
+  requestedChannelId: string,
+  guild: Guild | null,
+): Promise<string[] | string> {
+  if (!guild) {
+    return "Cannot search another channel outside of a server";
+  }
+
+  try {
+    const guildChannel =
+      guild.channels.cache.get(requestedChannelId) ??
+      (await guild.channels.fetch(requestedChannelId));
+    if (guildChannel?.guildId !== guild.id) {
+      return "Requested channel is not in the current server";
+    }
+    if (!guildChannel.isTextBased()) {
+      return "Requested channel does not have message history";
+    }
+
+    const channelLabel =
+      "name" in guildChannel ? `#${guildChannel.name}` : "that channel";
+    const permissionError = getConversationSearchPermissionError(
+      guildChannel,
+      channelLabel,
+    );
+    return permissionError ?? [requestedChannelId];
+  } catch (error) {
+    toolLogger.debug(
+      {
+        channelId: requestedChannelId,
+        guildId: guild.id,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "Could not verify conversation search channel",
+    );
+    return "Could not verify that channel belongs to the current server";
+  }
+}
+
+async function resolveConversationSearchChannelIds(
+  requestedChannelId: string | null,
+): Promise<string[] | string> {
+  const { channel, guild } = toolContextManager.get();
+  const currentChannel = resolveCurrentConversationChannel(
+    requestedChannelId,
+    channel,
+  );
+  if (currentChannel) return currentChannel;
+  if (!requestedChannelId) {
+    return "Conversation search needs active Discord channel context";
+  }
+  return resolveGuildConversationChannel(requestedChannelId, guild);
+}
+
 export const searchConversationTool = tool({
   name: "search_conversation",
   description:
-    "Search through past conversation history stored in the database. Use this to recall what was discussed previously.",
+    "Search stored conversation history in the current channel, or a verified channel in the current server. Use this to recall what was discussed previously.",
   parameters: z.object({
     query: z
       .string()
@@ -503,7 +618,9 @@ export const searchConversationTool = tool({
     channel_id: z
       .string()
       .nullable()
-      .describe("Filter by specific channel ID."),
+      .describe(
+        "Optional specific channel ID. If omitted, searches the current channel only.",
+      ),
     limit: z
       .number()
       .nullable()
@@ -518,15 +635,14 @@ export const searchConversationTool = tool({
     try {
       const maxLimit = Math.min(Math.max(Math.round(limit ?? 20), 1), 50);
       const regex = new RegExp(escapeRegExp(query), "i");
-
-      let conversationQuery = Conversation.find();
-      if (channel_id) {
-        conversationQuery = conversationQuery
-          .where("channelId")
-          .equals(channel_id);
+      const channelIds = await resolveConversationSearchChannelIds(channel_id);
+      if (typeof channelIds === "string") {
+        return { error: channelIds };
       }
 
-      const conversations = await conversationQuery.lean();
+      const conversations = await Conversation.find({
+        channelId: { $in: channelIds },
+      }).lean();
       const matchingMessages = extractMatchingMessages(
         conversations,
         regex,
@@ -557,25 +673,14 @@ export const searchConversationTool = tool({
 
 function buildMemorySearchFilter(
   regex: RegExp,
-  scope: "global" | "user" | "all" | null,
-  username: string | null,
+  user: MemoryUserIdentity | null,
 ): MemorySearchFilter | string {
   const textFilter: MemorySearchFilter = {
     $or: [{ key: regex }, { value: regex }],
   };
 
-  if (scope === "global") {
-    return { $and: [textFilter, { scope: "global" }] };
-  }
-
-  if (scope === "user") {
-    if (!username) return "Username required for user-scoped memory search";
-    return { $and: [textFilter, { scope: "user", username }] };
-  }
-
-  const visibleScopeFilter: MemorySearchFilter = username
-    ? { $or: [{ scope: "global" }, { scope: "user", username }] }
-    : { scope: "global" };
-
-  return { $and: [textFilter, visibleScopeFilter] };
+  const owner = resolveMemoryOwner(user);
+  return typeof owner === "string"
+    ? owner
+    : { $and: [textFilter, owner.filter] };
 }

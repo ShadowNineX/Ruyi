@@ -10,6 +10,7 @@ import {
   getSmitheryConnection,
   saveSmitheryConnection,
   type ISmitheryConnection,
+  type SmitheryConnectionScope,
   type SmitheryConnectionStatus,
   type SmitheryServerId,
 } from "../db/models";
@@ -22,7 +23,6 @@ const MCP_CLIENT_INFO = {
 } as const;
 const SMITHERY_APP_METADATA = {
   app: "ruyi-discord-bot",
-  scope: "global",
 } as const;
 
 export interface SmitheryConnectionSnapshot {
@@ -83,15 +83,21 @@ function normalizeStatus(
   }
 }
 
-function getConnectionId(serverId: SmitheryServerId): string {
-  return serverId;
+function getConnectionId(
+  scope: SmitheryConnectionScope,
+  serverId: SmitheryServerId,
+): string {
+  return `${serverId}-${scope.kind}-${scope.id}`;
 }
 
 function getConnectionMetadata(
+  scope: SmitheryConnectionScope,
   serverId: SmitheryServerId,
 ): Record<string, string> {
   return {
     ...SMITHERY_APP_METADATA,
+    scopeKind: scope.kind,
+    scopeId: scope.id,
     serverId,
   };
 }
@@ -140,10 +146,12 @@ function toToolSummary(tool: McpTool): SmitheryToolSummary {
 }
 
 async function saveSnapshot(
+  scope: SmitheryConnectionScope,
   serverId: SmitheryServerId,
   snapshot: SmitheryConnectionSnapshot,
 ): Promise<ISmitheryConnection> {
   return saveSmitheryConnection({
+    scope,
     serverId,
     connectionId: snapshot.connectionId,
     status: snapshot.status,
@@ -182,9 +190,10 @@ async function withSmitheryMcpClient<T>(
 }
 
 async function requireConnectedSmitheryConnection(
+  scope: SmitheryConnectionScope,
   serverId: SmitheryServerId,
 ): Promise<ISmitheryConnection> {
-  const connection = await getSmitheryConnection(serverId);
+  const connection = await getSmitheryConnection(scope, serverId);
   if (!connection) {
     throw new Error(`${SMITHERY_SERVERS[serverId].name} is not linked. Run /smithery first.`);
   }
@@ -209,48 +218,58 @@ export function getSmitheryNamespaceMcpUrl(): string {
 }
 
 export async function createOrUpdateSmitheryConnection(
+  scope: SmitheryConnectionScope,
   serverId: SmitheryServerId,
 ): Promise<SmitheryConnectionSnapshot> {
   const { namespace } = requireSmitheryConfig();
   const server = SMITHERY_SERVERS[serverId];
   const client = getSmitheryClient();
 
-  const connection = await client.connections.set(getConnectionId(serverId), {
+  const connection = await client.connections.set(getConnectionId(scope, serverId), {
     namespace,
     transport: "http",
     mcpUrl: server.mcpUrl,
     name: server.name,
-    metadata: getConnectionMetadata(serverId),
+    metadata: getConnectionMetadata(scope, serverId),
   });
 
   const snapshot = toSnapshot(connection);
-  await saveSnapshot(serverId, snapshot);
+  await saveSnapshot(scope, serverId, snapshot);
   return snapshot;
 }
 
 export async function refreshSmitheryConnection(
+  scope: SmitheryConnectionScope,
   serverId: SmitheryServerId,
 ): Promise<SmitheryConnectionSnapshot> {
   const { namespace } = requireSmitheryConfig();
   const client = getSmitheryClient();
-  const connection = await client.connections.get(getConnectionId(serverId), {
-    namespace,
-  });
+  const connection = await client.connections.get(
+    getConnectionId(scope, serverId),
+    { namespace },
+  );
   const snapshot = toSnapshot(connection);
-  await saveSnapshot(serverId, snapshot);
+  await saveSnapshot(scope, serverId, snapshot);
   return snapshot;
 }
 
-export async function refreshKnownSmitheryConnections(): Promise<void> {
+export async function refreshKnownSmitheryConnections(
+  scope?: SmitheryConnectionScope,
+): Promise<void> {
   if (!isSmitheryConfigured()) return;
 
-  const connections = await getAllSmitheryConnections();
+  const connections = await getAllSmitheryConnections(scope);
   for (const connection of connections) {
     try {
-      await refreshSmitheryConnection(connection.serverId);
+      await refreshSmitheryConnection(
+        { kind: connection.scopeKind, id: connection.scopeId },
+        connection.serverId,
+      );
     } catch (error) {
       mcpLogger.warn(
         {
+          scopeKind: connection.scopeKind,
+          scopeId: connection.scopeId,
           serverId: connection.serverId,
           error: error instanceof Error ? error.message : String(error),
         },
@@ -261,15 +280,17 @@ export async function refreshKnownSmitheryConnections(): Promise<void> {
 }
 
 export async function deleteSmitheryConnection(
+  scope: SmitheryConnectionScope,
   serverId: SmitheryServerId,
 ): Promise<boolean> {
   const { namespace } = requireSmitheryConfig();
   const client = getSmitheryClient();
 
   try {
-    const result = await client.connections.delete(getConnectionId(serverId), {
-      namespace,
-    });
+    const result = await client.connections.delete(
+      getConnectionId(scope, serverId),
+      { namespace },
+    );
     return result.success;
   } catch (error) {
     if (getErrorStatus(error) === 404) return true;
@@ -278,9 +299,10 @@ export async function deleteSmitheryConnection(
 }
 
 export async function listSmitheryConnectionTools(
+  scope: SmitheryConnectionScope,
   serverId: SmitheryServerId,
 ): Promise<SmitheryToolSummary[]> {
-  const connection = await requireConnectedSmitheryConnection(serverId);
+  const connection = await requireConnectedSmitheryConnection(scope, serverId);
   const result = await withSmitheryMcpClient(connection.connectionId, (client) =>
     client.listTools(),
   );
@@ -288,11 +310,12 @@ export async function listSmitheryConnectionTools(
 }
 
 export async function callSmitheryConnectionTool(
+  scope: SmitheryConnectionScope,
   serverId: SmitheryServerId,
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<SmitheryToolCallResult> {
-  const connection = await requireConnectedSmitheryConnection(serverId);
+  const connection = await requireConnectedSmitheryConnection(scope, serverId);
 
   try {
     const result = await withSmitheryMcpClient(connection.connectionId, (client) =>
@@ -305,7 +328,7 @@ export async function callSmitheryConnectionTool(
     };
   } catch (error) {
     if (error instanceof SmitheryAuthorizationError) {
-      await saveSnapshot(serverId, {
+      await saveSnapshot(scope, serverId, {
         connectionId: error.connectionId,
         status: "auth_required",
         setupUrl: error.authorizationUrl,

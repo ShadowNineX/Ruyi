@@ -1,8 +1,9 @@
 import { tool } from "@openai/agents";
 import { z } from "zod";
-import { EmbedBuilder } from "discord.js";
+import { EmbedBuilder, PermissionFlagsBits } from "discord.js";
 import { toolLogger } from "../logger";
 import { toolContextManager, formatError } from "../utils/types";
+import { requesterHasChannelPermission } from "../utils/discord-permissions";
 
 // Map color names to hex values
 const colorMap: Record<string, number> = {
@@ -274,6 +275,17 @@ export const embedTool = tool({
     const channel = ctx.channel;
     if (!("send" in channel)) {
       return { error: "Cannot send messages in this channel type" };
+    }
+    if (
+      !requesterHasChannelPermission(channel, [
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.EmbedLinks,
+      ])
+    ) {
+      return {
+        error:
+          "You need Send Messages and Embed Links permission in this channel to ask Ruyi to send embeds.",
+      };
     }
 
     try {

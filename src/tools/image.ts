@@ -1,10 +1,11 @@
 import OpenAI from "openai";
 import { z } from "zod";
-import { AttachmentBuilder, EmbedBuilder } from "discord.js";
+import { AttachmentBuilder, EmbedBuilder, PermissionFlagsBits } from "discord.js";
 import { tool } from "@openai/agents";
 import { toolLogger } from "../logger";
 import { toolContextManager, formatError } from "../utils/types";
 import { env } from "../env";
+import { requesterHasChannelPermission } from "../utils/discord-permissions";
 
 type OpenAIImageSize = "auto" | "1024x1024" | "1536x1024" | "1024x1536";
 type OpenAIImageQuality = "auto" | "low" | "medium" | "high";
@@ -269,6 +270,18 @@ export const generateImageTool = tool({
 
     if (!ctx.channel || !("send" in ctx.channel)) {
       return { error: "No valid channel context available" };
+    }
+    if (
+      !requesterHasChannelPermission(ctx.channel, [
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.AttachFiles,
+        PermissionFlagsBits.EmbedLinks,
+      ])
+    ) {
+      return {
+        error:
+          "You need Send Messages, Attach Files, and Embed Links permission in this channel to ask Ruyi to generate images here.",
+      };
     }
 
     const channel = ctx.channel as {

@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { Message, TextChannel, Guild } from "discord.js";
+import type { Message, TextBasedChannel, Guild } from "discord.js";
 import { toolLogger } from "../logger";
 
 type ReverseImageBudgetedTool =
@@ -18,18 +18,18 @@ interface ToolTurnBudget {
 
 export interface ToolContext {
   message: Message | null;
-  channel: TextChannel | null;
+  channel: TextBasedChannel | null;
   guild: Guild | null;
   referencedMessage: Message | null;
   toolBudget?: ToolTurnBudget;
 }
 
 // Shared result type for message resolution
-export type MessageResolutionResult =
+type MessageResolutionResult =
   | { success: true; message: Message }
   | { success: false; error: string };
 
-export type ToolBudgetDecision =
+type ToolBudgetDecision =
   | { allowed: true }
   | {
       allowed: false;

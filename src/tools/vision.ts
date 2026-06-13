@@ -5,6 +5,7 @@ import { env } from "../env";
 import { toolLogger } from "../logger";
 import { formatError, toolContextManager } from "../utils/types";
 import { configManager } from "../config";
+import { getCurrentToolConfigScope } from "../utils/discord-scope";
 
 const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
 const DEFAULT_MAX_OUTPUT_TOKENS = 900;
@@ -28,7 +29,7 @@ function normalizeImageUrl(value: string): string {
 }
 
 function getVisionModel(): string {
-  return configManager.getVisionModel();
+  return configManager.getVisionModel(getCurrentToolConfigScope());
 }
 
 function isImageDownloadFailure(errorMessage: string): boolean {

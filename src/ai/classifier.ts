@@ -1,5 +1,6 @@
 import { Agent } from "@openai/agents";
 import { z } from "zod";
+import type { ConfigScope } from "../config";
 import { aiLogger } from "../logger";
 import { CLASSIFIER_TIMEOUT_MS } from "../constants";
 import { conversationContext } from "./context";
@@ -59,9 +60,7 @@ function isWordCharacter(char: string | undefined): boolean {
   const code = char.codePointAt(0);
   if (code === undefined) return false;
   return (
-    (code >= 48 && code <= 57) ||
-    (code >= 97 && code <= 122) ||
-    char === "'"
+    (code >= 48 && code <= 57) || (code >= 97 && code <= 122) || char === "'"
   );
 }
 
@@ -77,7 +76,10 @@ function startsWithPhrase(text: string, phrase: string): boolean {
   return text === phrase || text.startsWith(`${phrase} `);
 }
 
-function startsWithAnyPhrase(text: string, phrases: readonly string[]): boolean {
+function startsWithAnyPhrase(
+  text: string,
+  phrases: readonly string[],
+): boolean {
   return phrases.some((phrase) => startsWithPhrase(text, phrase));
 }
 
@@ -111,8 +113,13 @@ const DIRECT_ACTION_RULES: ReadonlyArray<(text: string) => boolean> = [
     startsWithAnyWord(text, ["search", "find", "fetch"]) ||
     startsWithPhrase(text, "look up"),
   (text) =>
-    startsWithAnyWord(text, ["read", "summarize", "inspect", "quote", "open"]) &&
-    containsHttpUrl(text),
+    startsWithAnyWord(text, [
+      "read",
+      "summarize",
+      "inspect",
+      "quote",
+      "open",
+    ]) && containsHttpUrl(text),
   (text) => startsWithAnyWord(text, ["remember", "store", "forget"]),
   (text) =>
     startsWithAnyWord(text, ["show", "list", "recall"]) &&
@@ -128,8 +135,7 @@ const DIRECT_ACTION_RULES: ReadonlyArray<(text: string) => boolean> = [
       "give",
       "add",
       "remove",
-    ]) &&
-    containsAnyWord(text, ["role"]),
+    ]) && containsAnyWord(text, ["role"]),
   (text) =>
     startsWithAnyWord(text, ["edit", "revise", "correct", "fix", "replace"]) &&
     containsAnyWord(text, BOT_REPLY_WORDS),
@@ -162,11 +168,12 @@ function getDeterministicReplyReason(
   return null;
 }
 
-export class ReplyClassifier {
+class ReplyClassifier {
   async shouldReply(
     message: string,
     botName: string,
     channelId?: string,
+    configScope?: ConfigScope | null,
   ): Promise<boolean> {
     const trimmedMessage = message.trim();
     const deterministicReason = getDeterministicReplyReason(
@@ -226,15 +233,17 @@ Set shouldReply to false if:
       const agent = new Agent({
         name: "Ruyi reply classifier",
         instructions: systemPromptText,
-        model: agentsRuntimeManager.model,
-        modelSettings: agentsRuntimeManager.modelSettings,
+        model: agentsRuntimeManager.getModel(configScope),
+        modelSettings: agentsRuntimeManager.getModelSettings(configScope),
         outputType: ReplyDecisionSchema,
       });
 
-      const result = await agentsRuntimeManager.getRunner().run(agent, message, {
-        maxTurns: 1,
-        signal: abortController.signal,
-      });
+      const result = await agentsRuntimeManager
+        .getRunner()
+        .run(agent, message, {
+          maxTurns: 1,
+          signal: abortController.signal,
+        });
 
       const decision = result.finalOutput?.shouldReply ?? false;
       aiLogger.debug(

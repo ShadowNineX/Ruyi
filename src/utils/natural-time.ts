@@ -170,7 +170,7 @@ export function resolveTimeZone(
   };
 }
 
-export function describeDayPeriod(dateTime: DateTime): string {
+function describeDayPeriod(dateTime: DateTime): string {
   const hour = dateTime.hour;
   if (hour >= 5 && hour < 12) return "morning";
   if (hour >= 12 && hour < 17) return "afternoon";
@@ -225,7 +225,9 @@ function weekdayName(weekday: number): string {
 function parseClockTime(
   expression: string,
 ): { hour: number; minute: number; explicitMeridiem: boolean } | null {
-  const match = expression.match(/\b([01]?\d|2[0-3])(?::([0-5]\d))?\s*(am|pm)?\b/i);
+  const match = new RegExp(
+    /\b([01]?\d|2[0-3])(?::([0-5]\d))?\s*(am|pm)?\b/i,
+  ).exec(expression);
   if (!match) return null;
 
   const rawHour = Number.parseInt(match[1] ?? "", 10);
@@ -275,7 +277,9 @@ function resolveClockTime(
     if (noDateGiven && alreadyPassed) {
       return {
         resolved: resolved.plus({ days: 1 }),
-        assumptions: ["No date was specified, so a past clock time was treated as the next occurrence."],
+        assumptions: [
+          "No date was specified, so a past clock time was treated as the next occurrence.",
+        ],
         daypartAssumed: false,
       };
     }
@@ -300,7 +304,9 @@ function resolveClockTime(
   if (isFutureDateOnly) {
     return {
       resolved: date.set({ hour: 9, minute: 0, second: 0, millisecond: 0 }),
-      assumptions: ["No clock time was provided, so 09:00 local time was used."],
+      assumptions: [
+        "No clock time was provided, so 09:00 local time was used.",
+      ],
       daypartAssumed: true,
     };
   }
@@ -343,6 +349,21 @@ function buildParsedTime(
   };
 }
 
+function resolveTimeAmbiguity(clock: {
+  assumptions: string[];
+  daypartAssumed: boolean;
+}): ParsedNaturalTime["ambiguity"] {
+  if (clock.assumptions.some((item) => item.includes("current"))) {
+    return "assumed_current_time";
+  }
+
+  if (clock.daypartAssumed) {
+    return "assumed_daypart_time";
+  }
+
+  return "none";
+}
+
 export function parseNaturalTime(
   expression: string | null | undefined,
   options: {
@@ -361,11 +382,7 @@ export function parseNaturalTime(
   );
   const date = resolveDate(rawExpression, reference);
   const clock = resolveClockTime(rawExpression, reference, date);
-  const ambiguity = clock.assumptions.some((item) => item.includes("current"))
-    ? "assumed_current_time"
-    : clock.daypartAssumed
-      ? "assumed_daypart_time"
-      : "none";
+  const ambiguity = resolveTimeAmbiguity(clock);
 
   return buildParsedTime(
     rawExpression,
@@ -406,9 +423,4 @@ export function formatTemporalContext(context: CurrentTemporalContext): string {
     `Use resolve_time for natural-language dates, dayparts, or any location/timezone conversion.`,
     `Daypart defaults: morning=09:00, afternoon=14:00, evening=19:00, tonight/night=21:00 local time.`,
   ].join("\n");
-}
-
-export function minutesUntilNextDay(reference = DateTime.now()): number {
-  const tomorrow = reference.plus({ days: 1 }).startOf("day");
-  return Math.max(0, Math.round(tomorrow.diff(reference, "minutes").minutes));
 }

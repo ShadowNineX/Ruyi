@@ -323,9 +323,4 @@ export class ChatSession {
     }
     return false;
   }
-
-  /** Get current status */
-  get status(): SessionStatus {
-    return this.state.status;
-  }
 }

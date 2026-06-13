@@ -18,30 +18,33 @@ For local development, use `bun run dev`.
 ## Model Preset
 
 Ruyi's OpenAI model is selected in Discord with `/model`. The choice is stored
-in MongoDB and includes the chat model plus reasoning/verbosity settings, so
-model selection does not use `.env`. The default `High` intelligence level uses
-`gpt-5.5` with `medium` reasoning; `Pro` uses `gpt-5.5-pro`.
+in MongoDB per Discord server or private DM scope and includes the chat model
+plus reasoning/verbosity settings, so model selection does not use `.env`. The
+default `High` intelligence level uses `gpt-5.5` with `medium` reasoning; `Pro`
+uses `gpt-5.5-pro`.
 
 ## Web Search
 
 Ruyi exposes one `web_search` tool. Default/current-info questions use the
-Discord-selected primary provider first, then the other provider as fallback.
-Source-heavy research queries use Tavily directly.
+Discord-selected primary provider for the active server/private chat first,
+then the other provider as fallback. Source-heavy research queries use Tavily
+directly.
 
 ```bash
 TAVILY_API_KEY=tvly-your_tavily_api_key
 ```
 
 Use `/search-provider` in Discord to choose OpenAI or Tavily as the primary
-answer-mode search provider.
+answer-mode search provider for that server or private chat.
 
 ## Smithery MCP
 
 Set `SMITHERY_API_KEY` and `SMITHERY_NAMESPACE`, restart the bot, then run
 `/smithery` in Discord. The command creates Smithery hosted setup links for
 non-GitHub MCP services, so you should not need to paste OAuth codes into
-Discord. GitHub uses the official `github/github-mcp-server` directly instead
-of Smithery.
+Discord. Smithery links are stored separately for each Discord server or
+private DM. GitHub uses the official `github/github-mcp-server` directly
+instead of Smithery.
 
 ## GitHub MCP
 

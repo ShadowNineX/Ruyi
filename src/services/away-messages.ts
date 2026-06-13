@@ -1,6 +1,11 @@
 import { Agent } from "@openai/agents";
 import type { Message } from "discord.js";
-import { configManager } from "../config";
+import {
+  configManager,
+  configScopeKey,
+  userConfigScope,
+  type ConfigScope,
+} from "../config";
 import {
   AWAY_MESSAGE_GENERATION_TIMEOUT_MS,
   AWAY_MESSAGE_MAX_LENGTH,
@@ -20,6 +25,7 @@ interface AwayTimer {
 
 interface AwayTarget {
   channel: Message["channel"];
+  scope: ConfigScope;
   channelId: string;
   userId: string;
   username: string;
@@ -36,51 +42,73 @@ const AWAY_MESSAGE_INSTRUCTIONS = [
   "Return only the message text. The Discord mention will be added outside your response.",
 ].join("\n");
 
-function awayKey(channelId: string, userId: string): string {
-  return `${channelId}:${userId}`;
+function awayKey(
+  scope: ConfigScope,
+  channelId: string,
+  userId: string,
+): string {
+  return `${configScopeKey(scope)}:${channelId}:${userId}`;
+}
+
+function scopedUserActivityKey(scope: ConfigScope, userId: string): string {
+  return `${configScopeKey(scope)}:${userId}`;
 }
 
 function sanitizeAwayMessage(content: string): string {
   const withoutMassMentions = content
-    .replace(/@everyone/g, "everyone")
-    .replace(/@here/g, "here")
+    .replaceAll("@everyone", "everyone")
+    .replaceAll("@here", "here")
     .trim();
   return withoutMassMentions.length > AWAY_MESSAGE_MAX_LENGTH
     ? `${withoutMassMentions.slice(0, AWAY_MESSAGE_MAX_LENGTH - 3).trimEnd()}...`
     : withoutMassMentions;
 }
 
-export class AwayMessageService {
+class AwayMessageService {
   private readonly timers = new Map<string, AwayTimer>();
   private readonly lastUserActivityAt = new Map<string, number>();
+  private readonly lastScopedUserActivityAt = new Map<string, number>();
   private readonly lastChannelActivityAt = new Map<string, number>();
 
   recordUserActivity(message: Message): void {
-    if (message.author.bot || !message.inGuild()) return;
+    if (message.author.bot) return;
 
+    const scope = userConfigScope(message.guild?.id ?? null, message.author.id);
     const now = Date.now();
     this.lastUserActivityAt.set(message.author.id, now);
+    this.lastScopedUserActivityAt.set(
+      scopedUserActivityKey(scope, message.author.id),
+      now,
+    );
     this.lastChannelActivityAt.set(message.channel.id, now);
     this.clearTimersForUser(message.author.id);
   }
 
   async scheduleAfterHandledTurn(message: Message): Promise<void> {
-    if (message.author.bot || !message.inGuild() || !("send" in message.channel)) {
+    if (message.author.bot || !("send" in message.channel)) {
       return;
     }
 
-    const settings = configManager.getAwaySettings();
-    if (!settings.globalEnabled) return;
-    if (!(await configManager.isAwayEnabledForUser(message.author.id))) return;
-    if (await this.isOnCooldown(message.author.id, settings.cooldownMs)) return;
+    const scope = userConfigScope(message.guild?.id ?? null, message.author.id);
+    const settings = configManager.getAwaySettings(scope);
+    if (!settings.scopeEnabled) return;
+    if (!(await configManager.isAwayEnabledForUser(scope, message.author.id))) {
+      return;
+    }
+    if (
+      await this.isOnCooldown(scope, message.author.id, settings.cooldownMs)
+    ) {
+      return;
+    }
 
-    const key = awayKey(message.channel.id, message.author.id);
+    const key = awayKey(scope, message.channel.id, message.author.id);
     this.clearTimer(key);
 
     const scheduledAt = Date.now();
     const dueAt = scheduledAt + settings.delayMs;
     const target: AwayTarget = {
       channel: message.channel,
+      scope,
       channelId: message.channel.id,
       userId: message.author.id,
       username: message.author.username,
@@ -91,7 +119,11 @@ export class AwayMessageService {
       void this.sendAwayMessageIfStillInactive(key, target);
     }, settings.delayMs);
 
-    this.timers.set(key, { timer, dueAt, userId: message.author.id });
+    this.timers.set(key, {
+      timer,
+      dueAt,
+      userId: message.author.id,
+    });
     botLogger.debug(
       {
         channelId: target.channelId,
@@ -119,10 +151,11 @@ export class AwayMessageService {
   }
 
   private async isOnCooldown(
+    scope: ConfigScope,
     userId: string,
     cooldownMs: number,
   ): Promise<boolean> {
-    const lastSentAt = await configManager.getAwayLastSentAt(userId);
+    const lastSentAt = await configManager.getAwayLastSentAt(scope, userId);
     return lastSentAt !== null && Date.now() - lastSentAt < cooldownMs;
   }
 
@@ -133,10 +166,22 @@ export class AwayMessageService {
     this.timers.delete(key);
 
     try {
-      const settings = configManager.getAwaySettings();
-      if (!settings.globalEnabled) return;
-      if (!(await configManager.isAwayEnabledForUser(target.userId))) return;
-      if (await this.isOnCooldown(target.userId, settings.cooldownMs)) return;
+      const settings = configManager.getAwaySettings(target.scope);
+      if (!settings.scopeEnabled) return;
+      if (
+        !(await configManager.isAwayEnabledForUser(target.scope, target.userId))
+      ) {
+        return;
+      }
+      if (
+        await this.isOnCooldown(
+          target.scope,
+          target.userId,
+          settings.cooldownMs,
+        )
+      ) {
+        return;
+      }
 
       if (!this.isStillAway(target, settings.delayMs)) {
         botLogger.debug(
@@ -164,7 +209,11 @@ export class AwayMessageService {
         content: firstChunk,
         allowedMentions: { users: [target.userId] },
       });
-      await configManager.setAwayLastSentAt(target.userId, Date.now());
+      await configManager.setAwayLastSentAt(
+        target.scope,
+        target.userId,
+        Date.now(),
+      );
 
       botLogger.info(
         {
@@ -190,17 +239,27 @@ export class AwayMessageService {
 
   private isStillAway(target: AwayTarget, delayMs: number): boolean {
     const now = Date.now();
-    const lastUserActivity = this.lastUserActivityAt.get(target.userId) ?? 0;
+    const lastGlobalUserActivity =
+      this.lastUserActivityAt.get(target.userId) ?? 0;
+    const lastUserActivity =
+      this.lastScopedUserActivityAt.get(
+        scopedUserActivityKey(target.scope, target.userId),
+      ) ?? 0;
     const lastChannelActivity =
       this.lastChannelActivityAt.get(target.channelId) ?? 0;
 
+    if (lastGlobalUserActivity > target.scheduledAt) return false;
     if (lastUserActivity > target.scheduledAt) return false;
     if (lastChannelActivity > target.scheduledAt) return false;
 
-    return now - lastUserActivity >= delayMs && now - lastChannelActivity >= delayMs;
+    return (
+      now - lastUserActivity >= delayMs && now - lastChannelActivity >= delayMs
+    );
   }
 
-  private async generateAwayMessage(target: AwayTarget): Promise<string | null> {
+  private async generateAwayMessage(
+    target: AwayTarget,
+  ): Promise<string | null> {
     const abortController = new AbortController();
     const timeout = setTimeout(
       () => abortController.abort(),
@@ -211,8 +270,10 @@ export class AwayMessageService {
       const [dynamicContext, recentHistory] = await Promise.all([
         conversationContext.buildDynamicContext(
           target.username,
+          target.userId,
           target.channelId,
           await this.fetchRecentChannelHistory(target),
+          target.scope,
         ),
         this.fetchPersistedConversationSnippet(target.channelId),
       ]);
@@ -227,8 +288,8 @@ export class AwayMessageService {
       const agent = new Agent({
         name: "Ruyi Away Message",
         instructions: systemPrompt,
-        model: agentsRuntimeManager.model,
-        modelSettings: agentsRuntimeManager.modelSettings,
+        model: agentsRuntimeManager.getModel(target.scope),
+        modelSettings: agentsRuntimeManager.getModelSettings(target.scope),
         tools: [],
       });
       const runner = agentsRuntimeManager.getRunner();

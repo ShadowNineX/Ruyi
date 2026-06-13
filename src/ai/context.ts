@@ -1,15 +1,16 @@
 import { AgentSession, Conversation, Memory } from "../db/models";
 import type { IMemory } from "../db/models/memory";
+import type { ConfigScope } from "../config";
 import { aiLogger } from "../logger";
 import {
   buildCurrentTemporalContext,
   formatTemporalContext,
   resolveTimeZone,
 } from "../utils/natural-time";
+import { buildUserMemoryFilter } from "../utils/memory-scope";
 import {
   AUTO_EXTRACT_COOLDOWN_MS,
   AUTO_EXTRACT_THRESHOLD,
-  GLOBAL_CONTEXT_LIMIT,
   CHANNEL_SUMMARY_CONTEXT_MAX_LEN,
   ONGOING_CONVERSATION_WINDOW_MS,
   PINNED_CONTEXT_LIMIT,
@@ -23,20 +24,20 @@ export interface ChatMessage {
   isReplyContext?: boolean;
 }
 
-export interface ConversationMessageUpdateResult {
+interface ConversationMessageUpdateResult {
   found: boolean;
   changed: boolean;
   oldContent: string | null;
   newContent: string;
 }
 
-export class ConversationContext {
+class ConversationContext {
   private readonly lastInteractionCache = new Map<string, number>();
   private readonly userMessageCounters = new Map<string, number>();
   private readonly lastExtractionAt = new Map<string, number>();
 
-  private userKey(channelId: string, username: string): string {
-    return `${channelId}::${username}`;
+  private userKey(channelId: string, userId: string): string {
+    return `${channelId}::${userId}`;
   }
 
   async rememberMessage(
@@ -169,7 +170,9 @@ export class ConversationContext {
       const conversation = await Conversation.findOne({ channelId });
       if (!conversation || conversation.messages.length === 0) return "";
 
-      const recent = conversation.messages.filter((m) => !m.isBot).slice(-limit);
+      const recent = conversation.messages
+        .filter((m) => !m.isBot)
+        .slice(-limit);
       return recent.map((m) => `${m.author}: ${m.content}`).join("\n");
     } catch (error) {
       aiLogger.error({ error }, "Failed to get memory context");
@@ -185,9 +188,9 @@ export class ConversationContext {
 
   trackUserMessage(
     channelId: string,
-    username: string,
+    userId: string,
   ): { shouldExtract: boolean } {
-    const key = this.userKey(channelId, username);
+    const key = this.userKey(channelId, userId);
     const next = (this.userMessageCounters.get(key) ?? 0) + 1;
     this.userMessageCounters.set(key, next);
 
@@ -201,8 +204,8 @@ export class ConversationContext {
     return { shouldExtract: true };
   }
 
-  markExtracted(channelId: string, username: string): void {
-    const key = this.userKey(channelId, username);
+  markExtracted(channelId: string, userId: string): void {
+    const key = this.userKey(channelId, userId);
     this.userMessageCounters.set(key, 0);
     this.lastExtractionAt.set(key, Date.now());
   }
@@ -241,41 +244,37 @@ export class ConversationContext {
   }
 
   /**
-   * Tiered user memory context:
+   * Tiered user memory context for the current Discord scope:
    *   1. Pinned facts about the current user (always loaded)
-   *   2. Pinned global facts
-   *   3. Recently-updated user memories (auto + manual, non-pinned)
-   *   4. Recent global memories
+   *   2. Recently-updated user memories (auto + manual, non-pinned)
    */
-  async fetchUserMemories(username: string): Promise<string> {
+  async fetchUserMemories(
+    userId: string,
+    username: string,
+    scope: ConfigScope | null,
+  ): Promise<string> {
     try {
-      const [pinnedUser, pinnedGlobal, recentUser, recentGlobal] =
-        await Promise.all([
-          Memory.find({ scope: "user", username, pinned: true })
-            .sort({ updatedAt: -1 })
-            .limit(PINNED_CONTEXT_LIMIT),
-          Memory.find({ scope: "global", pinned: true })
-            .sort({ updatedAt: -1 })
-            .limit(PINNED_CONTEXT_LIMIT),
-          Memory.find({ scope: "user", username, pinned: false })
-            .sort({ updatedAt: -1 })
-            .limit(RECENT_USER_MEMORY_LIMIT),
-          Memory.find({ scope: "global", pinned: false })
-            .sort({ updatedAt: -1 })
-            .limit(GLOBAL_CONTEXT_LIMIT),
-        ]);
+      if (!scope) return "";
+
+      const userFilter = buildUserMemoryFilter(userId, scope);
+      const [pinnedUser, recentUser] = await Promise.all([
+        Memory.find({ ...userFilter, pinned: true })
+          .sort({ updatedAt: -1 })
+          .limit(PINNED_CONTEXT_LIMIT),
+        Memory.find({ ...userFilter, pinned: false })
+          .sort({ updatedAt: -1 })
+          .limit(RECENT_USER_MEMORY_LIMIT),
+      ]);
 
       const lines: string[] = [
         ...this.formatMemorySection(
           `Pinned facts about ${username} (always relevant, treat as core persona context):`,
           pinnedUser,
         ),
-        ...this.formatMemorySection("Pinned global facts:", pinnedGlobal),
         ...this.formatMemorySection(
           `Recent memories about ${username}:`,
           recentUser,
         ),
-        ...this.formatMemorySection("Recent global memories:", recentGlobal),
       ];
 
       if (lines.length === 0) return "";
@@ -284,9 +283,9 @@ export class ConversationContext {
         {
           username,
           pinnedUser: pinnedUser.length,
-          pinnedGlobal: pinnedGlobal.length,
           recentUser: recentUser.length,
-          recentGlobal: recentGlobal.length,
+          scopeKind: scope?.kind,
+          scopeId: scope?.id,
         },
         "Fetched memories for context",
       );
@@ -347,13 +346,17 @@ export class ConversationContext {
   }
 
   async fetchUserTimeZone(
+    userId: string,
     username: string,
+    scope: ConfigScope | null,
   ): Promise<{ timeZone: string; source: string } | null> {
     try {
-      const memories = await Memory.find(
-        { scope: "user", username },
-        { key: 1, value: 1, _id: 0 },
-      )
+      if (!scope) return null;
+      const memories = await Memory.find(buildUserMemoryFilter(userId, scope), {
+        key: 1,
+        value: 1,
+        _id: 0,
+      })
         .sort({ pinned: -1, updatedAt: -1 })
         .limit(30);
 
@@ -422,14 +425,16 @@ export class ConversationContext {
 
   async buildDynamicContext(
     username: string,
+    userId: string,
     channelId: string,
     chatHistory: ChatMessage[],
+    configScope: ConfigScope | null,
   ): Promise<string> {
     const historyContext = this.buildConversationHistory(chatHistory);
     const [memoryContext, channelSummary, userTimeZone] = await Promise.all([
-      this.fetchUserMemories(username),
+      this.fetchUserMemories(userId, username, configScope),
       this.fetchChannelSummary(channelId),
-      this.fetchUserTimeZone(username),
+      this.fetchUserTimeZone(userId, username, configScope),
     ]);
     const temporalContext = buildCurrentTemporalContext(userTimeZone?.timeZone);
     const isOngoing = this.isOngoingConversation(channelId);

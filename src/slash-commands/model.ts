@@ -11,19 +11,31 @@ import {
 import {
   AI_MODEL_PRESETS,
   configManager,
+  formatConfigScope,
   isAiModelPresetId,
+  userConfigScope,
   type AiModelPreset,
   type AiModelPresetId,
+  type ConfigScope,
 } from "../config";
-import { agentsRuntimeManager, sessionManager } from "../ai";
 import { botLogger } from "../logger";
 
 const MODEL_SELECT_ID = "model_preset_select";
 
 export const modelCommand = new SlashCommandBuilder()
   .setName("model")
-  .setDescription("Choose Ruyi's intelligence level")
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
+  .setDescription("Choose Ruyi's intelligence level");
+
+function canManageScope(
+  interaction: ChatInputCommandInteraction | StringSelectMenuInteraction,
+  scope: ConfigScope,
+): boolean {
+  return (
+    scope.kind === "dm" ||
+    (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ??
+      false)
+  );
+}
 
 function buildModelOption(
   preset: AiModelPreset,
@@ -36,8 +48,10 @@ function buildModelOption(
     .setDefault(preset.id === currentPreset);
 }
 
-function buildModelRow(): ActionRowBuilder<StringSelectMenuBuilder> {
-  const currentPreset = configManager.getModelPreset();
+function buildModelRow(
+  scope: ConfigScope,
+): ActionRowBuilder<StringSelectMenuBuilder> {
+  const currentPreset = configManager.getModelPreset(scope);
   return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(MODEL_SELECT_ID)
@@ -59,16 +73,28 @@ function formatPreset(preset: AiModelPreset): string {
   ].join("\n");
 }
 
-function currentPreset(): AiModelPreset {
-  return configManager.getModelConfig();
+function currentPreset(scope: ConfigScope): AiModelPreset {
+  return configManager.getModelConfig(scope);
 }
 
 export async function handleModelCommand(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
+  const scope = userConfigScope(interaction.guildId, interaction.user.id);
+  if (!canManageScope(interaction, scope)) {
+    await interaction.reply({
+      content:
+        "You need **Manage Server** to change this server's intelligence level.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
   await interaction.reply({
-    content: `Current intelligence:\n${formatPreset(currentPreset())}`,
-    components: [buildModelRow()],
+    content: `Current intelligence for ${formatConfigScope(scope)}:\n${formatPreset(
+      currentPreset(scope),
+    )}`,
+    components: [buildModelRow(scope)],
     flags: MessageFlags.Ephemeral,
   });
 }
@@ -77,23 +103,33 @@ async function applySelectedPreset(
   interaction: StringSelectMenuInteraction,
   selectedPreset: AiModelPresetId,
 ): Promise<void> {
-  const oldPreset = configManager.getModelConfig();
-
-  if (oldPreset.id === selectedPreset) {
+  const scope = userConfigScope(interaction.guildId, interaction.user.id);
+  if (!canManageScope(interaction, scope)) {
     await interaction.editReply({
-      content: `Ruyi is already using:\n${formatPreset(oldPreset)}`,
-      components: [buildModelRow()],
+      content:
+        "You need **Manage Server** to change this server's intelligence level.",
+      components: [],
     });
     return;
   }
 
-  await configManager.setModelPreset(selectedPreset);
-  const newPreset = configManager.getModelConfig();
-  await sessionManager.invalidateAll("model_preset_changed");
-  await agentsRuntimeManager.stop();
+  const oldPreset = configManager.getModelConfig(scope);
+
+  if (oldPreset.id === selectedPreset) {
+    await interaction.editReply({
+      content: `Ruyi is already using:\n${formatPreset(oldPreset)}`,
+      components: [buildModelRow(scope)],
+    });
+    return;
+  }
+
+  await configManager.setModelPreset(scope, selectedPreset);
+  const newPreset = configManager.getModelConfig(scope);
 
   botLogger.info(
     {
+      scope: scope.kind,
+      scopeId: scope.id,
       oldPreset: oldPreset.id,
       oldModel: oldPreset.model,
       newPreset: newPreset.id,
@@ -105,13 +141,13 @@ async function applySelectedPreset(
 
   await interaction.editReply({
     content: [
-      `Intelligence changed from **${oldPreset.label}** to **${newPreset.label}**.`,
+      `Intelligence changed from **${oldPreset.label}** to **${newPreset.label}** for ${formatConfigScope(scope)}.`,
       "",
       formatPreset(newPreset),
       "",
-      "Active chat sessions were refreshed so the next reply uses this intelligence level.",
+      `The next reply in ${formatConfigScope(scope)} will use this intelligence level.`,
     ].join("\n"),
-    components: [buildModelRow()],
+    components: [buildModelRow(scope)],
   });
 }
 
@@ -141,6 +177,7 @@ export async function handleModelSelect(
         name: err.name,
         user: interaction.user.username,
         selectedValue,
+        guildId: interaction.guildId,
       },
       "Failed to change AI intelligence level",
     );
@@ -149,7 +186,9 @@ export async function handleModelSelect(
       await interaction.editReply({
         content:
           "Forgive me, my lord - I could not change the intelligence level.",
-        components: [buildModelRow()],
+        components: [
+          buildModelRow(userConfigScope(interaction.guildId, interaction.user.id)),
+        ],
       });
       return;
     }

@@ -9,14 +9,16 @@ const OBSOLETE_SMITHERY_TOKENS_COLLECTION = "smitherytokens";
 const SMITHERY_CONNECTIONS_COLLECTION = "smitheryconnections";
 const AGENT_SESSIONS_COLLECTION = "agentsessions";
 const CONVERSATIONS_COLLECTION = "conversations";
+const CONFIGS_COLLECTION = "configs";
+const MEMORIES_COLLECTION = "memories";
 const AI_MODEL_PRESET_CONFIG_KEY = "ai:model_preset";
-const DEFAULT_AI_MODEL_PRESET = "balanced";
+const PREFIX_CONFIG_KEY = "prefix";
+const SEARCH_PROVIDER_CONFIG_KEY = "search:primary_provider";
 const AWAY_GLOBAL_ENABLED_CONFIG_KEY = "away:global_enabled";
 const AWAY_DELAY_MINUTES_CONFIG_KEY = "away:delay_minutes";
 const AWAY_COOLDOWN_HOURS_CONFIG_KEY = "away:cooldown_hours";
-const DEFAULT_AWAY_GLOBAL_ENABLED = "true";
-const DEFAULT_AWAY_DELAY_MINUTES = "120";
-const DEFAULT_AWAY_COOLDOWN_HOURS = "24";
+const CONTEXT_MEMORY_UNIQUE_INDEX = "key_1_scopeKind_1_scopeId_1";
+const CONTEXT_MEMORY_PINNED_INDEX = "scopeKind_1_scopeId_1_pinned_1";
 
 interface DatabaseMigration {
   id: string;
@@ -40,6 +42,11 @@ interface AgentSessionMigrationDocument {
   assistantReplies?: unknown[];
 }
 
+interface MigrationUpdateStats {
+  matched: number;
+  modified: number;
+}
+
 function getDb() {
   const db = mongoose.connection.db;
   if (!db) {
@@ -58,9 +65,218 @@ async function collectionExists(collectionName: string): Promise<boolean> {
 async function dropCollectionIfExists(
   collectionName: string,
 ): Promise<boolean> {
-  if (!(await collectionExists(collectionName))) return false;
-  await getDb().dropCollection(collectionName);
-  return true;
+  if (await collectionExists(collectionName)) {
+    await getDb().dropCollection(collectionName);
+    return true;
+  }
+
+  return false;
+}
+
+async function dropIndexIfExists(
+  collectionName: string,
+  indexName: string,
+): Promise<boolean> {
+  if (await collectionExists(collectionName)) {
+    const collection = getDb().collection(collectionName);
+    const indexes = await collection.indexes();
+    const indexExists = indexes.some((index) => index.name === indexName);
+    if (indexExists) {
+      await collection.dropIndex(indexName);
+      return true;
+    }
+
+    return false;
+  }
+
+  return false;
+}
+
+function emptyUpdateStats(): MigrationUpdateStats {
+  return { matched: 0, modified: 0 };
+}
+
+function toUpdateStats(result: {
+  matchedCount: number;
+  modifiedCount: number;
+}): MigrationUpdateStats {
+  return {
+    matched: result.matchedCount,
+    modified: result.modifiedCount,
+  };
+}
+
+async function deleteSmitheryConnectionByServerId(
+  serverId: string,
+  label: string,
+): Promise<void> {
+  if (await collectionExists(SMITHERY_CONNECTIONS_COLLECTION)) {
+    const result = await getDb()
+      .collection(SMITHERY_CONNECTIONS_COLLECTION)
+      .deleteMany({ serverId });
+
+    dbLogger.info(
+      {
+        collection: SMITHERY_CONNECTIONS_COLLECTION,
+        deletedCount: result.deletedCount,
+      },
+      `${label} Smithery connection cleanup complete`,
+    );
+    return;
+  }
+
+  dbLogger.info(
+    { collection: SMITHERY_CONNECTIONS_COLLECTION, deletedCount: 0 },
+    `${label} Smithery connection cleanup skipped`,
+  );
+}
+
+async function removeUntrackedConversationMessages(): Promise<MigrationUpdateStats> {
+  if (await collectionExists(CONVERSATIONS_COLLECTION)) {
+    const conversationsCollection =
+      getDb().collection<ConversationMigrationDocument>(
+        CONVERSATIONS_COLLECTION,
+      );
+    const result = await conversationsCollection.updateMany(
+      {},
+      {
+        $pull: {
+          messages: {
+            $or: [
+              { messageId: { $exists: false } },
+              { messageId: null },
+              { messageId: "" },
+              { isBot: true },
+            ],
+          },
+        },
+      },
+    );
+    return toUpdateStats(result);
+  }
+
+  return emptyUpdateStats();
+}
+
+async function initializeConversationMessageEditState(): Promise<MigrationUpdateStats> {
+  if (await collectionExists(CONVERSATIONS_COLLECTION)) {
+    const conversationsCollection =
+      getDb().collection<ConversationMigrationDocument>(
+        CONVERSATIONS_COLLECTION,
+      );
+    const result = await conversationsCollection.updateMany(
+      {},
+      [
+        {
+          $set: {
+            messages: {
+              $map: {
+                input: "$messages",
+                as: "message",
+                in: {
+                  $mergeObjects: [
+                    "$$message",
+                    {
+                      editedAt: { $ifNull: ["$$message.editedAt", null] },
+                      editCount: { $ifNull: ["$$message.editCount", 0] },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      ],
+    );
+    return toUpdateStats(result);
+  }
+
+  return emptyUpdateStats();
+}
+
+async function initializeAgentSessionMessageIdArrays(): Promise<number> {
+  if (await collectionExists(AGENT_SESSIONS_COLLECTION)) {
+    const agentSessionsCollection =
+      getDb().collection<AgentSessionMigrationDocument>(
+        AGENT_SESSIONS_COLLECTION,
+      );
+    const userIdsResult = await agentSessionsCollection.updateMany(
+      { userMessageIds: { $exists: false } },
+      { $set: { userMessageIds: [] } },
+    );
+    const assistantIdsResult = await agentSessionsCollection.updateMany(
+      { assistantMessageIds: { $exists: false } },
+      { $set: { assistantMessageIds: [] } },
+    );
+    return userIdsResult.modifiedCount + assistantIdsResult.modifiedCount;
+  }
+
+  return 0;
+}
+
+async function initializeAgentSessionAssistantReplies(): Promise<number> {
+  if (await collectionExists(AGENT_SESSIONS_COLLECTION)) {
+    const agentSessionsCollection =
+      getDb().collection<AgentSessionMigrationDocument>(
+        AGENT_SESSIONS_COLLECTION,
+      );
+    const result = await agentSessionsCollection.updateMany(
+      { assistantReplies: { $exists: false } },
+      { $set: { assistantReplies: [] } },
+    );
+    return result.modifiedCount;
+  }
+
+  return 0;
+}
+
+function invalidContextUserMemoryConditions() {
+  return [
+    { userId: { $exists: false } },
+    { userId: null },
+    { userId: "" },
+    { scopeKind: { $exists: false } },
+    { scopeKind: { $nin: ["guild", "dm"] } },
+    { scopeId: { $exists: false } },
+    { scopeId: null },
+    { scopeId: "" },
+  ];
+}
+
+async function deleteInvalidContextUserMemories(
+  collection: ReturnType<ReturnType<typeof getDb>["collection"]>,
+) {
+  return collection.deleteMany({
+    scope: "user",
+    $or: invalidContextUserMemoryConditions(),
+  });
+}
+
+async function installContextUserMemoryIndexes(): Promise<{
+  oldContextUniqueIndexDropped: boolean;
+  oldContextPinnedIndexDropped: boolean;
+}> {
+  const oldContextUniqueIndexDropped = await dropIndexIfExists(
+    MEMORIES_COLLECTION,
+    CONTEXT_MEMORY_UNIQUE_INDEX,
+  );
+  const oldContextPinnedIndexDropped = await dropIndexIfExists(
+    MEMORIES_COLLECTION,
+    CONTEXT_MEMORY_PINNED_INDEX,
+  );
+  const collection = getDb().collection(MEMORIES_COLLECTION);
+  await collection.createIndex(
+    { key: 1, scopeKind: 1, scopeId: 1, userId: 1 },
+    { unique: true },
+  );
+  await collection.createIndex({
+    scopeKind: 1,
+    scopeId: 1,
+    userId: 1,
+    pinned: 1,
+  });
+
+  return { oldContextUniqueIndexDropped, oldContextPinnedIndexDropped };
 }
 
 const migrations: DatabaseMigration[] = [
@@ -83,103 +299,26 @@ const migrations: DatabaseMigration[] = [
   {
     id: "2026-06-12-remove-brave-smithery-connection",
     run: async () => {
-      if (!(await collectionExists(SMITHERY_CONNECTIONS_COLLECTION))) {
-        dbLogger.info(
-          { collection: SMITHERY_CONNECTIONS_COLLECTION, deletedCount: 0 },
-          "Brave Smithery connection cleanup skipped",
-        );
-        return;
-      }
-
-      const result = await getDb()
-        .collection(SMITHERY_CONNECTIONS_COLLECTION)
-        .deleteMany({ serverId: "brave" });
-
-      dbLogger.info(
-        {
-          collection: SMITHERY_CONNECTIONS_COLLECTION,
-          deletedCount: result.deletedCount,
-        },
-        "Brave Smithery connection cleanup complete",
-      );
+      await deleteSmitheryConnectionByServerId("brave", "Brave");
     },
   },
   {
     id: "2026-06-12-remove-github-smithery-connection",
     run: async () => {
-      if (!(await collectionExists(SMITHERY_CONNECTIONS_COLLECTION))) {
-        dbLogger.info(
-          { collection: SMITHERY_CONNECTIONS_COLLECTION, deletedCount: 0 },
-          "GitHub Smithery connection cleanup skipped",
-        );
-        return;
-      }
-
-      const result = await getDb()
-        .collection(SMITHERY_CONNECTIONS_COLLECTION)
-        .deleteMany({ serverId: "github" });
-
-      dbLogger.info(
-        {
-          collection: SMITHERY_CONNECTIONS_COLLECTION,
-          deletedCount: result.deletedCount,
-        },
-        "GitHub Smithery connection cleanup complete",
-      );
+      await deleteSmitheryConnectionByServerId("github", "GitHub");
     },
   },
   {
     id: "2026-06-12-normalize-message-sync-state",
     run: async () => {
-      let conversationMatched = 0;
-      let conversationModified = 0;
-      let agentSessionsInitialized = 0;
-
-      if (await collectionExists(CONVERSATIONS_COLLECTION)) {
-        const conversationsCollection =
-          getDb().collection<ConversationMigrationDocument>(
-            CONVERSATIONS_COLLECTION,
-          );
-        const result = await conversationsCollection.updateMany(
-          {},
-          {
-            $pull: {
-              messages: {
-                $or: [
-                  { messageId: { $exists: false } },
-                  { messageId: null },
-                  { messageId: "" },
-                  { isBot: true },
-                ],
-              },
-            },
-          },
-        );
-        conversationMatched = result.matchedCount;
-        conversationModified = result.modifiedCount;
-      }
-
-      if (await collectionExists(AGENT_SESSIONS_COLLECTION)) {
-        const agentSessionsCollection =
-          getDb().collection<AgentSessionMigrationDocument>(
-            AGENT_SESSIONS_COLLECTION,
-          );
-        const userIdsResult = await agentSessionsCollection.updateMany(
-          { userMessageIds: { $exists: false } },
-          { $set: { userMessageIds: [] } },
-        );
-        const assistantIdsResult = await agentSessionsCollection.updateMany(
-          { assistantMessageIds: { $exists: false } },
-          { $set: { assistantMessageIds: [] } },
-        );
-        agentSessionsInitialized =
-          userIdsResult.modifiedCount + assistantIdsResult.modifiedCount;
-      }
+      const conversationStats = await removeUntrackedConversationMessages();
+      const agentSessionsInitialized =
+        await initializeAgentSessionMessageIdArrays();
 
       dbLogger.info(
         {
-          conversationMatched,
-          conversationModified,
+          conversationMatched: conversationStats.matched,
+          conversationModified: conversationStats.modified,
           agentSessionsInitialized,
         },
         "Message sync state normalization complete",
@@ -189,78 +328,23 @@ const migrations: DatabaseMigration[] = [
   {
     id: "2026-06-12-initialize-ai-model-preset",
     run: async () => {
-      const currentPreset = await getConfigValue(AI_MODEL_PRESET_CONFIG_KEY, "");
-      const initialized = currentPreset.length === 0;
-      if (initialized) {
-        await setConfigValue(AI_MODEL_PRESET_CONFIG_KEY, DEFAULT_AI_MODEL_PRESET);
-      }
-
       dbLogger.info(
-        {
-          key: AI_MODEL_PRESET_CONFIG_KEY,
-          initialized,
-          value: initialized ? DEFAULT_AI_MODEL_PRESET : currentPreset,
-        },
-        "AI model preset configuration initialized",
+        { obsoleteKey: AI_MODEL_PRESET_CONFIG_KEY },
+        "Global AI model preset initialization skipped; scoped config uses code defaults",
       );
     },
   },
   {
     id: "2026-06-13-initialize-message-edit-state",
     run: async () => {
-      let conversationMatched = 0;
-      let conversationModified = 0;
-      let agentSessionsInitialized = 0;
-
-      if (await collectionExists(CONVERSATIONS_COLLECTION)) {
-        const conversationsCollection =
-          getDb().collection<ConversationMigrationDocument>(
-            CONVERSATIONS_COLLECTION,
-          );
-        const result = await conversationsCollection.updateMany(
-          {},
-          [
-            {
-              $set: {
-                messages: {
-                  $map: {
-                    input: "$messages",
-                    as: "message",
-                    in: {
-                      $mergeObjects: [
-                        "$$message",
-                        {
-                          editedAt: { $ifNull: ["$$message.editedAt", null] },
-                          editCount: { $ifNull: ["$$message.editCount", 0] },
-                        },
-                      ],
-                    },
-                  },
-                },
-              },
-            },
-          ],
-        );
-        conversationMatched = result.matchedCount;
-        conversationModified = result.modifiedCount;
-      }
-
-      if (await collectionExists(AGENT_SESSIONS_COLLECTION)) {
-        const agentSessionsCollection =
-          getDb().collection<AgentSessionMigrationDocument>(
-            AGENT_SESSIONS_COLLECTION,
-          );
-        const result = await agentSessionsCollection.updateMany(
-          { assistantReplies: { $exists: false } },
-          { $set: { assistantReplies: [] } },
-        );
-        agentSessionsInitialized = result.modifiedCount;
-      }
+      const conversationStats = await initializeConversationMessageEditState();
+      const agentSessionsInitialized =
+        await initializeAgentSessionAssistantReplies();
 
       dbLogger.info(
         {
-          conversationMatched,
-          conversationModified,
+          conversationMatched: conversationStats.matched,
+          conversationModified: conversationStats.modified,
           agentSessionsInitialized,
         },
         "Message edit tracking state initialized",
@@ -270,24 +354,215 @@ const migrations: DatabaseMigration[] = [
   {
     id: "2026-06-13-initialize-away-message-settings",
     run: async () => {
-      const defaults = [
-        [AWAY_GLOBAL_ENABLED_CONFIG_KEY, DEFAULT_AWAY_GLOBAL_ENABLED],
-        [AWAY_DELAY_MINUTES_CONFIG_KEY, DEFAULT_AWAY_DELAY_MINUTES],
-        [AWAY_COOLDOWN_HOURS_CONFIG_KEY, DEFAULT_AWAY_COOLDOWN_HOURS],
-      ] as const;
+      dbLogger.info(
+        {
+          obsoleteKeys: [
+            AWAY_GLOBAL_ENABLED_CONFIG_KEY,
+            AWAY_DELAY_MINUTES_CONFIG_KEY,
+            AWAY_COOLDOWN_HOURS_CONFIG_KEY,
+          ],
+        },
+        "Global away message initialization skipped; scoped config uses code defaults",
+      );
+    },
+  },
+  {
+    id: "2026-06-13-scope-discord-config-settings",
+    run: async () => {
+      if (await collectionExists(CONFIGS_COLLECTION)) {
+        const obsoleteGlobalKeys = [
+          PREFIX_CONFIG_KEY,
+          SEARCH_PROVIDER_CONFIG_KEY,
+          AI_MODEL_PRESET_CONFIG_KEY,
+          AWAY_GLOBAL_ENABLED_CONFIG_KEY,
+          AWAY_DELAY_MINUTES_CONFIG_KEY,
+          AWAY_COOLDOWN_HOURS_CONFIG_KEY,
+        ];
+        const result = await getDb()
+          .collection(CONFIGS_COLLECTION)
+          .deleteMany({
+            $or: [
+              { key: { $in: obsoleteGlobalKeys } },
+              { key: { $regex: /^away:user:/ } },
+            ],
+          });
 
-      const initialized: string[] = [];
-      for (const [key, defaultValue] of defaults) {
-        const currentValue = await getConfigValue(key, "");
-        if (currentValue.length > 0) continue;
-
-        await setConfigValue(key, defaultValue);
-        initialized.push(key);
+        dbLogger.info(
+          {
+            collection: CONFIGS_COLLECTION,
+            deletedCount: result.deletedCount,
+          },
+          "Obsolete global Discord config cleanup complete",
+        );
+        return;
       }
 
       dbLogger.info(
-        { initialized },
-        "Away message configuration initialized",
+        { collection: CONFIGS_COLLECTION, deletedCount: 0 },
+        "Obsolete global Discord config cleanup skipped",
+      );
+    },
+  },
+  {
+    id: "2026-06-13-scope-smithery-connections",
+    run: async () => {
+      if (await collectionExists(SMITHERY_CONNECTIONS_COLLECTION)) {
+        const collection = getDb().collection(SMITHERY_CONNECTIONS_COLLECTION);
+        const deleteResult = await collection.deleteMany({
+          $or: [
+            { scopeKind: { $exists: false } },
+            { scopeId: { $exists: false } },
+            { scopeKind: { $nin: ["guild", "dm"] } },
+            { scopeId: "" },
+          ],
+        });
+        const oldServerIndexDropped = await dropIndexIfExists(
+          SMITHERY_CONNECTIONS_COLLECTION,
+          "serverId_1",
+        );
+        await collection.createIndex(
+          { scopeKind: 1, scopeId: 1, serverId: 1 },
+          { unique: true },
+        );
+        await collection.createIndex({ scopeKind: 1, scopeId: 1, status: 1 });
+
+        dbLogger.info(
+          {
+            collection: SMITHERY_CONNECTIONS_COLLECTION,
+            deletedCount: deleteResult.deletedCount,
+            oldServerIndexDropped,
+          },
+          "Scoped Smithery connection migration complete",
+        );
+        return;
+      }
+
+      dbLogger.info(
+        { collection: SMITHERY_CONNECTIONS_COLLECTION, deletedCount: 0 },
+        "Scoped Smithery connection migration skipped",
+      );
+    },
+  },
+  {
+    id: "2026-06-13-key-user-memories-by-discord-user-id",
+    run: async () => {
+      if (await collectionExists(MEMORIES_COLLECTION)) {
+        const collection = getDb().collection(MEMORIES_COLLECTION);
+        const deleteResult = await collection.deleteMany({
+          scope: "user",
+          $or: [
+            { userId: { $exists: false } },
+            { userId: null },
+            { userId: "" },
+          ],
+        });
+        const oldUniqueIndexDropped = await dropIndexIfExists(
+          MEMORIES_COLLECTION,
+          "key_1_scope_1_username_1",
+        );
+        const oldPinnedIndexDropped = await dropIndexIfExists(
+          MEMORIES_COLLECTION,
+          "scope_1_username_1_pinned_1",
+        );
+        await collection.createIndex(
+          { key: 1, scope: 1, userId: 1 },
+          { unique: true },
+        );
+        await collection.createIndex({ scope: 1, userId: 1, pinned: 1 });
+
+        dbLogger.info(
+          {
+            collection: MEMORIES_COLLECTION,
+            deletedCount: deleteResult.deletedCount,
+            oldUniqueIndexDropped,
+            oldPinnedIndexDropped,
+          },
+          "User memory identity migration complete",
+        );
+        return;
+      }
+
+      dbLogger.info(
+        { collection: MEMORIES_COLLECTION, deletedCount: 0 },
+        "User memory identity migration skipped",
+      );
+    },
+  },
+  {
+    id: "2026-06-13-scope-memories-by-discord-context",
+    run: async () => {
+      if (await collectionExists(MEMORIES_COLLECTION)) {
+        const collection = getDb().collection(MEMORIES_COLLECTION);
+        const nonUserDeleteResult = await collection.deleteMany({
+          scope: { $ne: "user" },
+        });
+        const invalidDeleteResult =
+          await deleteInvalidContextUserMemories(collection);
+        const oldScopeUserUniqueIndexDropped = await dropIndexIfExists(
+          MEMORIES_COLLECTION,
+          "key_1_scope_1_userId_1",
+        );
+        const oldScopeUserPinnedIndexDropped = await dropIndexIfExists(
+          MEMORIES_COLLECTION,
+          "scope_1_userId_1_pinned_1",
+        );
+        const {
+          oldContextUniqueIndexDropped,
+          oldContextPinnedIndexDropped,
+        } = await installContextUserMemoryIndexes();
+
+        dbLogger.info(
+          {
+            collection: MEMORIES_COLLECTION,
+            deletedNonUserCount: nonUserDeleteResult.deletedCount,
+            deletedInvalidCount: invalidDeleteResult.deletedCount,
+            oldScopeUserUniqueIndexDropped,
+            oldScopeUserPinnedIndexDropped,
+            oldContextUniqueIndexDropped,
+            oldContextPinnedIndexDropped,
+          },
+          "Scoped memory migration complete",
+        );
+        return;
+      }
+
+      dbLogger.info(
+        { collection: MEMORIES_COLLECTION, deletedCount: 0 },
+        "Scoped memory migration skipped",
+      );
+    },
+  },
+  {
+    id: "2026-06-13-enforce-context-user-memory-scope",
+    run: async () => {
+      if (await collectionExists(MEMORIES_COLLECTION)) {
+        const collection = getDb().collection(MEMORIES_COLLECTION);
+        const deleteNonUserResult = await collection.deleteMany({
+          scope: { $ne: "user" },
+        });
+        const deleteInvalidResult =
+          await deleteInvalidContextUserMemories(collection);
+        const {
+          oldContextUniqueIndexDropped,
+          oldContextPinnedIndexDropped,
+        } = await installContextUserMemoryIndexes();
+
+        dbLogger.info(
+          {
+            collection: MEMORIES_COLLECTION,
+            deletedNonUserCount: deleteNonUserResult.deletedCount,
+            deletedInvalidCount: deleteInvalidResult.deletedCount,
+            oldContextUniqueIndexDropped,
+            oldContextPinnedIndexDropped,
+          },
+          "Context user memory enforcement complete",
+        );
+        return;
+      }
+
+      dbLogger.info(
+        { collection: MEMORIES_COLLECTION, deletedCount: 0 },
+        "Context user memory enforcement skipped",
       );
     },
   },

@@ -1,5 +1,6 @@
 import {
   getAllSmitheryConnections,
+  type SmitheryConnectionScope,
   type SmitheryServerId,
 } from "../db/models";
 import { mcpLogger } from "../logger";
@@ -15,7 +16,7 @@ function getConnectionName(serverId: SmitheryServerId): string {
   return SMITHERY_SERVERS[serverId]?.name ?? serverId;
 }
 
-export class MCPRegistry {
+class MCPRegistry {
   getServerForTool(toolName: string): string | undefined {
     const [connectionId] = toolName.split(".");
     if (connectionId && connectionId in SMITHERY_SERVERS) {
@@ -46,12 +47,15 @@ export class MCPRegistry {
 
     for (const connection of connections) {
       const serverName = getConnectionName(connection.serverId);
+      const scope = { kind: connection.scopeKind, id: connection.scopeId };
       const tools =
         connection.status === "connected"
-          ? await this.getConnectionToolNames(connection.serverId)
+          ? await this.getConnectionToolNames(scope, connection.serverId)
           : [];
       mcpLogger.info(
         {
+          scopeKind: connection.scopeKind,
+          scopeId: connection.scopeId,
           serverId: connection.serverId,
           connectionId: connection.connectionId,
           status: connection.status,
@@ -76,14 +80,17 @@ export class MCPRegistry {
   }
 
   private async getConnectionToolNames(
+    scope: SmitheryConnectionScope,
     serverId: SmitheryServerId,
   ): Promise<string[]> {
     try {
-      const tools = await listSmitheryConnectionTools(serverId);
+      const tools = await listSmitheryConnectionTools(scope, serverId);
       return tools.map((tool) => tool.name);
     } catch (error) {
       mcpLogger.warn(
         {
+          scopeKind: scope.kind,
+          scopeId: scope.id,
           serverId,
           error: error instanceof Error ? error.message : String(error),
         },

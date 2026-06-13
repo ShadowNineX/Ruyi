@@ -7,12 +7,14 @@ import {
   type StreamEventTextStream,
   type RunToolApprovalItem,
   type Tool,
+  type ModelSettings,
 } from "@openai/agents";
 import {
   isOpenAIChatCompletionsRawModelStreamEvent,
   isOpenAIResponsesRawModelStreamEvent,
 } from "@openai/agents-openai";
-import type { GuildTextBasedChannel } from "discord.js";
+import type { TextBasedChannel } from "discord.js";
+import type { ConfigScope } from "../config";
 import { z } from "zod";
 import { allTools, externalToolNames } from "../tools";
 import { aiLogger } from "../logger";
@@ -40,11 +42,12 @@ const ToolCallSchema = z.looseObject({
   arguments: z.unknown().optional(),
 });
 
-export interface ChatOptions {
+interface ChatOptions {
   userMessage: string;
   username: string;
   channelId: string;
-  channel: GuildTextBasedChannel;
+  channel: TextBasedChannel;
+  configScope?: ConfigScope | null;
   userId: string;
   session: ChatSession;
   chatHistory?: ChatMessage[];
@@ -119,7 +122,9 @@ function isCoreRawTextDeltaEvent(event: RunStreamEvent): boolean {
 }
 
 function isCoreRawTextDoneEvent(event: RunStreamEvent): boolean {
-  return event.type === "raw_model_stream_event" && isCoreTextDoneEvent(event.data);
+  return (
+    event.type === "raw_model_stream_event" && isCoreTextDoneEvent(event.data)
+  );
 }
 
 function isResponseTextDeltaEvent(event: RunStreamEvent): boolean {
@@ -180,10 +185,7 @@ function isMessageOutputCreatedEvent(event: RunStreamEvent): boolean {
   );
 }
 
-function formatToolDisplayName(
-  toolName: string,
-  isLocal: boolean,
-): string {
+function formatToolDisplayName(toolName: string, isLocal: boolean): string {
   if (isLocal) return toolName;
   return `mcp:${toolName}`;
 }
@@ -272,13 +274,14 @@ function createTurnToolUsage(): TurnToolUsage {
   };
 }
 
-export class ChatService {
+class ChatService {
   async chat(options: ChatOptions): Promise<string | null> {
     const {
       userMessage,
       username,
       channelId,
       channel,
+      configScope = null,
       userId,
       session,
       chatHistory = [],
@@ -289,11 +292,13 @@ export class ChatService {
       persistUserMessage = true,
     } = options;
 
-    permissionManager.setContext(channelId, {
-      channel,
-      turnId: messageId,
-      userId,
-    });
+    if (channel.isSendable()) {
+      permissionManager.setContext(channelId, {
+        channel,
+        turnId: messageId,
+        userId,
+      });
+    }
 
     const abortController = new AbortController();
     const abortFromParent = (): void => {
@@ -319,8 +324,10 @@ export class ChatService {
 
       const dynamicContext = await conversationContext.buildDynamicContext(
         username,
+        userId,
         channelId,
         chatHistory,
+        configScope,
       );
       throwIfAborted(signal);
 
@@ -363,13 +370,13 @@ export class ChatService {
 
         const { shouldExtract } = conversationContext.trackUserMessage(
           channelId,
-          username,
+          userId,
         );
         if (shouldExtract) {
-          void autoExtractFacts(username, channelId)
+          void autoExtractFacts(username, userId, channelId, configScope)
             .then((completed) => {
               if (completed) {
-                conversationContext.markExtracted(channelId, username);
+                conversationContext.markExtracted(channelId, userId);
               }
             })
             .catch((error: unknown) =>
@@ -381,15 +388,19 @@ export class ChatService {
         }
       }
 
+      const model = agentsRuntimeManager.getModel(configScope);
+      const modelSettings = agentsRuntimeManager.getModelSettings(configScope);
       const agentSession = await sessionManager.getOrCreate(
         channelId,
         messageId,
+        model,
+        modelSettings,
       );
       throwIfAborted(signal);
 
       const agentSessionId = await agentSession.getSessionId();
       const toolUsage = createTurnToolUsage();
-      const agent = this.createAgent(session, toolUsage);
+      const agent = this.createAgent(session, toolUsage, model, modelSettings);
       const runner = agentsRuntimeManager.getRunner();
       const runOptions = {
         stream: true,
@@ -485,12 +496,14 @@ export class ChatService {
   private createAgent(
     session: ChatSession,
     toolUsage: TurnToolUsage,
+    model: string,
+    modelSettings: ModelSettings,
   ) {
     const agent = new Agent({
       name: "Ruyi",
       instructions: systemPrompt,
-      model: agentsRuntimeManager.model,
-      modelSettings: agentsRuntimeManager.modelSettings,
+      model,
+      modelSettings,
       tools: [...allTools],
       toolUseBehavior: "run_llm_again",
     });
@@ -520,10 +533,7 @@ export class ChatService {
     if (stream.error) throw stream.error;
   }
 
-  private handleStreamEvent(
-    event: RunStreamEvent,
-    session: ChatSession,
-  ): void {
+  private handleStreamEvent(event: RunStreamEvent, session: ChatSession): void {
     if (isTextDeltaEvent(event)) {
       session.onTextGenerationStart();
     } else if (isTextDoneEvent(event)) {

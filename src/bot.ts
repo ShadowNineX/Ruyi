@@ -3,13 +3,12 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  Partials,
   REST,
   Routes,
   type Interaction,
   type Message,
   type PartialMessage,
-  type GuildTextBasedChannel,
-  type TextChannel,
 } from "discord.js";
 import {
   chatService,
@@ -21,6 +20,7 @@ import {
 } from "./ai";
 import { runWithToolContext, type ToolContext } from "./utils/types";
 import { env } from "./env";
+import { userConfigScope } from "./config";
 import { selfRespondingToolNames } from "./tools";
 import { botLogger } from "./logger";
 import { handleCommands } from "./commands";
@@ -35,10 +35,7 @@ import {
   handleModelSelect,
   isModelSelect,
 } from "./slash-commands";
-import {
-  ChatSession,
-  type SessionStatusSnapshot,
-} from "./utils/chat-session";
+import { ChatSession, type SessionStatusSnapshot } from "./utils/chat-session";
 import {
   fetchReplyChain,
   fetchChatHistory,
@@ -51,11 +48,15 @@ import {
 } from "./utils/messages";
 import {
   buildDiscordProfile,
+  buildDiscordUserProfile,
   formatProfileContext,
 } from "./utils/discord-profile";
 import { messageSyncService } from "./services/message-sync";
 import { awayMessageService } from "./services/away-messages";
-import { CHAT_TURN_TIMEOUT_MS, DISCORD_OPERATION_TIMEOUT_MS } from "./constants";
+import {
+  CHAT_TURN_TIMEOUT_MS,
+  DISCORD_OPERATION_TIMEOUT_MS,
+} from "./constants";
 
 interface ResponseGate {
   isMentioned: boolean;
@@ -74,7 +75,7 @@ const EDIT_REGENERATION_PREFIX =
 const SIDE_EFFECT_EDIT_NOTICE =
   "I noticed this request was edited after I had already answered. I have updated my context, but I will not repeat tool or external actions automatically from an edit. Please send a new message if you want me to redo the action.";
 
-export class RuyiBot {
+class RuyiBot {
   private activePresenceSession: symbol | null = null;
   private readonly activeChatTurns = new Map<string, AbortController>();
   private presenceResetTimer: {
@@ -86,9 +87,11 @@ export class RuyiBot {
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.DirectMessages,
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.GuildMembers,
     ],
+    partials: [Partials.Channel],
   });
 
   // ---- Presence helpers ----------------------------------------------------
@@ -181,7 +184,8 @@ export class RuyiBot {
   ): void {
     this.clearPresenceResetTimer();
 
-    const timeoutMs = CHAT_TURN_TIMEOUT_MS + DISCORD_OPERATION_TIMEOUT_MS + 5000;
+    const timeoutMs =
+      CHAT_TURN_TIMEOUT_MS + DISCORD_OPERATION_TIMEOUT_MS + 5000;
     const timer = setTimeout(() => {
       if (this.activePresenceSession !== presenceSession) return;
 
@@ -230,6 +234,7 @@ export class RuyiBot {
         classifierMessage,
         this.client.user?.username ?? "Bot",
         message.channel.id,
+        userConfigScope(message.guild?.id ?? null, message.author.id),
       );
       botLogger.debug(
         {
@@ -259,14 +264,9 @@ export class RuyiBot {
     message: Message,
     referencedMessage: Message | null,
   ): ToolContext {
-    const channel: TextChannel | null =
-      "name" in message.channel && "messages" in message.channel
-        ? (message.channel as TextChannel)
-        : null;
-
     return {
       message,
-      channel,
+      channel: message.channel,
       guild: message.guild,
       referencedMessage,
     };
@@ -339,7 +339,7 @@ export class RuyiBot {
     this.throwIfAborted(signal);
 
     const username = message.author.username;
-    const guildChannel = message.channel as GuildTextBasedChannel;
+    const textChannel = message.channel;
 
     const [replyChain, chatHistory] = await Promise.all([
       fetchReplyChain(message, toolCtx.referencedMessage),
@@ -377,7 +377,11 @@ export class RuyiBot {
         userMessage,
         username,
         channelId: message.channel.id,
-        channel: guildChannel,
+        channel: textChannel,
+        configScope: userConfigScope(
+          message.guild?.id ?? null,
+          message.author.id,
+        ),
         userId: message.author.id,
         session,
         chatHistory: combinedHistory,
@@ -390,10 +394,15 @@ export class RuyiBot {
     );
   }
 
-  private async buildCurrentUserProfileContext(message: Message): Promise<string> {
-    if (!message.guild) return "";
-
+  private async buildCurrentUserProfileContext(
+    message: Message,
+  ): Promise<string> {
     try {
+      if (!message.guild) {
+        const profile = await buildDiscordUserProfile(message.author);
+        return formatProfileContext(profile);
+      }
+
       const member = await message.guild.members.fetch(message.author.id);
       const profile = await buildDiscordProfile(member);
       return formatProfileContext(profile);
@@ -420,7 +429,9 @@ export class RuyiBot {
   }
 
   private createChatTurnSupersededError(): Error {
-    const error = new Error("Chat turn was superseded by a newer direct request");
+    const error = new Error(
+      "Chat turn was superseded by a newer direct request",
+    );
     error.name = "ChatTurnSupersededError";
     return error;
   }
@@ -726,13 +737,15 @@ export class RuyiBot {
         message.channel.id,
         message.id,
       );
-    const sessionInvalidated = await sessionManager.invalidateIfUserMessageEdited(
-      message.channel.id,
-      message.id,
-    );
+    const sessionInvalidated =
+      await sessionManager.invalidateIfUserMessageEdited(
+        message.channel.id,
+        message.id,
+      );
     const assessment = await editClassifier.classifyEdit(
       update.oldContent,
       update.newContent,
+      userConfigScope(message.guild?.id ?? null, message.author.id),
     );
 
     botLogger.info(
@@ -877,7 +890,9 @@ export class RuyiBot {
     }
   }
 
-  private readonly dispatchMessage = async (message: Message): Promise<void> => {
+  private readonly dispatchMessage = async (
+    message: Message,
+  ): Promise<void> => {
     try {
       if (message.author.bot) return;
       awayMessageService.recordUserActivity(message);

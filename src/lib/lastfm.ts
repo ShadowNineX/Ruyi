@@ -195,7 +195,7 @@ function getArtistName(artist: unknown): string {
   return "Unknown Artist";
 }
 
-export class LastFMClient {
+class LastFMClient {
   private readonly apiBase = "https://ws.audioscrobbler.com/2.0";
 
   private getApiKey(): string {

@@ -7,6 +7,12 @@ import {
 import { Memory } from "../db/models";
 import { botLogger } from "../logger";
 import { MEMORY_VALUE_MAX_LEN, USER_MEMORY_CAP } from "../constants";
+import { type ConfigScope, formatConfigScope, userConfigScope } from "../config";
+import { buildUserMemoryFilter } from "../utils/memory-scope";
+import {
+  MEMORY_KEY_MAX_LEN,
+  sanitizeMemoryKey,
+} from "../utils/memory-normalization";
 
 const MEMORY_COLORS = {
   success: 0x2ecc71,
@@ -14,6 +20,9 @@ const MEMORY_COLORS = {
   warning: 0xffaa00,
   error: 0xcc3333,
 } as const;
+
+const INVALID_MEMORY_KEY_MESSAGE =
+  "Key must contain at least one alphanumeric character.";
 
 export const memoriesCommand = new SlashCommandBuilder()
   .setName("memories")
@@ -27,7 +36,7 @@ export const memoriesCommand = new SlashCommandBuilder()
           .setName("key")
           .setDescription("Short identifier (e.g. 'favorite_color')")
           .setRequired(true)
-          .setMaxLength(64),
+          .setMaxLength(MEMORY_KEY_MAX_LEN),
       )
       .addStringOption((opt) =>
         opt
@@ -82,25 +91,6 @@ export const memoriesCommand = new SlashCommandBuilder()
       ),
   );
 
-function sanitizeKey(key: string): string {
-  const normalized = key
-    .toLowerCase()
-    .trim()
-    .replaceAll(/[^a-z0-9_]+/g, "_");
-
-  return trimEdgeUnderscores(normalized).slice(0, 64);
-}
-
-function trimEdgeUnderscores(value: string): string {
-  let start = 0;
-  let end = value.length;
-
-  while (start < end && value[start] === "_") start += 1;
-  while (end > start && value[end - 1] === "_") end -= 1;
-
-  return value.slice(start, end);
-}
-
 function buildMemoryEmbed(
   title: string,
   description: string,
@@ -125,41 +115,50 @@ async function replyWithMemoryEmbed(
   });
 }
 
+async function getMemoryKeyOrReply(
+  interaction: ChatInputCommandInteraction,
+  errorTitle: string,
+): Promise<string | null> {
+  const key = sanitizeMemoryKey(interaction.options.getString("key", true));
+  if (key) return key;
+
+  await replyWithMemoryEmbed(
+    interaction,
+    errorTitle,
+    INVALID_MEMORY_KEY_MESSAGE,
+    MEMORY_COLORS.error,
+  );
+  return null;
+}
+
 async function handleRemember(
   interaction: ChatInputCommandInteraction,
+  userId: string,
   username: string,
+  scope: ConfigScope,
 ): Promise<void> {
-  const rawKey = interaction.options.getString("key", true);
+  const key = await getMemoryKeyOrReply(interaction, "Memory Not Saved");
+  if (!key) return;
+
   const value = interaction.options.getString("value", true);
   const pinned = interaction.options.getBoolean("pin") ?? false;
 
-  const key = sanitizeKey(rawKey);
-  if (!key) {
-    await replyWithMemoryEmbed(
-      interaction,
-      "Memory Not Saved",
-      "Key must contain at least one alphanumeric character.",
-      MEMORY_COLORS.error,
-    );
-    return;
-  }
-
-  const count = await Memory.countDocuments({ scope: "user", username });
+  const userFilter = buildUserMemoryFilter(userId, scope);
+  const count = await Memory.countDocuments(userFilter);
   if (count >= USER_MEMORY_CAP) {
     const oldest = await Memory.findOne({
-      scope: "user",
-      username,
+      ...userFilter,
       pinned: false,
     }).sort({ updatedAt: 1 });
     if (oldest) await oldest.deleteOne();
   }
 
   await Memory.updateOne(
-    { key, scope: "user", username },
+    { key, ...userFilter },
     {
+      ...userFilter,
       key,
       value,
-      scope: "user",
       username,
       createdBy: username,
       source: "user",
@@ -171,27 +170,24 @@ async function handleRemember(
   await replyWithMemoryEmbed(
     interaction,
     pinned ? "Memory Saved And Pinned" : "Memory Saved",
-    `\`${key}\`\n${value}`,
+    `\`${key}\`\n${value}\n\nStored for you in ${formatConfigScope(scope)}.`,
     pinned ? MEMORY_COLORS.success : MEMORY_COLORS.neutral,
   );
 }
 
 async function handleForget(
   interaction: ChatInputCommandInteraction,
+  userId: string,
   username: string,
+  scope: ConfigScope,
 ): Promise<void> {
-  const key = sanitizeKey(interaction.options.getString("key", true));
-  if (!key) {
-    await replyWithMemoryEmbed(
-      interaction,
-      "Memory Not Found",
-      "Key must contain at least one alphanumeric character.",
-      MEMORY_COLORS.error,
-    );
-    return;
-  }
+  const key = await getMemoryKeyOrReply(interaction, "Memory Not Found");
+  if (!key) return;
 
-  const result = await Memory.deleteOne({ key, scope: "user", username });
+  const result = await Memory.deleteOne({
+    key,
+    ...buildUserMemoryFilter(userId, scope),
+  });
   await replyWithMemoryEmbed(
     interaction,
     result.deletedCount > 0 ? "Memory Forgotten" : "Memory Not Found",
@@ -204,9 +200,11 @@ async function handleForget(
 
 async function handleList(
   interaction: ChatInputCommandInteraction,
+  userId: string,
   username: string,
+  scope: ConfigScope,
 ): Promise<void> {
-  const memories = await Memory.find({ scope: "user", username }).sort({
+  const memories = await Memory.find(buildUserMemoryFilter(userId, scope)).sort({
     pinned: -1,
     updatedAt: -1,
   });
@@ -215,7 +213,7 @@ async function handleList(
     await replyWithMemoryEmbed(
       interaction,
       "No Memories Yet",
-      "I don't remember anything about you yet.",
+      `I don't remember anything about you in ${formatConfigScope(scope)} yet.`,
       MEMORY_COLORS.neutral,
     );
     return;
@@ -246,22 +244,16 @@ async function handleList(
 
 async function handlePinToggle(
   interaction: ChatInputCommandInteraction,
+  userId: string,
   username: string,
+  scope: ConfigScope,
   pinned: boolean,
 ): Promise<void> {
-  const key = sanitizeKey(interaction.options.getString("key", true));
-  if (!key) {
-    await replyWithMemoryEmbed(
-      interaction,
-      "Memory Not Found",
-      "Key must contain at least one alphanumeric character.",
-      MEMORY_COLORS.error,
-    );
-    return;
-  }
+  const key = await getMemoryKeyOrReply(interaction, "Memory Not Found");
+  if (!key) return;
 
   const result = await Memory.updateOne(
-    { key, scope: "user", username },
+    { key, ...buildUserMemoryFilter(userId, scope) },
     { $set: { pinned } },
   );
   const verb = pinned ? "Pinned" : "Unpinned";
@@ -278,7 +270,9 @@ async function handlePinToggle(
 export async function handleMemoriesCommand(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
+  const userId = interaction.user.id;
   const username = interaction.user.username;
+  const scope = userConfigScope(interaction.guildId, userId);
   const sub = interaction.options.getSubcommand();
 
   botLogger.info({ user: username, sub }, "/memories invoked");
@@ -286,19 +280,19 @@ export async function handleMemoriesCommand(
   try {
     switch (sub) {
       case "remember":
-        await handleRemember(interaction, username);
+        await handleRemember(interaction, userId, username, scope);
         break;
       case "forget":
-        await handleForget(interaction, username);
+        await handleForget(interaction, userId, username, scope);
         break;
       case "list":
-        await handleList(interaction, username);
+        await handleList(interaction, userId, username, scope);
         break;
       case "pin":
-        await handlePinToggle(interaction, username, true);
+        await handlePinToggle(interaction, userId, username, scope, true);
         break;
       case "unpin":
-        await handlePinToggle(interaction, username, false);
+        await handlePinToggle(interaction, userId, username, scope, false);
         break;
     }
   } catch (error) {

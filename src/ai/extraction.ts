@@ -1,13 +1,18 @@
 import { Agent } from "@openai/agents";
 import { z } from "zod";
+import type { ConfigScope } from "../config";
 import { aiLogger } from "../logger";
 import { Memory } from "../db/models";
 import type { IMemory } from "../db/models/memory";
+import { buildUserMemoryFilter } from "../utils/memory-scope";
+import {
+  sanitizeMemoryKey,
+  truncateMemoryValue,
+} from "../utils/memory-normalization";
 import {
   AUTO_EXTRACT_HISTORY_WINDOW,
   AUTO_EXTRACT_MAX_FACTS,
   AUTO_EXTRACT_TIMEOUT_MS,
-  MEMORY_VALUE_MAX_LEN,
   USER_MEMORY_CAP,
 } from "../constants";
 import { conversationContext } from "./context";
@@ -58,29 +63,6 @@ RULES:
 
 Example output shape: {"memories":[{"action":"create","key":"favorite_color","value":"deep blue","existing_key":null},{"action":"update","key":"occupation","value":"frontend engineer at a startup","existing_key":"job"}]}`;
 
-function trimEdgeUnderscores(value: string): string {
-  let start = 0;
-  let end = value.length;
-
-  while (start < end && value[start] === "_") start += 1;
-  while (end > start && value[end - 1] === "_") end -= 1;
-
-  return value.slice(start, end);
-}
-
-function sanitizeKey(key: string): string {
-  const normalized = key
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9_]+/g, "_");
-
-  return trimEdgeUnderscores(normalized).slice(0, 64);
-}
-
-function truncateValue(value: string): string {
-  if (value.length <= MEMORY_VALUE_MAX_LEN) return value;
-  return value.slice(0, MEMORY_VALUE_MAX_LEN - 3) + "...";
-}
-
 function normalizeComparable(value: string): string {
   return value
     .toLowerCase()
@@ -120,14 +102,15 @@ function formatExistingMemories(memories: ExistingMemorySummary[]): string {
 }
 
 async function evictOldestWritableMemory(
-  username: string,
+  userId: string,
+  scope: ConfigScope,
 ): Promise<boolean> {
-  const count = await Memory.countDocuments({ scope: "user", username });
+  const filter = buildUserMemoryFilter(userId, scope);
+  const count = await Memory.countDocuments(filter);
   if (count < USER_MEMORY_CAP) return true;
 
   const oldest = await Memory.findOne({
-    scope: "user",
-    username,
+    ...filter,
     pinned: false,
   }).sort({ updatedAt: 1 });
   if (!oldest) return false;
@@ -137,42 +120,46 @@ async function evictOldestWritableMemory(
 }
 
 async function findRelatedMemory(
-  username: string,
+  userId: string,
+  scope: ConfigScope,
   key: string,
   value: string,
 ): Promise<IMemory | null> {
-  const memories = await Memory.find({ scope: "user", username })
+  const memories = await Memory.find(buildUserMemoryFilter(userId, scope))
     .sort({ pinned: -1, updatedAt: -1 })
     .limit(80);
 
   return (
     memories.find(
       (memory) =>
-        sanitizeKey(memory.key) === key ||
+        sanitizeMemoryKey(memory.key) === key ||
         valuesLookDuplicate(memory.value, value),
     ) ?? null
   );
 }
 
 async function findOperationTarget(
-  username: string,
+  userId: string,
+  scope: ConfigScope,
   key: string,
   existingKey: string | null,
   value: string,
 ): Promise<IMemory | null> {
   if (existingKey) {
     const existing = await Memory.findOne({
-      scope: "user",
-      username,
+      ...buildUserMemoryFilter(userId, scope),
       key: existingKey,
     });
     if (existing) return existing;
   }
 
-  const exact = await Memory.findOne({ scope: "user", username, key });
+  const exact = await Memory.findOne({
+    ...buildUserMemoryFilter(userId, scope),
+    key,
+  });
   if (exact) return exact;
 
-  return findRelatedMemory(username, key, value);
+  return findRelatedMemory(userId, scope, key, value);
 }
 
 async function renameMemoryIfNeeded(
@@ -183,7 +170,8 @@ async function renameMemoryIfNeeded(
 
   const conflicting = await Memory.findOne({
     scope: memory.scope,
-    username: memory.username,
+    scopeKind: memory.scopeKind,
+    scopeId: memory.scopeId,
     key: nextKey,
   });
   if (!conflicting) {
@@ -200,17 +188,25 @@ async function renameMemoryIfNeeded(
 
 async function applyMemoryOperation(
   username: string,
+  userId: string,
+  scope: ConfigScope,
   operation: ExtractedMemoryOperation,
 ): Promise<MemoryOperationOutcome> {
-  const key = sanitizeKey(operation.key);
+  const key = sanitizeMemoryKey(operation.key);
   if (!key) return "skipped";
-  const value = truncateValue(operation.value.trim());
+  const value = truncateMemoryValue(operation.value.trim());
   if (!value) return "skipped";
   const existingKey = operation.existing_key
-    ? sanitizeKey(operation.existing_key)
+    ? sanitizeMemoryKey(operation.existing_key)
     : null;
 
-  const target = await findOperationTarget(username, key, existingKey, value);
+  const target = await findOperationTarget(
+    userId,
+    scope,
+    key,
+    existingKey,
+    value,
+  );
   if (target?.pinned) return "skipped";
 
   if (target) {
@@ -226,12 +222,12 @@ async function applyMemoryOperation(
   }
 
   if (operation.action === "update") return "skipped";
-  if (!(await evictOldestWritableMemory(username))) return "skipped";
+  if (!(await evictOldestWritableMemory(userId, scope))) return "skipped";
 
   await Memory.create({
+    ...buildUserMemoryFilter(userId, scope),
     key,
     value,
-    scope: "user",
     username,
     createdBy: username,
     source: "auto",
@@ -241,10 +237,11 @@ async function applyMemoryOperation(
 }
 
 async function fetchExistingMemories(
-  username: string,
+  userId: string,
+  scope: ConfigScope,
 ): Promise<ExistingMemorySummary[]> {
   const memories = await Memory.find(
-    { scope: "user", username },
+    buildUserMemoryFilter(userId, scope),
     { key: 1, value: 1, pinned: 1, source: 1, _id: 0 },
   )
     .sort({ pinned: -1, updatedAt: -1 })
@@ -265,8 +262,18 @@ async function fetchExistingMemories(
  */
 export async function autoExtractFacts(
   username: string,
+  userId: string,
   channelId: string,
+  configScope: ConfigScope | null,
 ): Promise<boolean> {
+  if (!configScope) {
+    aiLogger.debug(
+      { username, channelId },
+      "Skip extraction: Discord config scope unavailable",
+    );
+    return false;
+  }
+
   const history = await conversationContext.getMemoryContext(
     channelId,
     AUTO_EXTRACT_HISTORY_WINDOW,
@@ -279,7 +286,7 @@ export async function autoExtractFacts(
     return false;
   }
 
-  const existing = await fetchExistingMemories(username);
+  const existing = await fetchExistingMemories(userId, configScope);
   const existingBlock =
     existing.length > 0
       ? `\nExisting memories about ${username}:\n${formatExistingMemories(existing)}`
@@ -302,8 +309,8 @@ Extract durable facts about ${username}. Return create/update memory operations,
     const agent = new Agent({
       name: "Ruyi memory extractor",
       instructions: EXTRACTION_SYSTEM_PROMPT,
-      model: agentsRuntimeManager.model,
-      modelSettings: agentsRuntimeManager.modelSettings,
+      model: agentsRuntimeManager.getModel(configScope),
+      modelSettings: agentsRuntimeManager.getModelSettings(configScope),
       outputType: ExtractionOutputSchema,
     });
 
@@ -322,7 +329,12 @@ Extract durable facts about ${username}. Return create/update memory operations,
 
     for (const operation of operations) {
       try {
-        const outcome = await applyMemoryOperation(username, operation);
+        const outcome = await applyMemoryOperation(
+          username,
+          userId,
+          configScope,
+          operation,
+        );
         outcomes[outcome] += 1;
       } catch (error) {
         aiLogger.warn(

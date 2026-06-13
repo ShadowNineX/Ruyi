@@ -2,6 +2,12 @@ import mongoose, { Schema, type Document } from "mongoose";
 
 /** Supported Smithery server IDs. */
 export type SmitheryServerId = "youtube";
+export type SmitheryConnectionScopeKind = "guild" | "dm";
+
+export interface SmitheryConnectionScope {
+  kind: SmitheryConnectionScopeKind;
+  id: string;
+}
 
 export type SmitheryConnectionStatus =
   | "connected"
@@ -12,6 +18,8 @@ export type SmitheryConnectionStatus =
   | "unknown";
 
 export interface ISmitheryConnection extends Document {
+  scopeKind: SmitheryConnectionScopeKind;
+  scopeId: string;
   serverId: SmitheryServerId;
   connectionId: string;
   status: SmitheryConnectionStatus;
@@ -23,7 +31,9 @@ export interface ISmitheryConnection extends Document {
 
 const SmitheryConnectionSchema = new Schema<ISmitheryConnection>(
   {
-    serverId: { type: String, required: true, unique: true },
+    scopeKind: { type: String, enum: ["guild", "dm"], required: true },
+    scopeId: { type: String, required: true },
+    serverId: { type: String, required: true },
     connectionId: { type: String, required: true, unique: true },
     status: { type: String, required: true, default: "unknown" },
     setupUrl: { type: String },
@@ -32,21 +42,32 @@ const SmitheryConnectionSchema = new Schema<ISmitheryConnection>(
   { timestamps: true },
 );
 
-export const SmitheryConnection = mongoose.model<ISmitheryConnection>(
+SmitheryConnectionSchema.index(
+  { scopeKind: 1, scopeId: 1, serverId: 1 },
+  { unique: true },
+);
+SmitheryConnectionSchema.index({ scopeKind: 1, scopeId: 1, status: 1 });
+
+const SmitheryConnection = mongoose.model<ISmitheryConnection>(
   "SmitheryConnection",
   SmitheryConnectionSchema,
 );
 
-export async function getSmitheryConnection(
-  serverId: SmitheryServerId,
-): Promise<ISmitheryConnection | null> {
-  return SmitheryConnection.findOne({ serverId });
+function scopeFilter(scope: SmitheryConnectionScope) {
+  return { scopeKind: scope.kind, scopeId: scope.id };
 }
 
-export async function getAllSmitheryConnections(): Promise<
-  ISmitheryConnection[]
-> {
-  return SmitheryConnection.find();
+export async function getSmitheryConnection(
+  scope: SmitheryConnectionScope,
+  serverId: SmitheryServerId,
+): Promise<ISmitheryConnection | null> {
+  return SmitheryConnection.findOne({ ...scopeFilter(scope), serverId });
+}
+
+export async function getAllSmitheryConnections(
+  scope?: SmitheryConnectionScope,
+): Promise<ISmitheryConnection[]> {
+  return SmitheryConnection.find(scope ? scopeFilter(scope) : {});
 }
 
 export async function countConnectedSmitheryConnections(): Promise<number> {
@@ -54,6 +75,7 @@ export async function countConnectedSmitheryConnections(): Promise<number> {
 }
 
 export async function saveSmitheryConnection(input: {
+  scope: SmitheryConnectionScope;
   serverId: SmitheryServerId;
   connectionId: string;
   status: SmitheryConnectionStatus;
@@ -61,6 +83,8 @@ export async function saveSmitheryConnection(input: {
   errorMessage?: string;
 }): Promise<ISmitheryConnection> {
   const setFields: Partial<ISmitheryConnection> = {
+    scopeKind: input.scope.kind,
+    scopeId: input.scope.id,
     serverId: input.serverId,
     connectionId: input.connectionId,
     status: input.status,
@@ -80,7 +104,7 @@ export async function saveSmitheryConnection(input: {
   }
 
   return SmitheryConnection.findOneAndUpdate(
-    { serverId: input.serverId },
+    { ...scopeFilter(input.scope), serverId: input.serverId },
     {
       $set: setFields,
       $unset: unsetFields,
@@ -90,12 +114,13 @@ export async function saveSmitheryConnection(input: {
 }
 
 export async function clearSmitheryConnection(
+  scope: SmitheryConnectionScope,
   serverId?: SmitheryServerId,
 ): Promise<void> {
   if (serverId) {
-    await SmitheryConnection.deleteOne({ serverId });
+    await SmitheryConnection.deleteOne({ ...scopeFilter(scope), serverId });
     return;
   }
 
-  await SmitheryConnection.deleteMany({});
+  await SmitheryConnection.deleteMany(scopeFilter(scope));
 }

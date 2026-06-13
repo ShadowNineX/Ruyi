@@ -10,7 +10,12 @@ import { z } from "zod";
 import { env } from "../env";
 import { toolLogger } from "../logger";
 import { formatError, toolContextManager } from "../utils/types";
-import { configManager, type SearchProvider } from "../config";
+import { getCurrentToolConfigScope } from "../utils/discord-scope";
+import {
+  configManager,
+  type ConfigScope,
+  type SearchProvider,
+} from "../config";
 
 const OPENAI_PROVIDER = "openai" satisfies SearchProvider;
 const TAVILY_PROVIDER = "tavily" satisfies SearchProvider;
@@ -72,8 +77,11 @@ function uniqueProviders(providers: readonly SearchProvider[]): SearchProvider[]
   return [...new Set(providers)];
 }
 
-function getProviderOrder(mode: SearchMode): SearchProvider[] {
-  const preferredProvider = configManager.getSearchProvider();
+function getProviderOrder(
+  mode: SearchMode,
+  scope: ConfigScope | null,
+): SearchProvider[] {
+  const preferredProvider = configManager.getSearchProvider(scope);
   if (mode === "research") {
     return uniqueProviders([
       TAVILY_PROVIDER,
@@ -156,9 +164,10 @@ function collectOpenAIWebSearchSources(response: Response): SearchSource[] {
 async function openAIWebSearch(
   query: string,
   mode: SearchMode,
+  scope: ConfigScope | null,
 ): Promise<Omit<WebSearchResult, "attempts">> {
   const response = await openai.responses.create({
-    model: configManager.getChatModel(),
+    model: configManager.getChatModel(scope),
     instructions:
       "Answer using current web information. Include concise citations in the response when sources are available.",
     input: query,
@@ -313,9 +322,10 @@ async function runProvider(
   query: string,
   mode: SearchMode,
   maxResults: number,
+  scope: ConfigScope | null,
 ): Promise<Omit<WebSearchResult, "attempts">> {
   return provider === "openai"
-    ? openAIWebSearch(query, mode)
+    ? openAIWebSearch(query, mode, scope)
     : tavilySearch(query, mode, maxResults);
 }
 
@@ -323,14 +333,21 @@ async function searchWeb(
   query: string,
   mode: SearchMode,
   maxResults: number,
+  scope: ConfigScope | null,
 ): Promise<WebSearchResult> {
   const attempts: string[] = [];
   let fallbackReason: string | undefined;
   let weakResult: Omit<WebSearchResult, "attempts"> | null = null;
 
-  for (const provider of getProviderOrder(mode)) {
+  for (const provider of getProviderOrder(mode, scope)) {
     try {
-      const result = await runProvider(provider, query, mode, maxResults);
+      const result = await runProvider(
+        provider,
+        query,
+        mode,
+        maxResults,
+        scope,
+      );
       attempts.push(`${provider}:ok`);
       if (resultHasGoodSources({ ...result, attempts })) {
         return { ...result, attempts, fallbackReason };
@@ -376,6 +393,7 @@ export const webSearchTool = tool({
       .describe("Maximum Tavily results to return when Tavily is used. Defaults to 5; capped at 10."),
   }),
   execute: async ({ query, mode, max_results }) => {
+    const scope = getCurrentToolConfigScope();
     const budgetDecision = toolContextManager.consumeToolCall("web_search");
     if (!budgetDecision.allowed) {
       return toolContextManager.budgetDeniedResult(budgetDecision);
@@ -387,7 +405,12 @@ export const webSearchTool = tool({
       : clampMaxResults(max_results);
 
     try {
-      const result = await searchWeb(query, searchMode, maxResults);
+      const result = await searchWeb(
+        query,
+        searchMode,
+        maxResults,
+        scope,
+      );
       toolLogger.info(
         {
           provider: result.provider,

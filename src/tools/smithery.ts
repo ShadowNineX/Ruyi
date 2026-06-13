@@ -1,5 +1,6 @@
 import { tool } from "@openai/agents";
 import { z } from "zod";
+import type { ConfigScope } from "../config";
 import { getAllSmitheryConnections } from "../db/models";
 import { toolLogger } from "../logger";
 import {
@@ -12,6 +13,7 @@ import {
   SMITHERY_SERVERS,
 } from "../mcp/smithery-catalog";
 import { formatError } from "../utils/types";
+import { getCurrentToolConfigScope } from "../utils/discord-scope";
 
 const SmitheryServerIdSchema = z.enum(SMITHERY_SERVER_IDS);
 const ToolArgumentValueSchema = z.union([
@@ -66,6 +68,10 @@ function formatToolSummary(
   };
 }
 
+function getCurrentSmitheryScope(): ConfigScope | null {
+  return getCurrentToolConfigScope();
+}
+
 export const smitheryListToolsTool = tool({
   name: "smithery_list_tools",
   description:
@@ -80,6 +86,11 @@ export const smitheryListToolsTool = tool({
       .describe("Whether to include each tool's MCP input schema."),
   }),
   execute: async ({ server_id, include_input_schema }) => {
+    const scope = getCurrentSmitheryScope();
+    if (!scope) {
+      return { error: "Smithery tools need active Discord context." };
+    }
+
     if (!isSmitheryConfigured()) {
       return {
         error:
@@ -90,14 +101,14 @@ export const smitheryListToolsTool = tool({
     const includeInputSchema = include_input_schema === true;
     const targetServerIds = server_id
       ? [server_id]
-      : (await getAllSmitheryConnections())
+      : (await getAllSmitheryConnections(scope))
           .filter((connection) => connection.status === "connected")
           .map((connection) => connection.serverId);
 
     try {
       const services = await Promise.all(
         targetServerIds.map(async (serverId) => {
-          const tools = await listSmitheryConnectionTools(serverId);
+          const tools = await listSmitheryConnectionTools(scope, serverId);
           return {
             serverId,
             name: SMITHERY_SERVERS[serverId].name,
@@ -111,6 +122,8 @@ export const smitheryListToolsTool = tool({
 
       toolLogger.info(
         {
+          scope: scope.kind,
+          scopeId: scope.id,
           serverId: server_id,
           serviceCount: services.length,
           includeInputSchema,
@@ -125,7 +138,12 @@ export const smitheryListToolsTool = tool({
     } catch (error) {
       const errorMessage = formatError(error);
       toolLogger.error(
-        { serverId: server_id, error: errorMessage },
+        {
+          scope: scope.kind,
+          scopeId: scope.id,
+          serverId: server_id,
+          error: errorMessage,
+        },
         "Failed to list Smithery MCP tools",
       );
       return { error: errorMessage };
@@ -154,9 +172,15 @@ export const smitheryCallTool = tool({
   }),
   needsApproval: true,
   execute: async ({ server_id, tool_name, tool_arguments }) => {
+    const scope = getCurrentSmitheryScope();
+    if (!scope) {
+      return { error: "Smithery tools need active Discord context." };
+    }
+
     try {
       const args = toolArgumentEntriesToRecord(tool_arguments);
       const result = await callSmitheryConnectionTool(
+        scope,
         server_id,
         tool_name,
         args,
@@ -164,6 +188,8 @@ export const smitheryCallTool = tool({
 
       toolLogger.info(
         {
+          scope: scope.kind,
+          scopeId: scope.id,
           serverId: server_id,
           connectionId: result.connectionId,
           toolName: tool_name,
@@ -181,7 +207,13 @@ export const smitheryCallTool = tool({
     } catch (error) {
       const errorMessage = formatError(error);
       toolLogger.error(
-        { serverId: server_id, toolName: tool_name, error: errorMessage },
+        {
+          scope: scope.kind,
+          scopeId: scope.id,
+          serverId: server_id,
+          toolName: tool_name,
+          error: errorMessage,
+        },
         "Smithery MCP tool call failed",
       );
       return { error: errorMessage };

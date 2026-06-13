@@ -3,6 +3,7 @@ import {
   assistant,
   user,
   type AgentInputItem,
+  type ModelSettings,
   type OpenAIResponsesCompactionArgs,
   type Session,
 } from "@openai/agents";
@@ -224,6 +225,8 @@ Refresh the compacted channel summary. Keep it under ${AGENT_SESSION_SUMMARY_MAX
 async function summarizeCompactedItems(
   existingSummary: string | null,
   compactedItems: AgentInputItem[],
+  model: string,
+  modelSettings: ModelSettings,
 ): Promise<string> {
   const abortController = new AbortController();
   const timeout = setTimeout(
@@ -235,8 +238,8 @@ async function summarizeCompactedItems(
     const agent = new Agent({
       name: "Ruyi channel summarizer",
       instructions: SUMMARY_SYSTEM_PROMPT,
-      model: agentsRuntimeManager.model,
-      modelSettings: agentsRuntimeManager.modelSettings,
+      model,
+      modelSettings,
     });
 
     const result = await agentsRuntimeManager
@@ -270,6 +273,8 @@ interface SeedSessionData {
 async function compactItemsIntoSummary(
   items: AgentInputItem[],
   existingSummary: string | null,
+  model: string,
+  modelSettings: ModelSettings,
 ): Promise<SessionCompactionResult | null> {
   const start = retainedStartIndex(items);
   if (start <= 0) return null;
@@ -279,6 +284,8 @@ async function compactItemsIntoSummary(
   const summary = await summarizeCompactedItems(
     existingSummary,
     compactedItems,
+    model,
+    modelSettings,
   );
 
   return {
@@ -294,9 +301,15 @@ class MongoAgentSession implements Session {
   constructor(
     private readonly channelId: string,
     private readonly sessionId: string,
+    private readonly model: string,
+    private readonly modelSettings: ModelSettings,
     private items: AgentInputItem[],
     private summary: string | null,
   ) {}
+
+  matchesModel(model: string): boolean {
+    return !this.invalidated && this.model === model;
+  }
 
   markInvalidated(): void {
     this.invalidated = true;
@@ -344,7 +357,12 @@ class MongoAgentSession implements Session {
     }
 
     try {
-      const result = await compactItemsIntoSummary(this.items, this.summary);
+      const result = await compactItemsIntoSummary(
+        this.items,
+        this.summary,
+        this.model,
+        this.modelSettings,
+      );
       if (!result) return;
 
       this.summary = result.summary;
@@ -384,7 +402,7 @@ class MongoAgentSession implements Session {
         $set: {
           sessionId: this.sessionId,
           provider: "openai-agents",
-          model: agentsRuntimeManager.model,
+          model: this.model,
           items: this.items,
           lastUsed: new Date(),
           isActive: true,
@@ -407,7 +425,7 @@ class MongoAgentSession implements Session {
           summaryUpdatedAt: new Date(),
           items: this.items,
           lastUsed: new Date(),
-          model: agentsRuntimeManager.model,
+          model: this.model,
           promptVersion: systemPromptVersion,
         },
       },
@@ -441,13 +459,20 @@ async function compactPersistedItemsIfNeeded(
   channelId: string,
   items: AgentInputItem[],
   existingSummary: string | null,
+  model: string,
+  modelSettings: ModelSettings,
 ): Promise<{ items: AgentInputItem[]; summary: string | null }> {
   if (items.length <= AGENT_SESSION_COMPACTION_TRIGGER_ITEMS) {
     return { items, summary: existingSummary };
   }
 
   try {
-    const result = await compactItemsIntoSummary(items, existingSummary);
+    const result = await compactItemsIntoSummary(
+      items,
+      existingSummary,
+      model,
+      modelSettings,
+    );
     if (!result) return { items, summary: existingSummary };
 
     await AgentSession.updateOne(
@@ -458,7 +483,7 @@ async function compactPersistedItemsIfNeeded(
           summary: result.summary,
           summaryUpdatedAt: new Date(),
           lastUsed: new Date(),
-          model: agentsRuntimeManager.model,
+          model,
           promptVersion: systemPromptVersion,
         },
       },
@@ -542,7 +567,7 @@ async function buildSeedSessionData(
   };
 }
 
-export class SessionManager {
+class SessionManager {
   private readonly activeSessions = new Map<string, MongoAgentSession>();
 
   async loadPersisted(): Promise<void> {
@@ -560,12 +585,27 @@ export class SessionManager {
   async getOrCreate(
     channelId: string,
     currentMessageId?: string,
+    model = agentsRuntimeManager.model,
+    modelSettings = agentsRuntimeManager.modelSettings,
   ): Promise<MongoAgentSession> {
     const existingSession = this.activeSessions.get(channelId);
     if (existingSession) {
-      aiLogger.debug({ channelId }, "Using cached agent session");
-      await this.touchSession(channelId, currentMessageId);
-      return existingSession;
+      if (existingSession.matchesModel(model)) {
+        aiLogger.debug({ channelId }, "Using cached agent session");
+        await this.touchSession(channelId, model, currentMessageId);
+        return existingSession;
+      }
+
+      existingSession.markInvalidated();
+      this.activeSessions.delete(channelId);
+      await AgentSession.updateOne(
+        { channelId, isActive: true, provider: "openai-agents" },
+        { $set: { isActive: false } },
+      );
+      aiLogger.info(
+        { channelId, currentModel: model },
+        "Cached agent session model changed; creating fresh agent session",
+      );
     }
 
     const persistedSession = await AgentSession.findOne({
@@ -578,22 +618,26 @@ export class SessionManager {
       const promptVersionMatches =
         !persistedSession.promptVersion ||
         persistedSession.promptVersion === systemPromptVersion;
-      const modelMatches = persistedSession.model === agentsRuntimeManager.model;
+      const modelMatches = persistedSession.model === model;
 
       if (promptVersionMatches && modelMatches) {
         const compactedSession = await compactPersistedItemsIfNeeded(
           channelId,
           toAgentItems(persistedSession),
           persistedSession.summary ?? null,
+          model,
+          modelSettings,
         );
         const session = new MongoAgentSession(
           channelId,
           persistedSession.sessionId,
+          model,
+          modelSettings,
           compactedSession.items,
           compactedSession.summary,
         );
         this.activeSessions.set(channelId, session);
-        await this.touchSession(channelId, currentMessageId);
+        await this.touchSession(channelId, model, currentMessageId);
 
         aiLogger.debug(
           { channelId, sessionId: persistedSession.sessionId },
@@ -609,7 +653,7 @@ export class SessionManager {
           storedVersion: persistedSession.promptVersion,
           currentVersion: systemPromptVersion,
           storedModel: persistedSession.model,
-          currentModel: agentsRuntimeManager.model,
+          currentModel: model,
         },
         "Agent session configuration changed; creating fresh agent session",
       );
@@ -628,6 +672,8 @@ export class SessionManager {
     const session = new MongoAgentSession(
       channelId,
       sessionId,
+      model,
+      modelSettings,
       seedData.items,
       null,
     );
@@ -638,7 +684,7 @@ export class SessionManager {
         $set: {
           sessionId,
           provider: "openai-agents",
-          model: agentsRuntimeManager.model,
+          model,
           items: seedData.items,
           userMessageIds,
           lastUsed: new Date(),
@@ -662,6 +708,7 @@ export class SessionManager {
 
   private async touchSession(
     channelId: string,
+    model: string,
     currentMessageId?: string,
   ): Promise<void> {
     const update =
@@ -675,13 +722,13 @@ export class SessionManager {
             },
             $set: {
               lastUsed: new Date(),
-              model: agentsRuntimeManager.model,
+              model,
             },
           }
         : {
             $set: {
               lastUsed: new Date(),
-              model: agentsRuntimeManager.model,
+              model,
             },
           };
 

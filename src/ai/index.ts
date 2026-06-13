@@ -10,20 +10,14 @@ export { sessionManager } from "./session";
 export { conversationContext, type ChatMessage } from "./context";
 
 // Chat
-export { chatService, type ChatOptions } from "./chat";
+export { chatService } from "./chat";
 
 // Classifier
 export { replyClassifier } from "./classifier";
 export { editClassifier } from "./edit-classifier";
 
 // Permissions
-export { permissionManager, type PermissionContext } from "./permissions";
-
-// System prompt
-export { systemPrompt } from "./prompt";
-
-// Auto-extraction (c.ai-style long-term memory)
-export { autoExtractFacts } from "./extraction";
+export { permissionManager } from "./permissions";
 
 // Convenience shutdown
 import { sessionManager } from "./session";

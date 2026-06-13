@@ -4,7 +4,7 @@ export const SMITHERY_SERVER_IDS = [
   "youtube",
 ] as const satisfies readonly SmitheryServerId[];
 
-export interface SmitheryServerInfo {
+interface SmitheryServerInfo {
   name: string;
   emoji: string;
   description: string;

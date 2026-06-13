@@ -10,7 +10,10 @@ import {
 } from "discord.js";
 import {
   configManager,
+  formatConfigScope,
   SEARCH_PROVIDERS,
+  userConfigScope,
+  type ConfigScope,
   type SearchProvider,
 } from "../config";
 import { botLogger } from "../logger";
@@ -29,8 +32,18 @@ const SEARCH_PROVIDER_DESCRIPTIONS: Record<SearchProvider, string> = {
 
 export const searchProviderCommand = new SlashCommandBuilder()
   .setName("search-provider")
-  .setDescription("Choose the primary web search provider")
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
+  .setDescription("Choose the primary web search provider");
+
+function canManageScope(
+  interaction: ChatInputCommandInteraction | StringSelectMenuInteraction,
+  scope: ConfigScope,
+): boolean {
+  return (
+    scope.kind === "dm" ||
+    (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ??
+      false)
+  );
+}
 
 function isSearchProvider(value: string): value is SearchProvider {
   return SEARCH_PROVIDERS.includes(value as SearchProvider);
@@ -47,8 +60,10 @@ function buildProviderOption(
     .setDefault(provider === currentProvider);
 }
 
-function buildProviderRow(): ActionRowBuilder<StringSelectMenuBuilder> {
-  const currentProvider = configManager.getSearchProvider();
+function buildProviderRow(
+  scope: ConfigScope,
+): ActionRowBuilder<StringSelectMenuBuilder> {
+  const currentProvider = configManager.getSearchProvider(scope);
   return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(SEARCH_PROVIDER_SELECT_ID)
@@ -68,10 +83,20 @@ function formatProvider(provider: SearchProvider): string {
 export async function handleSearchProviderCommand(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
-  const currentProvider = configManager.getSearchProvider();
+  const scope = userConfigScope(interaction.guildId, interaction.user.id);
+  if (!canManageScope(interaction, scope)) {
+    await interaction.reply({
+      content:
+        "You need **Manage Server** to change this server's search provider.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const currentProvider = configManager.getSearchProvider(scope);
   await interaction.reply({
-    content: `Current primary search provider: **${formatProvider(currentProvider)}**`,
-    components: [buildProviderRow()],
+    content: `Current primary search provider for ${formatConfigScope(scope)}: **${formatProvider(currentProvider)}**`,
+    components: [buildProviderRow(scope)],
     flags: MessageFlags.Ephemeral,
   });
 }
@@ -80,6 +105,15 @@ export async function handleSearchProviderSelect(
   interaction: StringSelectMenuInteraction,
 ): Promise<void> {
   if (interaction.customId !== SEARCH_PROVIDER_SELECT_ID) return;
+  const scope = userConfigScope(interaction.guildId, interaction.user.id);
+  if (!canManageScope(interaction, scope)) {
+    await interaction.update({
+      content:
+        "You need **Manage Server** to change this server's search provider.",
+      components: [],
+    });
+    return;
+  }
 
   const selectedValue = interaction.values[0];
   if (!selectedValue || !isSearchProvider(selectedValue)) {
@@ -90,11 +124,13 @@ export async function handleSearchProviderSelect(
     return;
   }
 
-  const oldProvider = configManager.getSearchProvider();
-  await configManager.setSearchProvider(selectedValue);
+  const oldProvider = configManager.getSearchProvider(scope);
+  await configManager.setSearchProvider(scope, selectedValue);
 
   botLogger.info(
     {
+      scope: scope.kind,
+      scopeId: scope.id,
       oldProvider,
       newProvider: selectedValue,
       user: interaction.user.username,
@@ -103,8 +139,8 @@ export async function handleSearchProviderSelect(
   );
 
   await interaction.update({
-    content: `Primary search provider changed from **${formatProvider(oldProvider)}** to **${formatProvider(selectedValue)}**.`,
-    components: [buildProviderRow()],
+    content: `Primary search provider for ${formatConfigScope(scope)} changed from **${formatProvider(oldProvider)}** to **${formatProvider(selectedValue)}**.`,
+    components: [buildProviderRow(scope)],
   });
 }
 
