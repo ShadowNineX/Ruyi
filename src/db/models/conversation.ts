@@ -6,6 +6,8 @@ export interface IConversationMessage {
   content: string;
   isBot: boolean;
   timestamp: Date;
+  editedAt: Date | null;
+  editCount: number;
 }
 
 export interface IConversation extends Document {
@@ -21,6 +23,8 @@ const MessageSchema = new Schema<IConversationMessage>(
     content: { type: String, required: true },
     isBot: { type: Boolean, required: true },
     timestamp: { type: Date, default: Date.now },
+    editedAt: { type: Date, default: null },
+    editCount: { type: Number, default: 0 },
   },
   { _id: false },
 );

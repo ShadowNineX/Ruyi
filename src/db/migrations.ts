@@ -20,6 +20,8 @@ interface DatabaseMigration {
 interface ConversationMigrationMessage {
   messageId?: string | null;
   isBot?: boolean;
+  editedAt?: Date | null;
+  editCount?: number;
 }
 
 interface ConversationMigrationDocument {
@@ -29,6 +31,7 @@ interface ConversationMigrationDocument {
 interface AgentSessionMigrationDocument {
   userMessageIds?: string[];
   assistantMessageIds?: string[];
+  assistantReplies?: unknown[];
 }
 
 function getDb() {
@@ -193,6 +196,68 @@ const migrations: DatabaseMigration[] = [
           value: initialized ? DEFAULT_AI_MODEL_PRESET : currentPreset,
         },
         "AI model preset configuration initialized",
+      );
+    },
+  },
+  {
+    id: "2026-06-13-initialize-message-edit-state",
+    run: async () => {
+      let conversationMatched = 0;
+      let conversationModified = 0;
+      let agentSessionsInitialized = 0;
+
+      if (await collectionExists(CONVERSATIONS_COLLECTION)) {
+        const conversationsCollection =
+          getDb().collection<ConversationMigrationDocument>(
+            CONVERSATIONS_COLLECTION,
+          );
+        const result = await conversationsCollection.updateMany(
+          {},
+          [
+            {
+              $set: {
+                messages: {
+                  $map: {
+                    input: "$messages",
+                    as: "message",
+                    in: {
+                      $mergeObjects: [
+                        "$$message",
+                        {
+                          editedAt: { $ifNull: ["$$message.editedAt", null] },
+                          editCount: { $ifNull: ["$$message.editCount", 0] },
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          ],
+        );
+        conversationMatched = result.matchedCount;
+        conversationModified = result.modifiedCount;
+      }
+
+      if (await collectionExists(AGENT_SESSIONS_COLLECTION)) {
+        const agentSessionsCollection =
+          getDb().collection<AgentSessionMigrationDocument>(
+            AGENT_SESSIONS_COLLECTION,
+          );
+        const result = await agentSessionsCollection.updateMany(
+          { assistantReplies: { $exists: false } },
+          { $set: { assistantReplies: [] } },
+        );
+        agentSessionsInitialized = result.modifiedCount;
+      }
+
+      dbLogger.info(
+        {
+          conversationMatched,
+          conversationModified,
+          agentSessionsInitialized,
+        },
+        "Message edit tracking state initialized",
       );
     },
   },

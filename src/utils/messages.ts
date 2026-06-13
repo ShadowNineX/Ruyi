@@ -349,6 +349,95 @@ export async function sendReplyChunks(
   return sentChunks;
 }
 
+async function fetchEditableBotMessage(
+  message: Message,
+  messageId: string,
+): Promise<Message | null> {
+  if (!("messages" in message.channel)) return null;
+
+  try {
+    const fetched = await message.channel.messages.fetch(messageId);
+    if (fetched.author.id !== message.client.user?.id) return null;
+    return fetched;
+  } catch (error) {
+    botLogger.debug(
+      {
+        error: (error as Error)?.message,
+        channelId: message.channel.id,
+        messageId,
+      },
+      "Could not fetch bot reply chunk for edit",
+    );
+    return null;
+  }
+}
+
+async function deleteBotReplyChunk(
+  message: Message,
+  messageId: string,
+): Promise<void> {
+  const fetched = await fetchEditableBotMessage(message, messageId);
+  if (!fetched) return;
+
+  await fetched.delete().catch((error: unknown) => {
+    botLogger.debug(
+      {
+        error: (error as Error)?.message,
+        channelId: message.channel.id,
+        messageId,
+      },
+      "Could not delete excess bot reply chunk after edit",
+    );
+  });
+}
+
+export async function editReplyChunks(
+  message: Message,
+  existingMessageIds: string[],
+  reply: string,
+  user: string,
+): Promise<SentChunk[]> {
+  const chunks = splitMessage(reply);
+  const editedChunks: SentChunk[] = [];
+  let editedExistingChunk = false;
+
+  for (const [index, chunk] of chunks.entries()) {
+    const existingMessageId = existingMessageIds[index];
+    if (existingMessageId) {
+      const fetched = await fetchEditableBotMessage(message, existingMessageId);
+      if (fetched) {
+        const edited = await fetched.edit(chunk);
+        editedChunks.push({ id: edited.id, content: chunk });
+        editedExistingChunk = true;
+      }
+      continue;
+    }
+
+    if (editedExistingChunk && "send" in message.channel) {
+      const sent = await message.channel.send(chunk);
+      editedChunks.push({ id: sent.id, content: chunk });
+    }
+  }
+
+  const excessIds = existingMessageIds.slice(chunks.length);
+  for (const messageId of excessIds) {
+    await deleteBotReplyChunk(message, messageId);
+  }
+
+  botLogger.info(
+    {
+      user,
+      replyLength: reply.length,
+      chunks: chunks.length,
+      editedChunks: editedChunks.length,
+      previousChunks: existingMessageIds.length,
+    },
+    "Edited reply after user message edit",
+  );
+
+  return editedChunks;
+}
+
 export async function fetchReplyChain(
   message: Message,
   firstReferencedMessage?: Message | null,

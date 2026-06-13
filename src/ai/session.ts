@@ -497,6 +497,27 @@ function normalizeMessageIds(messageIds: Array<string | undefined>): string[] {
   return [...new Set(messageIds.filter((id): id is string => Boolean(id)))];
 }
 
+function upsertAssistantReplyLink(
+  replies: IAgentSession["assistantReplies"],
+  userMessageId: string,
+  assistantMessageIds: string[],
+): IAgentSession["assistantReplies"] {
+  const now = new Date();
+  const nextReplies = replies.filter(
+    (reply) => reply.userMessageId !== userMessageId,
+  );
+  const existing = replies.find((reply) => reply.userMessageId === userMessageId);
+
+  nextReplies.push({
+    userMessageId,
+    assistantMessageIds,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  });
+
+  return nextReplies.slice(-TRACKED_MESSAGE_ID_CAP);
+}
+
 async function buildSeedSessionData(
   channelId: string,
   currentMessageId?: string,
@@ -699,26 +720,64 @@ export class SessionManager {
 
   async recordAssistantMessages(
     channelId: string,
+    userMessageId: string,
     messageIds: string[],
   ): Promise<void> {
     if (messageIds.length === 0) return;
 
-    await AgentSession.updateOne(
+    const session = await AgentSession.findOne({
+      channelId,
+      isActive: true,
+      provider: "openai-agents",
+    });
+    if (!session) return;
+
+    session.assistantMessageIds = normalizeMessageIds([
+      ...session.assistantMessageIds,
+      ...messageIds,
+    ]).slice(-TRACKED_MESSAGE_ID_CAP);
+    session.assistantReplies = upsertAssistantReplyLink(
+      session.assistantReplies,
+      userMessageId,
+      messageIds,
+    );
+    session.lastUsed = new Date();
+    await session.save();
+  }
+
+  async getAssistantReplyIdsForUserMessage(
+    channelId: string,
+    userMessageId: string,
+  ): Promise<string[]> {
+    const session = await AgentSession.findOne(
       {
         channelId,
-        isActive: true,
         provider: "openai-agents",
+        "assistantReplies.userMessageId": userMessageId,
       },
-      {
-        $push: {
-          assistantMessageIds: {
-            $each: messageIds,
-            $slice: -TRACKED_MESSAGE_ID_CAP,
-          },
-        },
-        $set: { lastUsed: new Date() },
-      },
+      { "assistantReplies.$": 1 },
+    ).sort({ lastUsed: -1 });
+    return session?.assistantReplies[0]?.assistantMessageIds ?? [];
+  }
+
+  async invalidateIfUserMessageEdited(
+    channelId: string,
+    messageId: string,
+  ): Promise<boolean> {
+    const session = await AgentSession.exists({
+      channelId,
+      isActive: true,
+      provider: "openai-agents",
+      userMessageIds: messageId,
+    });
+    if (!session) return false;
+
+    await this.invalidate(channelId);
+    aiLogger.info(
+      { channelId, messageId },
+      "Invalidated agent session because a tracked Discord message was edited",
     );
+    return true;
   }
 
   async invalidateIfAssistantMessageDeleted(

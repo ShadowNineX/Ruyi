@@ -23,6 +23,7 @@ Ruyi is a Discord bot (Nine Sols themed AI companion) built on Bun + TypeScript 
    - `context.ts` — splits incoming chat history into a "Reply context" (cited thread, non-bot only), "Recent channel activity" (ambient, non-bot only), and a tiny slice of visible recent bot replies for mention-only/ambiguous continuity after session rebuilds. The bot's full past replies come from `AgentSession`.
    - `prompt.ts` — Ruyi persona + tool-usage hints. Wraps everything in XML-like `<context>` / `<instructions>` blocks.
    - `classifier.ts` — `replyClassifier.shouldReply()` lightweight LLM structured boolean gate. Failures default to no-response.
+   - `edit-classifier.ts` — semantic gate for Discord user message edits. Deterministic code may ignore obvious formatting/typo-only edits, but meaning/side-effect decisions belong in this classifier, not hardcoded keyword lists.
    - `permissions.ts` — interactive Discord prompt for sensitive tool calls (`permissionManager`).
    - `extraction.ts` — c.ai-style semantic auto memory extraction (background fact storage). It is scheduled by message count/cooldown only; do not add hardcoded phrase triggers.
 4. [src/utils/chat-session.ts](src/utils/chat-session.ts) — `ChatSession` owns the typing interval and temporary tool-call embed. Normal thinking/generation uses Discord typing only; embeds are reserved for tool calls and permission prompts.
@@ -46,6 +47,7 @@ Ruyi is a Discord bot (Nine Sols themed AI companion) built on Bun + TypeScript 
 - Startup migrations live in [src/db/migrations.ts](src/db/migrations.ts), run immediately after `connectDB()`, and record completion in `Config` keys prefixed with `db:migration:`. Keep migrations idempotent and use them to remove obsolete collections or safely reshape stored data.
 - Any change to Mongo models, stored document shape, indexes, provider IDs, persisted config keys, or message/session tracking data must include an idempotent DB migration before runtime code depends on the new shape. Data cleanup and backfills belong in migrations.
 - [src/services/message-sync.ts](src/services/message-sync.ts) is the single path for Discord deletion sync: message delete events, bulk-delete events, the `delete_messages` tool, and the periodic sweep all remove archived message IDs and invalidate affected `AgentSession` rows. Rate-limited; do not duplicate this work elsewhere.
+- Discord user message edits are handled from the `MessageUpdate` event in [src/bot.ts](src/bot.ts): archived conversation content is updated, affected agent sessions are invalidated, and mapped assistant reply chunks are edited only when `editClassifier` says the edit meaningfully changes the answer. Do not add keyword-list edit heuristics; use the semantic classifier for intent/safety.
 - `connectDB()` exits the process on disconnect/error after the initial connect.
 
 ## Commands

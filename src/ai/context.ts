@@ -23,6 +23,13 @@ export interface ChatMessage {
   isReplyContext?: boolean;
 }
 
+export interface ConversationMessageUpdateResult {
+  found: boolean;
+  changed: boolean;
+  oldContent: string | null;
+  newContent: string;
+}
+
 export class ConversationContext {
   private readonly lastInteractionCache = new Map<string, number>();
   private readonly userMessageCounters = new Map<string, number>();
@@ -48,13 +55,36 @@ export class ConversationContext {
     }
 
     try {
+      const existingResult = await Conversation.updateOne(
+        { channelId, "messages.messageId": messageId },
+        {
+          $set: {
+            "messages.$.author": author,
+            "messages.$.content": content,
+            "messages.$.isBot": isBot,
+          },
+        },
+      );
+      if (existingResult.matchedCount > 0) {
+        this.lastInteractionCache.set(channelId, Date.now());
+        return;
+      }
+
       await Conversation.updateOne(
         { channelId },
         {
           $push: {
             messages: {
               $each: [
-                { messageId, author, content, isBot, timestamp: new Date() },
+                {
+                  messageId,
+                  author,
+                  content,
+                  isBot,
+                  timestamp: new Date(),
+                  editedAt: null,
+                  editCount: 0,
+                },
               ],
               $slice: -100,
             },
@@ -66,6 +96,71 @@ export class ConversationContext {
       this.lastInteractionCache.set(channelId, Date.now());
     } catch (error) {
       aiLogger.error({ error }, "Failed to save message to memory");
+    }
+  }
+
+  async updateMessageContent(
+    channelId: string,
+    messageId: string,
+    author: string,
+    content: string,
+  ): Promise<ConversationMessageUpdateResult> {
+    try {
+      const conversation = await Conversation.findOne(
+        { channelId, "messages.messageId": messageId },
+        { "messages.$": 1 },
+      );
+      const archivedMessage = conversation?.messages[0];
+      if (!archivedMessage) {
+        return {
+          found: false,
+          changed: false,
+          oldContent: null,
+          newContent: content,
+        };
+      }
+
+      if (archivedMessage.content === content) {
+        return {
+          found: true,
+          changed: false,
+          oldContent: archivedMessage.content,
+          newContent: content,
+        };
+      }
+
+      await Conversation.updateOne(
+        { channelId, "messages.messageId": messageId },
+        {
+          $set: {
+            "messages.$.author": author,
+            "messages.$.content": content,
+            "messages.$.isBot": false,
+            "messages.$.editedAt": new Date(),
+            lastInteraction: new Date(),
+          },
+          $inc: { "messages.$.editCount": 1 },
+        },
+      );
+      this.lastInteractionCache.set(channelId, Date.now());
+
+      return {
+        found: true,
+        changed: true,
+        oldContent: archivedMessage.content,
+        newContent: content,
+      };
+    } catch (error) {
+      aiLogger.error(
+        { error, channelId, messageId },
+        "Failed to update archived message content",
+      );
+      return {
+        found: false,
+        changed: false,
+        oldContent: null,
+        newContent: content,
+      };
     }
   }
 

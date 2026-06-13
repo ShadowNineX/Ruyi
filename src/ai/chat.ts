@@ -51,6 +51,7 @@ export interface ChatOptions {
   imageInputs?: MessageImageInput[];
   messageId: string;
   signal?: AbortSignal;
+  persistUserMessage?: boolean;
 }
 
 interface StreamLike extends AsyncIterable<RunStreamEvent> {
@@ -283,6 +284,7 @@ export class ChatService {
       imageInputs = [],
       messageId,
       signal,
+      persistUserMessage = true,
     } = options;
 
     permissionManager.setContext(channelId, {
@@ -346,29 +348,33 @@ export class ChatService {
         "Chat input received",
       );
 
-      await conversationContext.rememberMessage(
-        channelId,
-        username,
-        userMessage,
-        false,
-        messageId,
-      );
+      if (persistUserMessage) {
+        await conversationContext.rememberMessage(
+          channelId,
+          username,
+          userMessage,
+          false,
+          messageId,
+        );
 
-      const { shouldExtract } = conversationContext.trackUserMessage(
-        channelId,
-        username,
-      );
-      if (shouldExtract) {
-        void autoExtractFacts(username, channelId)
-          .then((completed) => {
-            if (completed) conversationContext.markExtracted(channelId, username);
-          })
-          .catch((error: unknown) =>
-            aiLogger.warn(
-              { error: (error as Error).message, username, channelId },
-              "Background fact extraction crashed",
-            ),
-          );
+        const { shouldExtract } = conversationContext.trackUserMessage(
+          channelId,
+          username,
+        );
+        if (shouldExtract) {
+          void autoExtractFacts(username, channelId)
+            .then((completed) => {
+              if (completed) {
+                conversationContext.markExtracted(channelId, username);
+              }
+            })
+            .catch((error: unknown) =>
+              aiLogger.warn(
+                { error: (error as Error).message, username, channelId },
+                "Background fact extraction crashed",
+              ),
+            );
+        }
       }
 
       const agentSession = await sessionManager.getOrCreate(

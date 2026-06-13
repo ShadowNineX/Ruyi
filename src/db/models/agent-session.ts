@@ -19,6 +19,8 @@ export interface IAgentSession {
   userMessageIds: string[];
   /** Discord message IDs for final assistant replies sent to the channel */
   assistantMessageIds: string[];
+  /** Turn-level mapping from a user message to the assistant reply chunks it produced */
+  assistantReplies: IAssistantReplyLink[];
   /** When this session was created */
   createdAt: Date;
   /** When this session was last used */
@@ -34,6 +36,23 @@ export interface IAgentSession {
   promptVersion?: string;
 }
 
+export interface IAssistantReplyLink {
+  userMessageId: string;
+  assistantMessageIds: string[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const AssistantReplyLinkSchema = new Schema<IAssistantReplyLink>(
+  {
+    userMessageId: { type: String, required: true, index: true },
+    assistantMessageIds: { type: [String], default: [] },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
 const AgentSessionSchema = new Schema<IAgentSession>({
   channelId: { type: String, required: true, unique: true, index: true },
   sessionId: { type: String, required: true },
@@ -44,6 +63,7 @@ const AgentSessionSchema = new Schema<IAgentSession>({
   items: { type: [Schema.Types.Mixed], default: [] },
   userMessageIds: { type: [String], default: [] },
   assistantMessageIds: { type: [String], default: [] },
+  assistantReplies: { type: [AssistantReplyLinkSchema], default: [] },
   createdAt: { type: Date, default: Date.now },
   lastUsed: { type: Date, default: Date.now },
   isActive: { type: Boolean, default: true },

@@ -7,11 +7,14 @@ import {
   Routes,
   type Interaction,
   type Message,
+  type PartialMessage,
   type GuildTextBasedChannel,
   type TextChannel,
 } from "discord.js";
 import {
   chatService,
+  conversationContext,
+  editClassifier,
   permissionManager,
   replyClassifier,
   sessionManager,
@@ -42,6 +45,7 @@ import {
   fetchReferencedMessage,
   formatMessageForAI,
   getMessageImageInputs,
+  editReplyChunks,
   sendReplyChunks,
   getErrorMessage,
 } from "./utils/messages";
@@ -58,6 +62,12 @@ interface PresenceActivity {
   name: string;
   type: ActivityType;
 }
+
+const EDIT_REGENERATION_PREFIX =
+  "[The user edited this earlier Discord message after Ruyi already replied. Treat the edited message below as authoritative. Regenerate the answer for the edited version, but do not mention the edit unless it is necessary for clarity. Previous visible bot replies may reflect the pre-edit message.]";
+
+const SIDE_EFFECT_EDIT_NOTICE =
+  "I noticed this request was edited after I had already answered. I have updated my context, but I will not repeat tool or external actions automatically from an edit. Please send a new message if you want me to redo the action.";
 
 export class RuyiBot {
   private activePresenceSession: symbol | null = null;
@@ -263,6 +273,60 @@ export class RuyiBot {
     toolCtx: ToolContext,
     signal: AbortSignal,
   ): Promise<void> {
+    const username = message.author.username;
+    const reply = await this.generateChatReply(
+      message,
+      session,
+      toolCtx,
+      signal,
+    );
+    this.throwIfAborted(signal);
+
+    await session.deleteStatusEmbed();
+
+    if (reply) {
+      const sentChunks = await sendReplyChunks(message, reply, username);
+      await sessionManager.recordAssistantMessages(
+        message.channel.id,
+        message.id,
+        sentChunks.map((chunk) => chunk.id),
+      );
+      return;
+    }
+
+    if (!session.usedSelfRespondingTool(selfRespondingToolNames)) {
+      botLogger.warn(
+        {
+          user: username,
+          channelId: message.channel.id,
+          messageId: message.id,
+        },
+        "Chat returned empty reply and no self-responding tool was used",
+      );
+      try {
+        await message.reply(
+          "Forgive me, my lord — your humble servant could not produce a reply this time. Please try again in a moment.",
+        );
+      } catch (replyError) {
+        botLogger.error(
+          {
+            error: (replyError as Error).message,
+            channelId: message.channel.id,
+          },
+          "Failed to send empty-reply notice",
+        );
+      }
+    }
+  }
+
+  private async generateChatReply(
+    message: Message,
+    session: ChatSession,
+    toolCtx: ToolContext,
+    signal: AbortSignal,
+    userMessagePrefix?: string,
+    persistUserMessage = true,
+  ): Promise<string | null> {
     this.throwIfAborted(signal);
 
     const username = message.author.username;
@@ -293,8 +357,12 @@ export class RuyiBot {
 
     session.setReplyTarget(message);
 
-    const userMessage = formatMessageForAI(message);
-    const reply = await runWithToolContext(toolCtx, () =>
+    const formattedMessage = formatMessageForAI(message);
+    const userMessage = userMessagePrefix
+      ? `${userMessagePrefix}\n\n${formattedMessage}`
+      : formattedMessage;
+
+    return runWithToolContext(toolCtx, () =>
       chatService.chat({
         userMessage,
         username,
@@ -306,44 +374,9 @@ export class RuyiBot {
         imageInputs,
         messageId: message.id,
         signal,
+        persistUserMessage,
       }),
     );
-    this.throwIfAborted(signal);
-
-    await session.deleteStatusEmbed();
-
-    if (reply) {
-      const sentChunks = await sendReplyChunks(message, reply, username);
-      await sessionManager.recordAssistantMessages(
-        message.channel.id,
-        sentChunks.map((chunk) => chunk.id),
-      );
-      return;
-    }
-
-    if (!session.usedSelfRespondingTool(selfRespondingToolNames)) {
-      botLogger.warn(
-        {
-          user: username,
-          channelId: message.channel.id,
-          messageId: message.id,
-        },
-        "Chat returned empty reply and no self-responding tool was used",
-      );
-      try {
-        await message.reply(
-          "Forgive me, my lord — your humble servant could not produce a reply this time. Please try again in a moment.",
-        );
-      } catch (replyError) {
-        botLogger.error(
-          {
-            error: (replyError as Error).message,
-            channelId: message.channel.id,
-          },
-          "Failed to send empty-reply notice",
-        );
-      }
-    }
   }
 
   private createChatTurnTimeoutError(): Error {
@@ -502,6 +535,226 @@ export class RuyiBot {
       ]);
     } finally {
       if (timeout) clearTimeout(timeout);
+    }
+  }
+
+  private async runEditedReplyWithWatchdog(
+    message: Message,
+    existingReplyIds: string[],
+    abortController: AbortController,
+    context: Record<string, unknown>,
+  ): Promise<void> {
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const signal = abortController.signal;
+    const presenceSession = Symbol(`edit:${message.id}`);
+    this.activePresenceSession = presenceSession;
+    this.schedulePresenceReset(presenceSession, context);
+    const session = new ChatSession(message.channel, (state) => {
+      if (this.activePresenceSession !== presenceSession) return;
+      this.setSessionPresence(message.author.displayName, state);
+    });
+    session.onThinking();
+
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        const error = this.createChatTurnTimeoutError();
+        abortController.abort(error);
+        botLogger.warn(
+          { ...context, timeoutMs: CHAT_TURN_TIMEOUT_MS },
+          "Edited message regeneration timed out",
+        );
+        reject(error);
+      }, CHAT_TURN_TIMEOUT_MS);
+    });
+
+    try {
+      const operation = this.regenerateEditedReply(
+        message,
+        existingReplyIds,
+        session,
+        signal,
+      );
+      await Promise.race([
+        operation,
+        timeoutPromise,
+        this.getAbortPromise(signal),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      session.cleanup();
+      this.resetPresenceSession(presenceSession);
+      this.clearPresenceResetTimer(presenceSession);
+      await this.deleteStatusEmbedSafely(session, context);
+      await this.deletePermissionPromptsSafely(message.id, context);
+    }
+  }
+
+  private async regenerateEditedReply(
+    message: Message,
+    existingReplyIds: string[],
+    session: ChatSession,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const toolCtx = this.buildToolContext(
+      message,
+      await fetchReferencedMessage(message),
+    );
+    const reply = await this.generateChatReply(
+      message,
+      session,
+      toolCtx,
+      signal,
+      EDIT_REGENERATION_PREFIX,
+      false,
+    );
+    this.throwIfAborted(signal);
+    await session.deleteStatusEmbed();
+
+    if (!reply) {
+      botLogger.warn(
+        {
+          user: message.author.username,
+          channelId: message.channel.id,
+          messageId: message.id,
+        },
+        "Edited message regeneration returned empty reply",
+      );
+      return;
+    }
+
+    const editedChunks = await editReplyChunks(
+      message,
+      existingReplyIds,
+      reply,
+      message.author.username,
+    );
+    await sessionManager.recordAssistantMessages(
+      message.channel.id,
+      message.id,
+      editedChunks.map((chunk) => chunk.id),
+    );
+  }
+
+  private async resolveUpdatedUserMessage(
+    message: Message | PartialMessage,
+  ): Promise<Message | null> {
+    try {
+      const resolved = message.partial ? await message.fetch() : message;
+      if (resolved.author.bot) return null;
+      return resolved;
+    } catch (error) {
+      botLogger.debug(
+        {
+          error: (error as Error).message,
+          channelId: message.channelId,
+          messageId: message.id,
+        },
+        "Could not fetch updated Discord message",
+      );
+      return null;
+    }
+  }
+
+  private async editExistingReplyWithNotice(
+    message: Message,
+    existingReplyIds: string[],
+  ): Promise<void> {
+    const editedChunks = await editReplyChunks(
+      message,
+      existingReplyIds,
+      SIDE_EFFECT_EDIT_NOTICE,
+      message.author.username,
+    );
+    if (editedChunks.length > 0) {
+      await sessionManager.recordAssistantMessages(
+        message.channel.id,
+        message.id,
+        editedChunks.map((chunk) => chunk.id),
+      );
+    }
+  }
+
+  private async handleMessageUpdate(
+    _oldMessage: Message | PartialMessage,
+    newMessage: Message | PartialMessage,
+  ): Promise<void> {
+    const message = await this.resolveUpdatedUserMessage(newMessage);
+    if (!message) return;
+
+    const formattedMessage = formatMessageForAI(message);
+    const update = await conversationContext.updateMessageContent(
+      message.channel.id,
+      message.id,
+      message.author.username,
+      formattedMessage,
+    );
+    if (!update.found || !update.changed || !update.oldContent) return;
+
+    const existingReplyIds =
+      await sessionManager.getAssistantReplyIdsForUserMessage(
+        message.channel.id,
+        message.id,
+      );
+    const sessionInvalidated = await sessionManager.invalidateIfUserMessageEdited(
+      message.channel.id,
+      message.id,
+    );
+    const assessment = await editClassifier.classifyEdit(
+      update.oldContent,
+      update.newContent,
+    );
+
+    botLogger.info(
+      {
+        user: message.author.username,
+        channelId: message.channel.id,
+        messageId: message.id,
+        foundReply: existingReplyIds.length > 0,
+        sessionInvalidated,
+        ...assessment,
+      },
+      "Processed edited Discord message",
+    );
+
+    if (!assessment.meaningful || existingReplyIds.length === 0) return;
+
+    this.abortActiveChatTurn(message.channel.id, message.id);
+
+    const context = {
+      user: message.author.username,
+      channelId: message.channel.id,
+      messageId: message.id,
+      reason: assessment.reason,
+    };
+
+    if (!assessment.shouldRegenerate) {
+      await this.editExistingReplyWithNotice(message, existingReplyIds);
+      return;
+    }
+
+    const abortController = new AbortController();
+    this.activeChatTurns.set(message.channel.id, abortController);
+    try {
+      await this.runEditedReplyWithWatchdog(
+        message,
+        existingReplyIds,
+        abortController,
+        context,
+      );
+    } catch (error) {
+      botLogger.error(
+        {
+          ...context,
+          error: (error as Error).message,
+          stack: (error as Error).stack,
+          name: (error as Error).name,
+        },
+        "Failed to regenerate reply after message edit",
+      );
+    } finally {
+      if (this.activeChatTurns.get(message.channel.id) === abortController) {
+        this.activeChatTurns.delete(message.channel.id);
+      }
     }
   }
 
@@ -673,6 +926,10 @@ export class RuyiBot {
 
     this.client.on(Events.MessageCreate, (message) => {
       void this.dispatchMessage(message);
+    });
+
+    this.client.on(Events.MessageUpdate, (oldMessage, newMessage) => {
+      void this.handleMessageUpdate(oldMessage, newMessage);
     });
 
     this.client.on(Events.MessageDelete, async (message) => {

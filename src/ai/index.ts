@@ -14,6 +14,7 @@ export { chatService, type ChatOptions } from "./chat";
 
 // Classifier
 export { replyClassifier } from "./classifier";
+export { editClassifier } from "./edit-classifier";
 
 // Permissions
 export { permissionManager, type PermissionContext } from "./permissions";
