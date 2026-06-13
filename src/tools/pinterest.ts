@@ -10,6 +10,7 @@ const SCRAPECREATORS_TIMEOUT_MS = 20_000;
 const MAX_PINTEREST_RESULTS = 20;
 const DEFAULT_PINTEREST_RESULTS = 10;
 const MAX_PINTEREST_RECOMMENDED_FOLLOW_UPS = 10;
+const TRIM_PINTEREST_RESPONSE = false;
 
 type PinterestAction = "user_boards" | "board_pins" | "pin" | "search";
 type ApiRecord = Record<string, unknown>;
@@ -148,6 +149,7 @@ const pinterestPinSchema = z.looseObject({
   seoDescription: maybeApiTextSchema,
   url: maybeApiTextSchema,
   seoUrl: maybeApiTextSchema,
+  seo_url: maybeApiTextSchema,
   images: pinterestImageMapSchema.nullish(),
   imageSpec_orig: maybePinterestImageValueSchema,
   imageSpec_original: maybePinterestImageValueSchema,
@@ -398,7 +400,7 @@ function summarizePin(pin: PinterestPin) {
     title: pin.title ?? pin.grid_title ?? pin.seoTitle ?? null,
     description:
       pin.description ?? pin.closeupDescription ?? pin.seoDescription ?? null,
-    url: toPinterestUrl(pin.url ?? pin.seoUrl),
+    url: toPinterestUrl(pin.url ?? pin.seoUrl ?? pin.seo_url),
     imageUrl: getPinImageUrl(pin),
     sourceUrl: pin.link ?? pin.richPinUrl ?? null,
     domain: pin.domain ?? pin.seoCanonicalDomain ?? null,
@@ -526,7 +528,7 @@ function buildScrapeCreatorsRequest(input: {
 }): ScrapeCreatorsRequest {
   const common = {
     cursor: input.cursor?.trim() || undefined,
-    trim: true,
+    trim: TRIM_PINTEREST_RESPONSE,
   };
 
   switch (input.action) {
@@ -558,7 +560,7 @@ function buildScrapeCreatorsRequest(input: {
           url: normalizePinUrl(
             requireValue(input.pinUrl, "pin_url is required for pin."),
           ),
-          trim: true,
+          trim: TRIM_PINTEREST_RESPONSE,
         },
       };
     case "search":
