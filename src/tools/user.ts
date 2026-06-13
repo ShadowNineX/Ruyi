@@ -2,18 +2,16 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { toolContextManager, formatError } from "../utils/types";
-
-const USER_ID_REGEX = /^\d{17,20}$/;
-const USER_MENTION_REGEX = /^<@!?(\d{17,20})>$/;
-
-function normalizeUserLookup(query: string): string {
-  return USER_MENTION_REGEX.exec(query.trim())?.[1] ?? query.trim();
-}
+import {
+  buildDiscordProfile,
+  normalizeUserLookup,
+  resolveGuildMember,
+} from "../utils/discord-profile";
 
 export const userInfoTool = tool({
   name: "get_user_info",
   description:
-    "Get information about a Discord user by username. The response includes Discord timestamp embeds (like <t:123456789:F>) for dates - use these EXACTLY as-is in your response so Discord renders them as interactive timestamps users can hover over.",
+    "Get information about a Discord user by username, including public profile image URLs and profile metadata. For avatar/banner visual questions, call this tool, then call describe_image with the relevant profile.availableImageTargets URL. Date responses include ISO strings; use Discord timestamps when replying.",
   parameters: z.object({
     username: z
       .string()
@@ -32,46 +30,34 @@ export const userInfoTool = tool({
       if (!lookup) {
         return { error: "Username cannot be empty" };
       }
-      const lowerLookup = lookup.toLowerCase();
-
-      let member = USER_ID_REGEX.test(lookup)
-        ? await guild.members.fetch(lookup).catch((error: unknown) => {
-            toolLogger.debug(
-              { username, error: formatError(error) },
-              "Could not fetch member by ID",
-            );
-            return null;
-          })
-        : null;
-
-      const members = member
-        ? null
-        : await guild.members.fetch({ query: lookup, limit: 10 });
-      member ??=
-        members?.find(
-          (m) =>
-            m.user.username.toLowerCase() === lowerLookup ||
-            m.displayName.toLowerCase() === lowerLookup ||
-            m.user.globalName?.toLowerCase() === lowerLookup,
-        ) ??
-        members?.first() ??
-        null;
+      const member = await resolveGuildMember(guild, lookup);
 
       if (!member) {
         toolLogger.warn({ username }, "User not found");
         return { error: "User not found: " + username };
       }
       const user = member.user;
+      const profile = await buildDiscordProfile(member);
       toolLogger.info({ username, found: member.user.username }, "Found user");
       return {
         username: user.username,
+        globalName: user.globalName,
         displayName: member.displayName,
         id: user.id,
         discriminator: user.discriminator,
         bot: user.bot,
-        avatar: user.avatarURL(),
-        banner: user.bannerURL(),
-        accentColor: user.accentColor,
+        profile,
+        avatar: profile.avatar.display.url,
+        banner: profile.banner.display.url,
+        accentColor: profile.accentColor,
+        hexAccentColor: profile.hexAccentColor,
+        avatarDecoration: profile.avatarDecoration.display,
+        nameplate: profile.collectibles.nameplate,
+        primaryGuild: profile.primaryGuild,
+        privacyNote:
+          "Only public Discord profile/member metadata visible to this bot is returned. Private account data and unexposed profile effects are not available.",
+        visualInspectionInstruction:
+          "If the user asks what an avatar, banner, decoration, nameplate, or badge looks like, call describe_image with the matching URL from profile.availableImageTargets. Do not infer visual details from the URL alone.",
         createdAt: user.createdAt?.toISOString(),
         joinedServer: member.joinedAt?.toISOString() ?? null,
         nickname: member.nickname,

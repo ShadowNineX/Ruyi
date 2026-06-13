@@ -49,6 +49,7 @@ export interface ChatOptions {
   session: ChatSession;
   chatHistory?: ChatMessage[];
   imageInputs?: MessageImageInput[];
+  profileContext?: string;
   messageId: string;
   signal?: AbortSignal;
   persistUserMessage?: boolean;
@@ -282,6 +283,7 @@ export class ChatService {
       session,
       chatHistory = [],
       imageInputs = [],
+      profileContext = "",
       messageId,
       signal,
       persistUserMessage = true,
@@ -324,7 +326,8 @@ export class ChatService {
 
       const uniqueImageInputCount = uniqueImageInputs(imageInputs).length;
       const imageInputSummary = formatImageInputSummary(imageInputs);
-      const enrichedMessage = `${dynamicContext}\n\nUser message from ${username}:\n${userMessage}${imageInputSummary}`;
+      const profileBlock = profileContext ? `\n\n${profileContext}` : "";
+      const enrichedMessage = `${dynamicContext}${profileBlock}\n\nUser message from ${username}:\n${userMessage}${imageInputSummary}`;
       const runnerInput = buildRunnerInput(enrichedMessage, imageInputs);
 
       if (env.DEBUG_PROMPTS) {
@@ -339,6 +342,7 @@ export class ChatService {
         {
           username,
           contextLength: dynamicContext.length,
+          profileContextLength: profileContext.length,
           historyCount: chatHistory.length,
           imageInputCount: imageInputs.length,
           uniqueImageInputCount,

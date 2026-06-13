@@ -49,6 +49,10 @@ import {
   sendReplyChunks,
   getErrorMessage,
 } from "./utils/messages";
+import {
+  buildDiscordProfile,
+  formatProfileContext,
+} from "./utils/discord-profile";
 import { messageSyncService } from "./services/message-sync";
 import { CHAT_TURN_TIMEOUT_MS, DISCORD_OPERATION_TIMEOUT_MS } from "./constants";
 
@@ -339,6 +343,7 @@ export class RuyiBot {
     this.throwIfAborted(signal);
 
     const combinedHistory = [...replyChain, ...chatHistory];
+    const profileContext = await this.buildCurrentUserProfileContext(message);
     const imageInputs = [
       ...getMessageImageInputs(message, "current message"),
       ...(toolCtx.referencedMessage
@@ -372,11 +377,32 @@ export class RuyiBot {
         session,
         chatHistory: combinedHistory,
         imageInputs,
+        profileContext,
         messageId: message.id,
         signal,
         persistUserMessage,
       }),
     );
+  }
+
+  private async buildCurrentUserProfileContext(message: Message): Promise<string> {
+    if (!message.guild) return "";
+
+    try {
+      const member = await message.guild.members.fetch(message.author.id);
+      const profile = await buildDiscordProfile(member);
+      return formatProfileContext(profile);
+    } catch (error) {
+      botLogger.debug(
+        {
+          error: (error as Error).message,
+          channelId: message.channel.id,
+          userId: message.author.id,
+        },
+        "Could not build current user profile context",
+      );
+      return "";
+    }
   }
 
   private createChatTurnTimeoutError(): Error {
