@@ -625,8 +625,9 @@ function buildDescribeImageCall(
     image_url: pin.imageUrl,
     question:
       `Visually inspect this Pinterest pin image. First transcribe any visible ` +
-      `text exactly, then describe the visual style/content relevant to rating ` +
-      `or comparing the pin. Pin: ${getPinLabel(pin)}`,
+      `text exactly if present, then give only the style/content details needed ` +
+      `to rate or compare the board. Keep this compact; do not write the final ` +
+      `board review here. Pin: ${getPinLabel(pin)}`,
     detail: "high",
     reason:
       "The user asked to view the Pinterest image itself, not just metadata.",
@@ -797,11 +798,13 @@ export const pinterestTool = tool({
           strategy: "bounded_representative_sample",
           max_recommended_follow_ups: MAX_PINTEREST_RECOMMENDED_FOLLOW_UPS,
           explanation:
-            "Pinterest boards can contain hundreds of pins. Do not try to inspect every image. Use the recommended sample count, report how many images were actually inspected, and ask the user to narrow the board only if they need exhaustive review.",
+            "Pinterest boards can contain hundreds of pins. Do not try to inspect every image. Use the recommended sample count, then mention the sample size briefly in the final answer only when relevant.",
         },
         recommended_next_tool_calls: recommendedNextToolCalls,
         image_inspection_note:
-          "For visual questions, ratings, or requests to view the images themselves, use returned_pin_count/direct_image_count and visual_sampling_policy to explain the sample size, then follow recommended_next_tool_calls. Do not attempt exhaustive inspection of large boards. Do not use fetch_url/web_search as a substitute for visual inspection.",
+          "For visual questions, ratings, or requests to view the images themselves, follow recommended_next_tool_calls. In the final answer, lead with the user's answer/rating instead of API counts. Mention counts compactly, such as 'I sampled 4 of 10 visible pins.' Do not dump every OCR result unless the user explicitly asks for a full transcript. Do not use fetch_url/web_search as a substitute for visual inspection.",
+        final_answer_guidance:
+          "Pinterest board ratings should feel like a natural opinion, not a tool report: rating first, 2-4 concise reasons, a few sampled quote/text examples only if useful, and any limitation/sample-size note at the end.",
         note: "Results are public Pinterest data from ScrapeCreators. Use nextCursor for the next page when present.",
       };
     } catch (error) {
