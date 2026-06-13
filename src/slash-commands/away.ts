@@ -120,29 +120,22 @@ async function buildStatusEmbed(
     AWAY_COLORS.neutral,
   ).addFields(
     {
-      name: scopeLabel,
-      value: formatEnabled(settings.scopeEnabled),
-      inline: true,
+      name: "Status",
+      value: [
+        `${scopeLabel}: ${formatEnabled(settings.scopeEnabled)}`,
+        `Your away pings: ${formatEnabled(userEnabled)}`,
+      ].join("\n"),
     },
     {
-      name: "Your away pings",
-      value: formatEnabled(userEnabled),
-      inline: true,
-    },
-    {
-      name: "Delay",
-      value: `${settings.delayMinutes} minutes`,
-      inline: true,
-    },
-    {
-      name: "Cooldown",
-      value: `${settings.cooldownHours} hours`,
-      inline: true,
+      name: "Timing",
+      value: [
+        `Delay: ${settings.delayMinutes} minutes`,
+        `Cooldown: ${settings.cooldownHours} hours`,
+      ].join("\n"),
     },
     {
       name: "Last ping to you",
       value: formatLastSent(lastSentAt),
-      inline: true,
     },
   );
 }
@@ -180,18 +173,13 @@ function buildTimingEmbed(scope: ConfigScope): EmbedBuilder {
     "Away Message Timing Updated",
     `Away-message timing for ${formatConfigScope(scope)} has been updated.`,
     AWAY_COLORS.success,
-  ).addFields(
-    {
-      name: "Delay",
-      value: `${settings.delayMinutes} minutes`,
-      inline: true,
-    },
-    {
-      name: "Cooldown",
-      value: `${settings.cooldownHours} hours`,
-      inline: true,
-    },
-  );
+  ).addFields({
+    name: "Timing",
+    value: [
+      `Delay: ${settings.delayMinutes} minutes`,
+      `Cooldown: ${settings.cooldownHours} hours`,
+    ].join("\n"),
+  });
 }
 
 function buildUserToggleEmbed(scope: ConfigScope, enabled: boolean): EmbedBuilder {
