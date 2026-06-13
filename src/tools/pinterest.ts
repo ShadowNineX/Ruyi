@@ -12,6 +12,7 @@ const DEFAULT_PINTEREST_RESULTS = 10;
 const MAX_PINTEREST_RECOMMENDED_FOLLOW_UPS = 10;
 
 type PinterestAction = "user_boards" | "board_pins" | "pin" | "search";
+type ApiRecord = Record<string, unknown>;
 
 type PinterestPinSummary = NonNullable<ReturnType<typeof summarizePin>>;
 type PinterestResponseSummary =
@@ -25,14 +26,67 @@ interface ScrapeCreatorsRequest {
   params: Record<string, string | boolean | undefined>;
 }
 
-const maybeStringSchema = z.string().nullish();
 const maybeNumberSchema = z.number().nullish();
 const maybeBooleanSchema = z.boolean().nullish();
 
+const TEXT_VALUE_KEYS = [
+  "text",
+  "title",
+  "name",
+  "value",
+  "label",
+  "content",
+  "description",
+  "display_name",
+  "full_name",
+] as const;
+
+function isApiRecord(value: unknown): value is ApiRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeApiText(value: unknown, depth = 0): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const text = normalizeApiText(entry, depth + 1);
+      if (text) return text;
+    }
+    return null;
+  }
+
+  if (!isApiRecord(value) || depth > 2) return null;
+
+  for (const key of TEXT_VALUE_KEYS) {
+    const text = normalizeApiText(value[key], depth + 1);
+    if (text) return text;
+  }
+
+  return null;
+}
+
+const maybeApiTextSchema = z
+  .union([
+    z.string(),
+    z.number(),
+    z.array(z.unknown()),
+    z.record(z.string(), z.unknown()),
+  ])
+  .nullish()
+  .transform((value) => normalizeApiText(value));
+
 const pinterestImageAssetSchema = z.looseObject({
-    url: maybeStringSchema,
-    width: maybeNumberSchema,
-    height: maybeNumberSchema,
+  url: maybeApiTextSchema,
+  width: maybeNumberSchema,
+  height: maybeNumberSchema,
 });
 
 const pinterestImageValueSchema = z.union([
@@ -44,105 +98,110 @@ const pinterestImageMapSchema = z.record(z.string(), pinterestImageValueSchema);
 const maybePinterestImageValueSchema = pinterestImageValueSchema.nullish();
 
 const pinterestUserSchema = z.looseObject({
-    id: maybeStringSchema,
-    entityId: maybeStringSchema,
-    username: maybeStringSchema,
-    full_name: maybeStringSchema,
-    fullName: maybeStringSchema,
-    follower_count: maybeNumberSchema,
-    followerCount: maybeNumberSchema,
-    image_large_url: maybeStringSchema,
-    imageLargeUrl: maybeStringSchema,
-    image_medium_url: maybeStringSchema,
-    imageMediumUrl: maybeStringSchema,
-    profileUrl: maybeStringSchema,
+  id: maybeApiTextSchema,
+  entityId: maybeApiTextSchema,
+  username: maybeApiTextSchema,
+  full_name: maybeApiTextSchema,
+  fullName: maybeApiTextSchema,
+  follower_count: maybeNumberSchema,
+  followerCount: maybeNumberSchema,
+  image_large_url: maybeApiTextSchema,
+  imageLargeUrl: maybeApiTextSchema,
+  image_medium_url: maybeApiTextSchema,
+  imageMediumUrl: maybeApiTextSchema,
+  profileUrl: maybeApiTextSchema,
 });
 
 const pinterestBoardSchema = z.looseObject({
-    id: maybeStringSchema,
-    name: maybeStringSchema,
-    description: maybeStringSchema,
-    url: maybeStringSchema,
-    pin_count: maybeNumberSchema,
-    pinCount: maybeNumberSchema,
-    follower_count: maybeNumberSchema,
-    followerCount: maybeNumberSchema,
-    section_count: maybeNumberSchema,
-    sectionCount: maybeNumberSchema,
-    privacy: maybeStringSchema,
-    is_collaborative: maybeBooleanSchema,
-    isCollaborative: maybeBooleanSchema,
-    image_cover_hd_url: maybeStringSchema,
-    image_cover_url: maybeStringSchema,
-    cover_images: pinterestImageMapSchema.nullish(),
-    images: pinterestImageMapSchema.nullish(),
-    owner: pinterestUserSchema.nullish(),
-    created_at: maybeStringSchema,
-    createdAt: maybeStringSchema,
-    board_order_modified_at: maybeStringSchema,
-    boardOrderModifiedAt: maybeStringSchema,
+  id: maybeApiTextSchema,
+  name: maybeApiTextSchema,
+  description: maybeApiTextSchema,
+  url: maybeApiTextSchema,
+  pin_count: maybeNumberSchema,
+  pinCount: maybeNumberSchema,
+  follower_count: maybeNumberSchema,
+  followerCount: maybeNumberSchema,
+  section_count: maybeNumberSchema,
+  sectionCount: maybeNumberSchema,
+  privacy: maybeApiTextSchema,
+  is_collaborative: maybeBooleanSchema,
+  isCollaborative: maybeBooleanSchema,
+  image_cover_hd_url: maybeApiTextSchema,
+  image_cover_url: maybeApiTextSchema,
+  cover_images: pinterestImageMapSchema.nullish(),
+  images: pinterestImageMapSchema.nullish(),
+  owner: pinterestUserSchema.nullish(),
+  created_at: maybeApiTextSchema,
+  createdAt: maybeApiTextSchema,
+  board_order_modified_at: maybeApiTextSchema,
+  boardOrderModifiedAt: maybeApiTextSchema,
 });
 
 const pinterestPinSchema = z.looseObject({
-    id: maybeStringSchema,
-    entityId: maybeStringSchema,
-    title: maybeStringSchema,
-    grid_title: maybeStringSchema,
-    seoTitle: maybeStringSchema,
-    description: maybeStringSchema,
-    closeupDescription: maybeStringSchema,
-    seoDescription: maybeStringSchema,
-    url: maybeStringSchema,
-    seoUrl: maybeStringSchema,
-    images: pinterestImageMapSchema.nullish(),
-    imageSpec_orig: maybePinterestImageValueSchema,
-    imageSpec_original: maybePinterestImageValueSchema,
-    imageSpec_736x: maybePinterestImageValueSchema,
-    imageSpec_600x315: maybePinterestImageValueSchema,
-    imageSpec_564x: maybePinterestImageValueSchema,
-    imageSpec_474x: maybePinterestImageValueSchema,
-    imageSpec_236x: maybePinterestImageValueSchema,
-    imageSpec_170x: maybePinterestImageValueSchema,
-    image736x: maybePinterestImageValueSchema,
-    image564x: maybePinterestImageValueSchema,
-    image474x: maybePinterestImageValueSchema,
-    image236x: maybePinterestImageValueSchema,
-    image_url: maybeStringSchema,
-    imageUrl: maybeStringSchema,
-    image: maybePinterestImageValueSchema,
-    thumbnail: maybePinterestImageValueSchema,
-    thumbnailUrl: maybeStringSchema,
-    thumbnail_url: maybeStringSchema,
-    link: maybeStringSchema,
-    richPinUrl: maybeStringSchema,
-    domain: maybeStringSchema,
-    seoCanonicalDomain: maybeStringSchema,
-    auto_alt_text: maybeStringSchema,
-    seo_alt_text: maybeStringSchema,
-    seoAltText: maybeStringSchema,
-    created_at: maybeStringSchema,
-    createdAt: maybeStringSchema,
-    repinCount: maybeNumberSchema,
-    shareCount: maybeNumberSchema,
-    board: pinterestBoardSchema.nullish(),
-    pinner: pinterestUserSchema.nullish(),
-    originPinner: pinterestUserSchema.nullish(),
+  id: maybeApiTextSchema,
+  entityId: maybeApiTextSchema,
+  title: maybeApiTextSchema,
+  grid_title: maybeApiTextSchema,
+  seoTitle: maybeApiTextSchema,
+  description: maybeApiTextSchema,
+  closeupDescription: maybeApiTextSchema,
+  seoDescription: maybeApiTextSchema,
+  url: maybeApiTextSchema,
+  seoUrl: maybeApiTextSchema,
+  images: pinterestImageMapSchema.nullish(),
+  imageSpec_orig: maybePinterestImageValueSchema,
+  imageSpec_original: maybePinterestImageValueSchema,
+  imageSpec_736x: maybePinterestImageValueSchema,
+  imageSpec_600x315: maybePinterestImageValueSchema,
+  imageSpec_564x: maybePinterestImageValueSchema,
+  imageSpec_474x: maybePinterestImageValueSchema,
+  imageSpec_236x: maybePinterestImageValueSchema,
+  imageSpec_170x: maybePinterestImageValueSchema,
+  image736x: maybePinterestImageValueSchema,
+  image564x: maybePinterestImageValueSchema,
+  image474x: maybePinterestImageValueSchema,
+  image236x: maybePinterestImageValueSchema,
+  image_url: maybeApiTextSchema,
+  imageUrl: maybeApiTextSchema,
+  image: maybePinterestImageValueSchema,
+  thumbnail: maybePinterestImageValueSchema,
+  thumbnailUrl: maybeApiTextSchema,
+  thumbnail_url: maybeApiTextSchema,
+  link: maybeApiTextSchema,
+  richPinUrl: maybeApiTextSchema,
+  domain: maybeApiTextSchema,
+  link_domain: maybeApiTextSchema,
+  seoCanonicalDomain: maybeApiTextSchema,
+  alt_text: maybeApiTextSchema,
+  auto_alt_text: maybeApiTextSchema,
+  seo_alt_text: maybeApiTextSchema,
+  seoAltText: maybeApiTextSchema,
+  created_at: maybeApiTextSchema,
+  createdAt: maybeApiTextSchema,
+  repin_count: maybeNumberSchema,
+  repinCount: maybeNumberSchema,
+  share_count: maybeNumberSchema,
+  shareCount: maybeNumberSchema,
+  board: pinterestBoardSchema.nullish(),
+  pinner: pinterestUserSchema.nullish(),
+  originPinner: pinterestUserSchema.nullish(),
+  native_creator: pinterestUserSchema.nullish(),
 });
 
 const pinterestBoardsResponseSchema = z.looseObject({
-    success: z.boolean().optional(),
-    boards: z.array(pinterestBoardSchema).default([]),
+  success: z.boolean().optional(),
+  boards: z.array(pinterestBoardSchema).default([]),
 });
 
 const pinterestPinsResponseSchema = z.looseObject({
-    success: z.boolean().optional(),
-    pins: z.array(pinterestPinSchema).default([]),
-    cursor: maybeStringSchema,
+  success: z.boolean().optional(),
+  pins: z.array(pinterestPinSchema).default([]),
+  cursor: maybeApiTextSchema,
 });
 
 const scrapeCreatorsErrorSchema = z.looseObject({
-    message: maybeStringSchema,
-    error: maybeStringSchema,
+  message: maybeApiTextSchema,
+  error: maybeApiTextSchema,
 });
 
 type PinterestImageValue = z.infer<typeof pinterestImageValueSchema>;
