@@ -3,6 +3,7 @@ export { calculatorTool } from "./calc";
 export { channelInfoTool } from "./channel";
 export { serverInfoTool } from "./server";
 export { userInfoTool } from "./user";
+export { resolveTimeTool } from "./time";
 export { manageRoleTool } from "./role";
 export { reactionTool } from "./reaction";
 export { pinTool } from "./pin";
@@ -32,6 +33,7 @@ import { calculatorTool } from "./calc";
 import { channelInfoTool } from "./channel";
 import { serverInfoTool } from "./server";
 import { userInfoTool } from "./user";
+import { resolveTimeTool } from "./time";
 import { manageRoleTool } from "./role";
 import { reactionTool } from "./reaction";
 import { pinTool } from "./pin";
@@ -86,6 +88,7 @@ const baseToolRegistry: readonly ToolRegistration[] = [
   { tool: channelInfoTool },
   { tool: serverInfoTool },
   { tool: userInfoTool },
+  { tool: resolveTimeTool },
   { tool: manageRoleTool },
   { tool: reactionTool },
   { tool: pinTool },

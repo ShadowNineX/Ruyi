@@ -1,7 +1,11 @@
-import { DateTime } from "luxon";
 import { AgentSession, Conversation, Memory } from "../db/models";
 import type { IMemory } from "../db/models/memory";
 import { aiLogger } from "../logger";
+import {
+  buildCurrentTemporalContext,
+  formatTemporalContext,
+  resolveTimeZone,
+} from "../utils/natural-time";
 import {
   AUTO_EXTRACT_COOLDOWN_MS,
   AUTO_EXTRACT_THRESHOLD,
@@ -222,6 +226,54 @@ export class ConversationContext {
     }
   }
 
+  private resolveMemoryTimeZone(
+    memory: Pick<IMemory, "key" | "value">,
+  ): { timeZone: string; source: string } | null {
+    const key = memory.key.toLowerCase();
+    const value = memory.value.trim();
+    if (!value) return null;
+
+    const timezoneKeys = new Set(["timezone", "time_zone", "iana_timezone"]);
+    const locationKeys = new Set(["location", "lives_in", "city", "country"]);
+    if (timezoneKeys.has(key)) {
+      const resolution = resolveTimeZone(value, value);
+      return resolution.source === "default"
+        ? null
+        : { timeZone: resolution.timeZone, source: memory.key };
+    }
+    if (locationKeys.has(key)) {
+      const resolution = resolveTimeZone(null, value);
+      return resolution.source === "default"
+        ? null
+        : { timeZone: resolution.timeZone, source: memory.key };
+    }
+
+    return null;
+  }
+
+  async fetchUserTimeZone(
+    username: string,
+  ): Promise<{ timeZone: string; source: string } | null> {
+    try {
+      const memories = await Memory.find(
+        { scope: "user", username },
+        { key: 1, value: 1, _id: 0 },
+      )
+        .sort({ pinned: -1, updatedAt: -1 })
+        .limit(30);
+
+      for (const memory of memories) {
+        const resolved = this.resolveMemoryTimeZone(memory);
+        if (resolved) return resolved;
+      }
+
+      return null;
+    } catch (error) {
+      aiLogger.error({ error, username }, "Failed to fetch user timezone");
+      return null;
+    }
+  }
+
   buildConversationHistory(chatHistory: ChatMessage[]): string {
     // The persistent AgentSession normally retains the bot's own turns.
     // We still surface a tiny slice of visible bot replies so a freshly
@@ -279,17 +331,21 @@ export class ConversationContext {
     chatHistory: ChatMessage[],
   ): Promise<string> {
     const historyContext = this.buildConversationHistory(chatHistory);
-    const [memoryContext, channelSummary] = await Promise.all([
+    const [memoryContext, channelSummary, userTimeZone] = await Promise.all([
       this.fetchUserMemories(username),
       this.fetchChannelSummary(channelId),
+      this.fetchUserTimeZone(username),
     ]);
-    const currentTime = DateTime.now().toUnixInteger();
+    const temporalContext = buildCurrentTemporalContext(userTimeZone?.timeZone);
     const isOngoing = this.isOngoingConversation(channelId);
 
     const contextLines = [
       `<context>`,
       `Current user: ${username}`,
-      `CURRENT TIME: Unix ${currentTime} — Use <t:${currentTime}:t> for time, <t:${currentTime}:F> for full datetime, <t:${currentTime}:R> for relative`,
+      formatTemporalContext(temporalContext),
+      userTimeZone
+        ? `User timezone inferred from memory "${userTimeZone.source}".`
+        : `User timezone memory not found; reference timezone is the bot runtime zone.`,
       channelSummary ? `${channelSummary}` : null,
       historyContext ? `${historyContext}` : null,
       memoryContext ? `${memoryContext}` : null,
