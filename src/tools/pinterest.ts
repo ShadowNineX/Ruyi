@@ -1,12 +1,13 @@
 import { tool } from "@openai/agents";
 import { z } from "zod";
-import { env } from "../env";
 import { toolLogger } from "../logger";
+import {
+  fetchScrapeCreatorsJson,
+  parseScrapeCreatorsSchema,
+} from "../services/scrapecreators-client";
 import { formatError } from "../utils/types";
 
-const SCRAPECREATORS_BASE_URL = "https://api.scrapecreators.com";
 const PINTEREST_BASE_URL = "https://www.pinterest.com";
-const SCRAPECREATORS_TIMEOUT_MS = 20_000;
 const MAX_PINTEREST_RESULTS = 20;
 const DEFAULT_PINTEREST_RESULTS = 10;
 const MAX_PINTEREST_RECOMMENDED_FOLLOW_UPS = 10;
@@ -199,11 +200,6 @@ const pinterestPinsResponseSchema = z.looseObject({
   success: z.boolean().optional(),
   pins: z.array(pinterestPinSchema).default([]),
   cursor: maybeApiTextSchema,
-});
-
-const scrapeCreatorsErrorSchema = z.looseObject({
-  message: maybeApiTextSchema,
-  error: maybeApiTextSchema,
 });
 
 type PinterestImageValue = z.infer<typeof pinterestImageValueSchema>;
@@ -413,85 +409,18 @@ function summarizePin(pin: PinterestPin) {
   };
 }
 
-function buildApiUrl(request: ScrapeCreatorsRequest): URL {
-  const url = new URL(request.path, SCRAPECREATORS_BASE_URL);
-  for (const [key, value] of Object.entries(request.params)) {
-    if (value === undefined) continue;
-    url.searchParams.set(key, String(value));
-  }
-  return url;
-}
-
 async function callScrapeCreators(
   request: ScrapeCreatorsRequest,
 ): Promise<unknown> {
-  if (!env.SCRAPECREATORS_API_KEY) {
-    throw new Error(
+  return fetchScrapeCreatorsJson({
+    path: request.path,
+    params: request.params,
+    notConfiguredMessage:
       "ScrapeCreators is not configured. Set SCRAPECREATORS_API_KEY to use Pinterest tools.",
-    );
-  }
-
-  const url = buildApiUrl(request);
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      "x-api-key": env.SCRAPECREATORS_API_KEY,
-    },
-    signal: AbortSignal.timeout(SCRAPECREATORS_TIMEOUT_MS),
+    requestFailedMessage: "ScrapeCreators request failed",
+    nonJsonLogMessage: "ScrapeCreators response body was not JSON",
+    logDebug: (context, message) => toolLogger.debug(context, message),
   });
-
-  const body = await parseJsonResponse(response);
-  if (!response.ok) {
-    const detail = getScrapeCreatorsErrorDetail(body);
-    throw new Error(
-      `ScrapeCreators request failed with HTTP ${response.status}${
-        detail ? `: ${detail}` : ""
-      }`,
-    );
-  }
-
-  return body;
-}
-
-async function parseJsonResponse(response: Response): Promise<unknown> {
-  try {
-    return (await response.json()) as unknown;
-  } catch (error) {
-    toolLogger.debug(
-      { status: response.status, error: formatError(error) },
-      "ScrapeCreators response body was not JSON",
-    );
-    return null;
-  }
-}
-
-function getScrapeCreatorsErrorDetail(body: unknown): string | null {
-  const result = scrapeCreatorsErrorSchema.safeParse(body);
-  if (!result.success) return null;
-  return result.data.message ?? result.data.error ?? null;
-}
-
-function formatZodIssues(error: z.ZodError): string {
-  return error.issues
-    .slice(0, 5)
-    .map((issue) => {
-      const path = issue.path.length > 0 ? issue.path.join(".") : "<root>";
-      return `${path}: ${issue.message}`;
-    })
-    .join("; ");
-}
-
-function parseWithSchema<T>(
-  schema: z.ZodType<T>,
-  body: unknown,
-  action: PinterestAction,
-): T {
-  const result = schema.safeParse(body);
-  if (result.success) return result.data;
-
-  throw new Error(
-    `ScrapeCreators ${action} response did not match the documented Pinterest schema: ${formatZodIssues(result.error)}`,
-  );
 }
 
 function parsePinterestResponse(
@@ -499,16 +428,28 @@ function parsePinterestResponse(
   body: unknown,
 ): PinterestParsedResponse {
   if (action === "user_boards") {
-    const data = parseWithSchema(pinterestBoardsResponseSchema, body, action);
+    const data = parseScrapeCreatorsSchema(
+      pinterestBoardsResponseSchema,
+      body,
+      `${action} Pinterest`,
+    );
     return { action, boards: data.boards, cursor: null };
   }
 
   if (action === "pin") {
-    const pin = parseWithSchema(pinterestPinSchema, body, action);
+    const pin = parseScrapeCreatorsSchema(
+      pinterestPinSchema,
+      body,
+      `${action} Pinterest`,
+    );
     return { action, pin, cursor: null };
   }
 
-  const data = parseWithSchema(pinterestPinsResponseSchema, body, action);
+  const data = parseScrapeCreatorsSchema(
+    pinterestPinsResponseSchema,
+    body,
+    `${action} Pinterest`,
+  );
   return { action, pins: data.pins, cursor: data.cursor ?? null };
 }
 

@@ -6,6 +6,10 @@ import { creditsCommand, handleCreditsCommand } from "./credits";
 import { awayCommand, handleAwayCommand } from "./away";
 import { modelCommand, handleModelCommand } from "./model";
 import {
+  scrapeCreatorsCommand,
+  handleScrapeCreatorsCommand,
+} from "./scrapecreators";
+import {
   searchProviderCommand,
   handleSearchProviderCommand,
 } from "./search-provider";
@@ -15,6 +19,7 @@ export const slashCommands = [
   modelCommand,
   searchProviderCommand,
   creditsCommand,
+  scrapeCreatorsCommand,
   awayCommand,
   smitheryCommand,
   memoriesCommand,
@@ -48,6 +53,9 @@ export async function handleSlashCommand(
       break;
     case "credits":
       await handleCreditsCommand(interaction);
+      break;
+    case "scrapecreators":
+      await handleScrapeCreatorsCommand(interaction);
       break;
     case "away":
       await handleAwayCommand(interaction);
