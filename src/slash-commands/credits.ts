@@ -87,14 +87,6 @@ function buildCreditsEmbed(summary: OpenAICostSummary): EmbedBuilder {
         name: "Balance",
         value: "OpenAI does not expose the billing overview balance through the public API.",
       },
-      {
-        name: "Parsed data",
-        value:
-          `${summary.bucketCount} daily bucket(s), ${summary.resultCount} cost result(s)` +
-          (summary.skippedResultCount > 0
-            ? `, ${summary.skippedResultCount} skipped malformed result(s)`
-            : ""),
-      },
     )
     .setTimestamp();
 }
