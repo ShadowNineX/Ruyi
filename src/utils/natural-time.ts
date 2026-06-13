@@ -1,6 +1,8 @@
+import { rawTimeZones } from "@vvo/tzdb";
 import { DateTime, IANAZone } from "luxon";
 
 const DEFAULT_REFERENCE_TIME_ZONE = getZoneName(DateTime.local());
+type TzdbTimeZone = (typeof rawTimeZones)[number];
 
 const WEEKDAYS = new Map([
   ["monday", 1],
@@ -22,49 +24,6 @@ const WEEKDAYS = new Map([
   ["sun", 7],
 ]);
 
-const LOCATION_TIME_ZONES = new Map([
-  ["north carolina", "America/New_York"],
-  ["nc", "America/New_York"],
-  ["new york", "America/New_York"],
-  ["nyc", "America/New_York"],
-  ["eastern time", "America/New_York"],
-  ["est", "America/New_York"],
-  ["edt", "America/New_York"],
-  ["california", "America/Los_Angeles"],
-  ["los angeles", "America/Los_Angeles"],
-  ["pacific time", "America/Los_Angeles"],
-  ["pst", "America/Los_Angeles"],
-  ["pdt", "America/Los_Angeles"],
-  ["texas", "America/Chicago"],
-  ["chicago", "America/Chicago"],
-  ["central time", "America/Chicago"],
-  ["cst", "America/Chicago"],
-  ["cdt", "America/Chicago"],
-  ["denver", "America/Denver"],
-  ["colorado", "America/Denver"],
-  ["mountain time", "America/Denver"],
-  ["mst", "America/Denver"],
-  ["mdt", "America/Denver"],
-  ["arizona", "America/Phoenix"],
-  ["phoenix", "America/Phoenix"],
-  ["alaska", "America/Anchorage"],
-  ["hawaii", "Pacific/Honolulu"],
-  ["sweden", "Europe/Stockholm"],
-  ["stockholm", "Europe/Stockholm"],
-  ["uk", "Europe/London"],
-  ["united kingdom", "Europe/London"],
-  ["england", "Europe/London"],
-  ["london", "Europe/London"],
-  ["japan", "Asia/Tokyo"],
-  ["tokyo", "Asia/Tokyo"],
-  ["korea", "Asia/Seoul"],
-  ["seoul", "Asia/Seoul"],
-  ["australia eastern", "Australia/Sydney"],
-  ["sydney", "Australia/Sydney"],
-  ["utc", "UTC"],
-  ["gmt", "UTC"],
-]);
-
 const DAY_PART_DEFAULT_HOURS = new Map([
   ["morning", 9],
   ["noon", 12],
@@ -76,7 +35,10 @@ const DAY_PART_DEFAULT_HOURS = new Map([
 
 export interface TimeZoneResolution {
   timeZone: string;
-  source: "default" | "provided_timezone" | "location_alias";
+  source:
+    | "default"
+    | "provided_timezone"
+    | "timezone_database";
   matchedLocation: string | null;
 }
 
@@ -91,6 +53,8 @@ export interface ParsedNaturalTime {
   resolvedIso: string;
   localDate: string;
   localTime: string;
+  localTime24h: string;
+  localTime12h: string;
   weekday: string;
   offsetName: string;
   dayPeriod: string;
@@ -114,11 +78,21 @@ export interface CurrentTemporalContext {
 
 function normalizeLookup(value: string): string {
   return value
+    .normalize("NFKD")
+    .replaceAll(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .replaceAll(/[_-]+/g, " ")
+    .replaceAll(/[/_-]+/g, " ")
     .replaceAll(/[^a-z0-9/+ ]+/g, "")
     .trim()
     .replaceAll(/\s+/g, " ");
+}
+
+function containsNormalizedPhrase(normalized: string, phrase: string): boolean {
+  return ` ${normalized} `.includes(` ${phrase} `);
+}
+
+function locationAliasMatches(normalized: string, alias: string): boolean {
+  return containsNormalizedPhrase(normalized, alias);
 }
 
 function getZoneName(dateTime: DateTime): string {
@@ -127,6 +101,157 @@ function getZoneName(dateTime: DateTime): string {
 
 function isValidTimeZone(value: string): boolean {
   return IANAZone.isValidZone(value);
+}
+
+function buildResolution(
+  timeZone: string,
+  source: TimeZoneResolution["source"],
+  matchedLocation: string | null,
+): TimeZoneResolution {
+  return { timeZone, source, matchedLocation };
+}
+
+function normalizedZoneNames(zone: TzdbTimeZone): string[] {
+  const names = [zone.name, ...zone.group];
+  return names.flatMap((name) => {
+    const leaf = name.split("/").at(-1) ?? name;
+    return [normalizeLookup(name), normalizeLookup(leaf)];
+  });
+}
+
+function normalizedZoneTerms(
+  zone: TzdbTimeZone,
+  options: { includeCountryCode: boolean },
+): string[] {
+  const terms = [
+    ...normalizedZoneNames(zone),
+    normalizeLookup(zone.countryName),
+    normalizeLookup(zone.alternativeName),
+    ...zone.mainCities.map(normalizeLookup),
+  ];
+
+  if (options.includeCountryCode) {
+    terms.push(normalizeLookup(zone.countryCode));
+  }
+
+  return [...new Set(terms.filter(Boolean))];
+}
+
+function uniqueZones(zones: TzdbTimeZone[]): TzdbTimeZone[] {
+  const seen = new Set<string>();
+  const unique: TzdbTimeZone[] = [];
+  for (const zone of zones) {
+    if (seen.has(zone.name)) continue;
+    seen.add(zone.name);
+    unique.push(zone);
+  }
+  return unique;
+}
+
+function resolveUniqueZone(
+  zones: TzdbTimeZone[],
+  matchedLocation: string,
+): TimeZoneResolution | null {
+  const unique = uniqueZones(zones);
+  if (unique.length !== 1) return null;
+
+  return buildResolution(
+    unique[0]?.name ?? DEFAULT_REFERENCE_TIME_ZONE,
+    "timezone_database",
+    matchedLocation,
+  );
+}
+
+function resolveDatabaseTarget(
+  target: string,
+  options: { includeCountryCode: boolean },
+): TimeZoneResolution | null {
+  const normalized = normalizeLookup(target);
+  if (!normalized) return null;
+
+  const exactCountryMatches = rawTimeZones.filter((zone) => {
+    const normalizedCountry = normalizeLookup(zone.countryName);
+    const normalizedCountryCode = normalizeLookup(zone.countryCode);
+    return (
+      normalizedCountry === normalized ||
+      (options.includeCountryCode && normalizedCountryCode === normalized)
+    );
+  });
+  const countryResolution = resolveUniqueZone(exactCountryMatches, target);
+  if (countryResolution) return countryResolution;
+
+  const exactTermMatches = rawTimeZones.filter((zone) =>
+    normalizedZoneTerms(zone, options).includes(normalized),
+  );
+  return resolveUniqueZone(exactTermMatches, target);
+}
+
+function resolveContainedDatabaseTarget(
+  normalizedExpression: string,
+): TimeZoneResolution | null {
+  const matches: { term: string; zone: TzdbTimeZone }[] = [];
+  for (const zone of rawTimeZones) {
+    for (const term of normalizedZoneTerms(zone, { includeCountryCode: false })) {
+      if (term.length < 3) continue;
+      if (locationAliasMatches(normalizedExpression, term)) {
+        matches.push({ term, zone });
+      }
+    }
+  }
+
+  matches.sort((left, right) => right.term.length - left.term.length);
+  const first = matches[0];
+  if (!first) return null;
+
+  const strongestMatches = matches.filter(
+    (match) => match.term.length === first.term.length,
+  );
+  return resolveUniqueZone(
+    strongestMatches.map((match) => match.zone),
+    first.term,
+  );
+}
+
+function extractTrailingLocationCandidate(
+  normalizedExpression: string,
+): string | null {
+  const markers = [" in ", " for ", " at "];
+  for (const marker of markers) {
+    const index = normalizedExpression.lastIndexOf(marker);
+    if (index >= 0) {
+      const candidate = normalizedExpression.slice(index + marker.length).trim();
+      return candidate || null;
+    }
+  }
+
+  return null;
+}
+
+function resolveCandidateDatabaseTarget(
+  candidate: string,
+): TimeZoneResolution | null {
+  const exactResolution = resolveDatabaseTarget(candidate, {
+    includeCountryCode: false,
+  });
+  if (exactResolution) return exactResolution;
+
+  const matchedTerms: { term: string; zone: TzdbTimeZone }[] = [];
+  for (const zone of rawTimeZones) {
+    for (const term of normalizedZoneTerms(zone, { includeCountryCode: false })) {
+      if (term.length < 3) continue;
+      if (locationAliasMatches(candidate, term)) {
+        matchedTerms.push({ term, zone });
+      }
+    }
+  }
+
+  const candidateHasMultipleWords = candidate.includes(" ");
+  if (candidateHasMultipleWords && matchedTerms.length < 2) return null;
+
+  return resolveUniqueZone(
+    matchedTerms.map((match) => match.zone),
+    matchedTerms.map((match) => match.term).join(" + "),
+  );
 }
 
 export function resolveTimeZone(
@@ -144,16 +269,6 @@ export function resolveTimeZone(
 
   const location = targetLocation?.trim();
   if (location) {
-    const normalized = normalizeLookup(location);
-    const aliasedZone = LOCATION_TIME_ZONES.get(normalized);
-    if (aliasedZone) {
-      return {
-        timeZone: aliasedZone,
-        source: "location_alias",
-        matchedLocation: location,
-      };
-    }
-
     if (isValidTimeZone(location)) {
       return {
         timeZone: location,
@@ -161,6 +276,11 @@ export function resolveTimeZone(
         matchedLocation: null,
       };
     }
+
+    const databaseResolution = resolveDatabaseTarget(location, {
+      includeCountryCode: true,
+    });
+    if (databaseResolution) return databaseResolution;
   }
 
   return {
@@ -168,6 +288,31 @@ export function resolveTimeZone(
     source: "default",
     matchedLocation: null,
   };
+}
+
+export function resolveTimeZoneFromExpression(
+  expression: string | null | undefined,
+): TimeZoneResolution | null {
+  const normalized = normalizeLookup(expression ?? "");
+  if (!normalized) return null;
+
+  const trailingCandidate = extractTrailingLocationCandidate(normalized);
+  if (trailingCandidate) {
+    return resolveCandidateDatabaseTarget(trailingCandidate);
+  }
+
+  return resolveContainedDatabaseTarget(normalized);
+}
+
+export function expressionMentionsTimeTarget(
+  expression: string | null | undefined,
+  target: string | null | undefined,
+): boolean {
+  const normalizedExpression = normalizeLookup(expression ?? "");
+  const normalizedTarget = normalizeLookup(target ?? "");
+  if (!normalizedExpression || !normalizedTarget) return false;
+
+  return locationAliasMatches(normalizedExpression, normalizedTarget);
 }
 
 function describeDayPeriod(dateTime: DateTime): string {
@@ -261,8 +406,8 @@ function resolveClockTime(
   expression: string,
   reference: DateTime,
   date: DateTime,
+  isCurrentTimeRequest: boolean,
 ): { resolved: DateTime; assumptions: string[]; daypartAssumed: boolean } {
-  const normalized = normalizeLookup(expression);
   const clockTime = parseClockTime(expression);
   if (clockTime) {
     const resolved = date.set({
@@ -296,10 +441,6 @@ function resolveClockTime(
     };
   }
 
-  const isCurrentTimeRequest =
-    normalized === "now" ||
-    normalized === "current time" ||
-    normalized === "what time is it";
   const isFutureDateOnly = !date.hasSame(reference, "day");
   if (isFutureDateOnly) {
     return {
@@ -340,6 +481,8 @@ function buildParsedTime(
     resolvedIso: target.toISO() ?? "",
     localDate: target.toFormat("yyyy-LL-dd"),
     localTime: target.toFormat("HH:mm"),
+    localTime24h: target.toFormat("HH:mm"),
+    localTime12h: target.toFormat("h:mm a"),
     weekday: target.toFormat("cccc"),
     offsetName: target.offsetNameShort ?? target.toFormat("ZZ"),
     dayPeriod: describeDayPeriod(target),
@@ -376,12 +519,19 @@ export function parseNaturalTime(
     options.targetTimeZone,
     options.targetLocation,
   );
-  const rawExpression = expression?.trim() || "now";
+  const trimmedExpression = expression?.trim() ?? "";
+  const isCurrentTimeRequest = trimmedExpression.length === 0;
+  const rawExpression = isCurrentTimeRequest ? "now" : trimmedExpression;
   const reference = (options.reference ?? DateTime.now()).setZone(
     resolution.timeZone,
   );
   const date = resolveDate(rawExpression, reference);
-  const clock = resolveClockTime(rawExpression, reference, date);
+  const clock = resolveClockTime(
+    rawExpression,
+    reference,
+    date,
+    isCurrentTimeRequest,
+  );
   const ambiguity = resolveTimeAmbiguity(clock);
 
   return buildParsedTime(

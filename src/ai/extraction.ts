@@ -50,7 +50,7 @@ Each item must be one of:
 
 RULES:
 - Extract at most ${AUTO_EXTRACT_MAX_FACTS} memory operations.
-- Only extract DURABLE facts about the named user (preferences, name, age, location, hobbies, accounts, jobs, projects, relationships, opinions held over time).
+- Only extract DURABLE facts about the named user (preferences, name, age, location, timezone, clock/time-format preferences, hobbies, accounts, jobs, projects, relationships, opinions held over time).
 - DO NOT extract: passing moods, current activities ("eating lunch"), one-off events, things said by other users, things the bot said.
 - Keys: short, snake_case, descriptive. Examples: "favorite_food", "occupation", "lastfm_username", "lives_in".
 - Values: concise, factual, max 200 chars. Strip "the user" / "they" — write the fact directly.
