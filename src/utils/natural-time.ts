@@ -419,7 +419,8 @@ export function formatTemporalContext(context: CurrentTemporalContext): string {
     `Reference timezone: ${context.timeZone} (${context.offsetName})`,
     `Reference local date/time: ${context.weekday}, ${context.localDate} ${context.localTime}`,
     `Reference day period: ${context.dayPeriod}`,
-    `Discord timestamp for this instant: ${context.discordDateTime}`,
+    `Discord time-only timestamp for this instant: ${context.discordTime}`,
+    `Discord date-time timestamp for this instant: ${context.discordDateTime}`,
     `Use resolve_time for natural-language dates, dayparts, or any location/timezone conversion.`,
     `Daypart defaults: morning=09:00, afternoon=14:00, evening=19:00, tonight/night=21:00 local time.`,
   ].join("\n");
