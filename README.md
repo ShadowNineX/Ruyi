@@ -37,6 +37,18 @@ TAVILY_API_KEY=tvly-your_tavily_api_key
 Use `/search-provider` in Discord to choose OpenAI or Tavily as the primary
 answer-mode search provider for that server or private chat.
 
+## Pinterest
+
+Ruyi can inspect public Pinterest profiles, boards, board pins, individual
+pins, and Pinterest search results through ScrapeCreators:
+
+```bash
+SCRAPECREATORS_API_KEY=your_scrapecreators_api_key
+```
+
+The `pinterest` tool is read-only and returns bounded summaries so board and
+pin lookups do not flood Discord.
+
 ## Smithery MCP
 
 Set `SMITHERY_API_KEY` and `SMITHERY_NAMESPACE`, restart the bot, then run

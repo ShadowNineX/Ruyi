@@ -55,6 +55,10 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((value) => value?.trim() || undefined),
+  SCRAPECREATORS_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
   SMITHERY_API_KEY: z
     .string()
     .optional()

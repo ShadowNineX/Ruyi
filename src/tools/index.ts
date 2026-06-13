@@ -15,6 +15,7 @@ import {
 import { embedTool } from "./embed";
 import { fetchUrlTool } from "./fetch";
 import { webSearchTool } from "./web-search";
+import { pinterestTool } from "./pinterest";
 import { reverseImageSearchTool } from "./reverse-image-search";
 import { generateImageTool } from "./image";
 import { describeImageTool } from "./vision";
@@ -70,6 +71,7 @@ const baseToolRegistry: readonly ToolRegistration[] = [
   { tool: embedTool, producesDiscordOutput: true },
   { tool: fetchUrlTool },
   { tool: webSearchTool, externalService: true },
+  { tool: pinterestTool, externalService: true },
   { tool: reverseImageSearchTool, externalService: true },
   { tool: generateImageTool, producesDiscordOutput: true },
   { tool: describeImageTool },
