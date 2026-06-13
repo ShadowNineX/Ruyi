@@ -10,8 +10,10 @@ import { getCurrentToolConfigScope } from "../utils/discord-scope";
 const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
 const DEFAULT_MAX_OUTPUT_TOKENS = 900;
 const REVERSE_IMAGE_MAX_OUTPUT_TOKENS = 350;
+const IMAGE_TEXT_INSTRUCTION =
+  "Always inspect the image for visible text first. If any text is present, transcribe it exactly as well as possible before describing other visual details. Preserve line breaks or reading order when useful, and say when text is unclear, cut off, or partially unreadable.";
 const DEFAULT_IMAGE_QUESTION =
-  "Describe this image clearly. Include visible text, important objects, people, layout, and anything that seems relevant to the user's request. If the image is ambiguous, say what is uncertain.";
+  "Describe this image clearly. Include important objects, people, layout, and anything that seems relevant to the user's request. If the image is ambiguous, say what is uncertain.";
 
 function normalizeImageUrl(value: string): string {
   const trimmed = value.trim();
@@ -42,10 +44,19 @@ function isImageDownloadFailure(errorMessage: string): boolean {
   );
 }
 
+function buildVisionPrompt(question: string | null): string {
+  const trimmedQuestion = question?.trim();
+  if (!trimmedQuestion) {
+    return `${IMAGE_TEXT_INSTRUCTION}\n\n${DEFAULT_IMAGE_QUESTION}`;
+  }
+
+  return `${IMAGE_TEXT_INSTRUCTION}\n\nUser's visual question:\n${trimmedQuestion}`;
+}
+
 export const describeImageTool = tool({
   name: "describe_image",
   description:
-    "Inspect an image from a Discord attachment/image URL using OpenAI vision. Use this when the user uploads an image, asks what is in an image, asks to read text from an image, or asks questions about visual details. Pass the attachment CDN URL from the message context.",
+    "Inspect an image from a Discord attachment/image URL using OpenAI vision. Always transcribes visible text when present, then answers visual questions or describes relevant details. Pass the attachment CDN URL from the message context.",
   parameters: z.object({
     image_url: z
       .string()
@@ -107,7 +118,7 @@ export const describeImageTool = tool({
       : DEFAULT_MAX_OUTPUT_TOKENS;
 
     try {
-      const prompt = question?.trim() || DEFAULT_IMAGE_QUESTION;
+      const prompt = buildVisionPrompt(question);
 
       toolLogger.info(
         {
