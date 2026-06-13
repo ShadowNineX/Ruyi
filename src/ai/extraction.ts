@@ -2,6 +2,7 @@ import { Agent } from "@openai/agents";
 import { z } from "zod";
 import { aiLogger } from "../logger";
 import { Memory } from "../db/models";
+import type { IMemory } from "../db/models/memory";
 import {
   AUTO_EXTRACT_HISTORY_WINDOW,
   AUTO_EXTRACT_MAX_FACTS,
@@ -12,32 +13,50 @@ import {
 import { conversationContext } from "./context";
 import { agentsRuntimeManager } from "./client";
 
-const ExtractedFactSchema = z.object({
+const ExtractedMemoryOperationSchema = z.object({
+  action: z.enum(["create", "update"]),
   key: z.string(),
   value: z.string(),
+  existing_key: z.string().nullable(),
 });
 
 const ExtractionOutputSchema = z.object({
-  facts: z.array(ExtractedFactSchema).max(AUTO_EXTRACT_MAX_FACTS),
+  memories: z.array(ExtractedMemoryOperationSchema).max(AUTO_EXTRACT_MAX_FACTS),
 });
 
-type ExtractedFact = z.infer<typeof ExtractedFactSchema>;
+type ExtractedMemoryOperation = z.infer<typeof ExtractedMemoryOperationSchema>;
+
+interface ExistingMemorySummary {
+  key: string;
+  value: string;
+  pinned: boolean;
+  source: "user" | "auto";
+}
+
+type MemoryOperationOutcome = "created" | "updated" | "skipped";
 
 const EXTRACTION_SYSTEM_PROMPT = `You extract durable personal facts about a Discord user from chat history.
 
 OUTPUT:
-Return structured output with a facts array. Use an empty array if there are no durable, non-trivial facts.
+Return structured output with a memories array. Use an empty array if there are no durable, non-trivial facts to create or update.
+Each item must be one of:
+- {"action":"create","key":"snake_case_key","value":"concise fact","existing_key":null}
+- {"action":"update","key":"existing_or_better_key","value":"updated concise fact","existing_key":"exact_existing_key"}
 
 RULES:
-- Extract at most ${AUTO_EXTRACT_MAX_FACTS} facts.
+- Extract at most ${AUTO_EXTRACT_MAX_FACTS} memory operations.
 - Only extract DURABLE facts about the named user (preferences, name, age, location, hobbies, accounts, jobs, projects, relationships, opinions held over time).
 - DO NOT extract: passing moods, current activities ("eating lunch"), one-off events, things said by other users, things the bot said.
 - Keys: short, snake_case, descriptive. Examples: "favorite_food", "occupation", "lastfm_username", "lives_in".
 - Values: concise, factual, max 200 chars. Strip "the user" / "they" — write the fact directly.
-- If a fact restates something already in "Existing memories", SKIP it.
+- If the fact restates an existing memory, SKIP it.
+- If the fact corrects, replaces, or refines an existing non-pinned memory, return action="update" with existing_key set to the exact existing key.
+- If the fact belongs under an existing key but the key name could be better, use action="update", existing_key as the old key, and key as the better snake_case key.
+- Pinned memories are protected user-curated facts. Do not update pinned memories; skip if new chat merely conflicts with a pinned memory.
+- Prefer updating an existing related memory over creating a new near-duplicate key.
 - If unsure whether something is durable, SKIP it. Quality > quantity.
 
-Example output shape: {"facts":[{"key":"favorite_color","value":"deep blue"},{"key":"occupation","value":"frontend engineer at a startup"}]}`;
+Example output shape: {"memories":[{"action":"create","key":"favorite_color","value":"deep blue","existing_key":null},{"action":"update","key":"occupation","value":"frontend engineer at a startup","existing_key":"job"}]}`;
 
 function trimEdgeUnderscores(value: string): string {
   let start = 0;
@@ -62,46 +81,181 @@ function truncateValue(value: string): string {
   return value.slice(0, MEMORY_VALUE_MAX_LEN - 3) + "...";
 }
 
-async function storeFact(username: string, fact: ExtractedFact): Promise<void> {
-  const key = sanitizeKey(fact.key);
-  if (!key) return;
-  const value = truncateValue(fact.value.trim());
-  if (!value) return;
+function normalizeComparable(value: string): string {
+  return value
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replaceAll(/\s+/g, " ");
+}
 
-  const existing = await Memory.findOne({ scope: "user", username, key });
-  if (existing?.pinned) return;
+function valuesLookDuplicate(first: string, second: string): boolean {
+  const normalizedFirst = normalizeComparable(first);
+  const normalizedSecond = normalizeComparable(second);
+  if (!normalizedFirst || !normalizedSecond) return false;
+  if (normalizedFirst === normalizedSecond) return true;
 
-  const count = await Memory.countDocuments({ scope: "user", username });
-  if (count >= USER_MEMORY_CAP) {
-    const oldest = await Memory.findOne({
-      scope: "user",
-      username,
-      pinned: false,
-    }).sort({ updatedAt: 1 });
-    if (oldest) await oldest.deleteOne();
-  }
-
-  await Memory.updateOne(
-    { key, scope: "user", username },
-    {
-      key,
-      value,
-      scope: "user",
-      username,
-      createdBy: username,
-      source: "auto",
-      pinned: false,
-    },
-    { upsert: true },
+  const shortestLength = Math.min(
+    normalizedFirst.length,
+    normalizedSecond.length,
+  );
+  return (
+    shortestLength >= 16 &&
+    (normalizedFirst.includes(normalizedSecond) ||
+      normalizedSecond.includes(normalizedFirst))
   );
 }
 
-async function fetchExistingMemoryKeys(username: string): Promise<string[]> {
+function valuesMatchExactly(first: string, second: string): boolean {
+  return normalizeComparable(first) === normalizeComparable(second);
+}
+
+function formatExistingMemories(memories: ExistingMemorySummary[]): string {
+  return memories
+    .map((memory) => {
+      const pinned = memory.pinned ? "[PINNED] " : "";
+      return `- ${pinned}${memory.key}: ${memory.value} (source: ${memory.source})`;
+    })
+    .join("\n");
+}
+
+async function evictOldestWritableMemory(
+  username: string,
+): Promise<boolean> {
+  const count = await Memory.countDocuments({ scope: "user", username });
+  if (count < USER_MEMORY_CAP) return true;
+
+  const oldest = await Memory.findOne({
+    scope: "user",
+    username,
+    pinned: false,
+  }).sort({ updatedAt: 1 });
+  if (!oldest) return false;
+
+  await oldest.deleteOne();
+  return true;
+}
+
+async function findRelatedMemory(
+  username: string,
+  key: string,
+  value: string,
+): Promise<IMemory | null> {
+  const memories = await Memory.find({ scope: "user", username })
+    .sort({ pinned: -1, updatedAt: -1 })
+    .limit(80);
+
+  return (
+    memories.find(
+      (memory) =>
+        sanitizeKey(memory.key) === key ||
+        valuesLookDuplicate(memory.value, value),
+    ) ?? null
+  );
+}
+
+async function findOperationTarget(
+  username: string,
+  key: string,
+  existingKey: string | null,
+  value: string,
+): Promise<IMemory | null> {
+  if (existingKey) {
+    const existing = await Memory.findOne({
+      scope: "user",
+      username,
+      key: existingKey,
+    });
+    if (existing) return existing;
+  }
+
+  const exact = await Memory.findOne({ scope: "user", username, key });
+  if (exact) return exact;
+
+  return findRelatedMemory(username, key, value);
+}
+
+async function renameMemoryIfNeeded(
+  memory: IMemory,
+  nextKey: string,
+): Promise<IMemory | null> {
+  if (memory.key === nextKey) return memory;
+
+  const conflicting = await Memory.findOne({
+    scope: memory.scope,
+    username: memory.username,
+    key: nextKey,
+  });
+  if (!conflicting) {
+    memory.key = nextKey;
+    return memory;
+  }
+  if (conflicting.pinned || String(conflicting._id) === String(memory._id)) {
+    return conflicting;
+  }
+
+  await memory.deleteOne();
+  return conflicting;
+}
+
+async function applyMemoryOperation(
+  username: string,
+  operation: ExtractedMemoryOperation,
+): Promise<MemoryOperationOutcome> {
+  const key = sanitizeKey(operation.key);
+  if (!key) return "skipped";
+  const value = truncateValue(operation.value.trim());
+  if (!value) return "skipped";
+  const existingKey = operation.existing_key
+    ? sanitizeKey(operation.existing_key)
+    : null;
+
+  const target = await findOperationTarget(username, key, existingKey, value);
+  if (target?.pinned) return "skipped";
+
+  if (target) {
+    if (target.key === key && valuesMatchExactly(target.value, value)) {
+      return "skipped";
+    }
+
+    const writableTarget = await renameMemoryIfNeeded(target, key);
+    if (!writableTarget || writableTarget.pinned) return "skipped";
+    writableTarget.value = value;
+    await writableTarget.save();
+    return "updated";
+  }
+
+  if (operation.action === "update") return "skipped";
+  if (!(await evictOldestWritableMemory(username))) return "skipped";
+
+  await Memory.create({
+    key,
+    value,
+    scope: "user",
+    username,
+    createdBy: username,
+    source: "auto",
+    pinned: false,
+  });
+  return "created";
+}
+
+async function fetchExistingMemories(
+  username: string,
+): Promise<ExistingMemorySummary[]> {
   const memories = await Memory.find(
     { scope: "user", username },
-    { key: 1, value: 1, _id: 0 },
-  ).limit(40);
-  return memories.map((memory) => `${memory.key}: ${memory.value}`);
+    { key: 1, value: 1, pinned: 1, source: 1, _id: 0 },
+  )
+    .sort({ pinned: -1, updatedAt: -1 })
+    .limit(40);
+
+  return memories.map((memory) => ({
+    key: memory.key,
+    value: memory.value,
+    pinned: memory.pinned,
+    source: memory.source,
+  }));
 }
 
 /**
@@ -125,11 +279,10 @@ export async function autoExtractFacts(
     return false;
   }
 
-  const existing = await fetchExistingMemoryKeys(username);
-  const existingList = existing.map((entry) => `- ${entry}`).join("\n");
+  const existing = await fetchExistingMemories(username);
   const existingBlock =
     existing.length > 0
-      ? `\nExisting memories about ${username} (do NOT restate these):\n${existingList}`
+      ? `\nExisting memories about ${username}:\n${formatExistingMemories(existing)}`
       : "";
 
   const userPrompt = `Target user: ${username}${existingBlock}
@@ -137,7 +290,7 @@ export async function autoExtractFacts(
 Chat history:
 ${history}
 
-Extract durable facts about ${username}. Return an empty facts array if nothing new.`;
+Extract durable facts about ${username}. Return create/update memory operations, or an empty memories array if nothing should change.`;
 
   const abortController = new AbortController();
   const timeout = setTimeout(
@@ -159,23 +312,42 @@ Extract durable facts about ${username}. Return an empty facts array if nothing 
       signal: abortController.signal,
     });
 
-    const facts =
-      result.finalOutput?.facts.slice(0, AUTO_EXTRACT_MAX_FACTS) ?? [];
-    aiLogger.info(
-      { username, channelId, count: facts.length },
-      "Auto-extraction completed",
-    );
+    const operations =
+      result.finalOutput?.memories.slice(0, AUTO_EXTRACT_MAX_FACTS) ?? [];
+    const outcomes: Record<MemoryOperationOutcome, number> = {
+      created: 0,
+      updated: 0,
+      skipped: 0,
+    };
 
-    for (const fact of facts) {
+    for (const operation of operations) {
       try {
-        await storeFact(username, fact);
+        const outcome = await applyMemoryOperation(username, operation);
+        outcomes[outcome] += 1;
       } catch (error) {
         aiLogger.warn(
-          { error: (error as Error).message, key: fact.key },
-          "Failed to store auto-extracted fact",
+          {
+            error: (error as Error).message,
+            action: operation.action,
+            key: operation.key,
+            existingKey: operation.existing_key,
+          },
+          "Failed to apply auto-extracted memory operation",
         );
       }
     }
+
+    aiLogger.info(
+      {
+        username,
+        channelId,
+        count: operations.length,
+        created: outcomes.created,
+        updated: outcomes.updated,
+        skipped: outcomes.skipped,
+      },
+      "Auto-extraction completed",
+    );
 
     return true;
   } catch (error) {
