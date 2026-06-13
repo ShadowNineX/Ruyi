@@ -40,7 +40,10 @@ const envSchema = z.object({
 
   // Optional (no default)
   LASTFM_API_KEY: z.string().optional(),
-  OPENAI_ADMIN_KEY: z.string().optional(),
+  OPENAI_ADMIN_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
   GITHUB_PERSONAL_ACCESS_TOKEN: z
     .string()
     .optional()

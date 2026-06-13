@@ -38,14 +38,18 @@ function formatDate(unixSeconds: number): string {
 }
 
 function formatCost(value: number, currency: string): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-  }).format(value);
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+    }).format(value);
+  } catch {
+    return `${value.toFixed(2)} ${currency}`;
+  }
 }
 
 function formatTotals(summary: OpenAICostSummary): string {
-  if (summary.totals.length === 0) return "$0.00";
+  if (summary.totals.length === 0) return "$0.00 reported";
 
   return summary.totals
     .map((total) => formatCost(total.value, total.currency))
@@ -82,6 +86,14 @@ function buildCreditsEmbed(summary: OpenAICostSummary): EmbedBuilder {
       {
         name: "Balance",
         value: "OpenAI does not expose the billing overview balance through the public API.",
+      },
+      {
+        name: "Parsed data",
+        value:
+          `${summary.bucketCount} daily bucket(s), ${summary.resultCount} cost result(s)` +
+          (summary.skippedResultCount > 0
+            ? `, ${summary.skippedResultCount} skipped malformed result(s)`
+            : ""),
       },
     )
     .setTimestamp();
@@ -141,6 +153,8 @@ export async function handleCreditsCommand(
     botLogger.error(
       {
         error: (error as Error).message,
+        name: (error as Error).name,
+        stack: (error as Error).stack,
         status:
           error instanceof OpenAIBillingError ? error.status : undefined,
         user: interaction.user.username,
