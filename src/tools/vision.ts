@@ -11,7 +11,7 @@ const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
 const DEFAULT_MAX_OUTPUT_TOKENS = 900;
 const REVERSE_IMAGE_MAX_OUTPUT_TOKENS = 350;
 const IMAGE_TEXT_INSTRUCTION =
-  "Always inspect the image for visible text first. If any text is present, transcribe it exactly as well as possible before describing other visual details. Preserve line breaks or reading order when useful, and say when text is unclear, cut off, or partially unreadable.";
+  "Silently check the image for visible text. If text is present, transcribe it exactly as well as possible before describing other visual details. Preserve line breaks or reading order when useful, and say when actual text is unclear, cut off, or partially unreadable. If no text is present, do not mention that absence; simply answer the user's visual question or describe the image.";
 const DEFAULT_IMAGE_QUESTION =
   "Describe this image clearly. Include important objects, people, layout, and anything that seems relevant to the user's request. If the image is ambiguous, say what is uncertain.";
 
@@ -56,7 +56,7 @@ function buildVisionPrompt(question: string | null): string {
 export const describeImageTool = tool({
   name: "describe_image",
   description:
-    "Inspect an image from a Discord attachment/image URL using OpenAI vision. Always transcribes visible text when present, then answers visual questions or describes relevant details. Pass the attachment CDN URL from the message context.",
+    "Inspect an image from a Discord attachment/image URL using OpenAI vision. Transcribes visible text only when present, then answers visual questions or describes relevant details. Pass the attachment CDN URL from the message context.",
   parameters: z.object({
     image_url: z
       .string()
