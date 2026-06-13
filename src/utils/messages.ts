@@ -321,15 +321,24 @@ export async function sendReplyChunks(
         const sent = await message.reply(chunk);
         sentChunks.push({ id: sent.id, content: chunk });
       } catch (error) {
-        // If reply fails (e.g., original message was deleted), send as regular message
         const err = error as { code?: number };
+        if (err.code === DISCORD_UNKNOWN_MESSAGE_CODE) {
+          botLogger.debug(
+            {
+              channelId: message.channel.id,
+              messageId: message.id,
+            },
+            "Original message was deleted before reply could be sent",
+          );
+          return sentChunks;
+        }
+
         if (
-          (err.code === DISCORD_UNKNOWN_MESSAGE_CODE ||
-            err.code === DISCORD_INVALID_FORM_BODY_CODE) &&
+          err.code === DISCORD_INVALID_FORM_BODY_CODE &&
           "send" in message.channel
         ) {
           botLogger.debug(
-            "Original message unavailable, sending as regular message",
+            "Reply reference was invalid, sending as regular message",
           );
           const sent = await message.channel.send(chunk);
           sentChunks.push({ id: sent.id, content: chunk });

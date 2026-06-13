@@ -69,6 +69,12 @@ interface PresenceActivity {
   type: ActivityType;
 }
 
+interface ActiveChatTurn {
+  controller: AbortController;
+  messageId: string;
+  referencedMessageId: string | null;
+}
+
 const EDIT_REGENERATION_PREFIX =
   "[The user edited this earlier Discord message after Ruyi already replied. Treat the edited message below as authoritative. Regenerate the answer for the edited version, but do not mention the edit unless it is necessary for clarity. Previous visible bot replies may reflect the pre-edit message.]";
 
@@ -77,7 +83,7 @@ const SIDE_EFFECT_EDIT_NOTICE =
 
 class RuyiBot {
   private activePresenceSession: symbol | null = null;
-  private readonly activeChatTurns = new Map<string, AbortController>();
+  private readonly activeChatTurns = new Map<string, ActiveChatTurn>();
   private presenceResetTimer: {
     session: symbol;
     timer: ReturnType<typeof setTimeout>;
@@ -289,6 +295,7 @@ class RuyiBot {
     this.throwIfAborted(signal);
 
     await session.deleteStatusEmbed();
+    this.throwIfAborted(signal);
 
     if (reply) {
       const sentChunks = await sendReplyChunks(message, reply, username);
@@ -437,6 +444,12 @@ class RuyiBot {
     return error;
   }
 
+  private createChatTurnSourceDeletedError(): Error {
+    const error = new Error("Chat turn source message was deleted");
+    error.name = "ChatTurnSourceDeletedError";
+    return error;
+  }
+
   private throwIfAborted(signal: AbortSignal): void {
     if (!signal.aborted) return;
     const reason: unknown = signal.reason;
@@ -451,13 +464,41 @@ class RuyiBot {
   }
 
   private abortActiveChatTurn(channelId: string, nextMessageId: string): void {
-    const activeController = this.activeChatTurns.get(channelId);
-    if (!activeController || activeController.signal.aborted) return;
+    const activeTurn = this.activeChatTurns.get(channelId);
+    if (!activeTurn || activeTurn.controller.signal.aborted) return;
 
-    activeController.abort(this.createChatTurnSupersededError());
+    activeTurn.controller.abort(this.createChatTurnSupersededError());
     botLogger.warn(
       { channelId, nextMessageId },
       "Aborted previous chat turn for newer direct request",
+    );
+  }
+
+  private abortActiveChatTurnIfMessagesDeleted(
+    channelId: string,
+    messageIds: string[],
+  ): void {
+    const activeTurn = this.activeChatTurns.get(channelId);
+    if (!activeTurn || activeTurn.controller.signal.aborted) return;
+
+    const deletedIds = new Set(messageIds);
+    const sourceDeleted = deletedIds.has(activeTurn.messageId);
+    const referenceDeleted = activeTurn.referencedMessageId
+      ? deletedIds.has(activeTurn.referencedMessageId)
+      : false;
+    if (!sourceDeleted && !referenceDeleted) return;
+
+    activeTurn.controller.abort(this.createChatTurnSourceDeletedError());
+    botLogger.warn(
+      {
+        channelId,
+        messageIds,
+        activeMessageId: activeTurn.messageId,
+        referencedMessageId: activeTurn.referencedMessageId,
+        sourceDeleted,
+        referenceDeleted,
+      },
+      "Aborted active chat turn because its Discord context was deleted",
     );
   }
 
@@ -652,6 +693,7 @@ class RuyiBot {
     );
     this.throwIfAborted(signal);
     await session.deleteStatusEmbed();
+    this.throwIfAborted(signal);
 
     if (!reply) {
       botLogger.warn(
@@ -778,7 +820,11 @@ class RuyiBot {
     }
 
     const abortController = new AbortController();
-    this.activeChatTurns.set(message.channel.id, abortController);
+    this.activeChatTurns.set(message.channel.id, {
+      controller: abortController,
+      messageId: message.id,
+      referencedMessageId: null,
+    });
     try {
       await this.runEditedReplyWithWatchdog(
         message,
@@ -797,7 +843,10 @@ class RuyiBot {
         "Failed to regenerate reply after message edit",
       );
     } finally {
-      if (this.activeChatTurns.get(message.channel.id) === abortController) {
+      if (
+        this.activeChatTurns.get(message.channel.id)?.controller ===
+        abortController
+      ) {
         this.activeChatTurns.delete(message.channel.id);
       }
     }
@@ -823,7 +872,11 @@ class RuyiBot {
     const displayName = message.author.displayName;
     const presenceSession = Symbol(message.id);
     const abortController = new AbortController();
-    this.activeChatTurns.set(message.channel.id, abortController);
+    this.activeChatTurns.set(message.channel.id, {
+      controller: abortController,
+      messageId: message.id,
+      referencedMessageId: referencedMessage?.id ?? null,
+    });
     this.activePresenceSession = presenceSession;
     this.schedulePresenceReset(presenceSession, {
       user: message.author.username,
@@ -855,6 +908,8 @@ class RuyiBot {
         name?: string;
       };
       const isSuperseded = err?.name === "ChatTurnSupersededError";
+      const isSourceDeleted = err?.name === "ChatTurnSourceDeletedError";
+      const isSilentAbort = isSuperseded || isSourceDeleted;
       const logPayload = {
         status: err?.status ?? err?.code,
         name: err?.name,
@@ -865,14 +920,17 @@ class RuyiBot {
         messageId: message.id,
       };
 
-      if (isSuperseded) {
-        botLogger.warn(logPayload, "Chat turn superseded");
+      if (isSilentAbort) {
+        botLogger.warn(
+          logPayload,
+          "Chat turn stopped without user-facing error",
+        );
       } else {
         botLogger.error(logPayload, "Failed to generate reply");
       }
 
       await this.deleteStatusEmbedSafely(session, logPayload);
-      if (!isSuperseded) {
+      if (!isSilentAbort) {
         await this.replySafely(message, getErrorMessage(error), logPayload);
       }
     } finally {
@@ -885,7 +943,10 @@ class RuyiBot {
         channelId: message.channel.id,
         messageId: message.id,
       });
-      if (this.activeChatTurns.get(message.channel.id) === abortController) {
+      if (
+        this.activeChatTurns.get(message.channel.id)?.controller ===
+        abortController
+      ) {
         this.activeChatTurns.delete(message.channel.id);
       }
     }
@@ -982,6 +1043,9 @@ class RuyiBot {
 
     this.client.on(Events.MessageDelete, async (message) => {
       if (message.id && message.channelId) {
+        this.abortActiveChatTurnIfMessagesDeleted(message.channelId, [
+          message.id,
+        ]);
         await messageSyncService.deleteMessage(message.channelId, message.id);
       }
     });
@@ -990,6 +1054,7 @@ class RuyiBot {
       const messageIds = [...messages.keys()];
       if (messageIds.length === 0) return;
 
+      this.abortActiveChatTurnIfMessagesDeleted(channel.id, messageIds);
       await messageSyncService.deleteMessages(channel.id, messageIds);
     });
   }
