@@ -46,4 +46,4 @@ export const AWAY_MESSAGE_MAX_LENGTH = 700;
 
 // Context tiering
 export const PINNED_CONTEXT_LIMIT = 15;
-export const RECENT_USER_MEMORY_LIMIT = 8;
+export const RECENT_USER_MEMORY_LIMIT = 20;

@@ -361,7 +361,7 @@ function collectMemoryLines(
 export const memoryRecallTool = tool({
   name: "memory_recall",
   description:
-    "Recall stored memories for the current Discord context and current user. Discord context and user identity are automatically detected.",
+    "Recall a broad list of stored memories for the current Discord context and current user. Use proactively when answering user-specific questions where older or non-loaded memories may matter, such as preferences, identity, accounts, relationships, hobbies, tailored advice, or 'what do you know/remember about me?'. Discord context and user identity are automatically detected.",
   parameters: z.object({}),
   execute: async () => {
     const user = getContextUserIdentity();
@@ -409,7 +409,7 @@ export const memoryRecallTool = tool({
 export const searchMemoryTool = tool({
   name: "search_memory",
   description:
-    "Search through stored memories by keyword. Searches current user's memories by default.",
+    "Search stored memories for the current Discord context and current user by keyword. Use proactively when the user asks about a specific remembered topic, person, place, account, preference, date, project, character, or relationship and the loaded context does not already contain the exact fact.",
   parameters: z.object({
     query: z
       .string()

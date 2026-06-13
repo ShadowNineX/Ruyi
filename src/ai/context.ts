@@ -15,6 +15,7 @@ import {
   ONGOING_CONVERSATION_WINDOW_MS,
   PINNED_CONTEXT_LIMIT,
   RECENT_USER_MEMORY_LIMIT,
+  USER_MEMORY_CAP,
 } from "../constants";
 
 export interface ChatMessage {
@@ -358,7 +359,7 @@ class ConversationContext {
         _id: 0,
       })
         .sort({ pinned: -1, updatedAt: -1 })
-        .limit(30);
+        .limit(USER_MEMORY_CAP);
 
       for (const memory of memories) {
         const resolved = this.resolveMemoryTimeZone(memory);
