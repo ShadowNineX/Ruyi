@@ -1,9 +1,12 @@
-import type {
-  Guild,
-  GuildMember,
-  HexColorString,
-  User,
-  UserFlagsString,
+import {
+  ActivityType,
+  type Activity,
+  type Guild,
+  type GuildMember,
+  type HexColorString,
+  type PresenceStatus,
+  type User,
+  type UserFlagsString,
 } from "discord.js";
 import { botLogger } from "../logger";
 
@@ -26,6 +29,41 @@ interface Nameplate {
   label: string;
   palette: string;
   skuId: string;
+}
+
+export interface DiscordActivityInfo {
+  name: string;
+  type: string;
+  typeCode: ActivityType;
+  summary: string;
+  details: string | null;
+  state: string | null;
+  emoji: string | null;
+  url: string | null;
+  applicationId: string | null;
+  createdAt: string | null;
+  startedAt: string | null;
+  endsAt: string | null;
+  party: {
+    id: string | null;
+    size: [number, number] | null;
+  } | null;
+  assets: {
+    largeImageUrl: string | null;
+    largeText: string | null;
+    smallImageUrl: string | null;
+    smallText: string | null;
+  } | null;
+}
+
+export interface DiscordPresenceInfo {
+  available: boolean;
+  status: PresenceStatus | null;
+  clientStatus: Record<string, string> | null;
+  activities: DiscordActivityInfo[];
+  primaryActivity: DiscordActivityInfo | null;
+  activeActivityCount: number;
+  unavailableReason: string | null;
 }
 
 export interface DiscordProfile {
@@ -81,8 +119,24 @@ type DiscordProfileBase = Omit<
   "availableImageTargets" | "unavailable"
 >;
 
+const ACTIVITY_TYPE_NAMES = ActivityType as unknown as Record<number, string>;
+
 export function normalizeUserLookup(query: string): string {
   return USER_MENTION_REGEX.exec(query.trim())?.[1] ?? query.trim();
+}
+
+export function unavailableDiscordPresence(
+  reason: string,
+): DiscordPresenceInfo {
+  return {
+    available: false,
+    status: null,
+    clientStatus: null,
+    activities: [],
+    primaryActivity: null,
+    activeActivityCount: 0,
+    unavailableReason: reason,
+  };
 }
 
 function image(url: string | null | undefined, description: string): ProfileImage {
@@ -113,6 +167,92 @@ function getNameplate(user: User): Nameplate | null {
     label: nameplate.label,
     palette: nameplate.palette,
     skuId: nameplate.skuId,
+  };
+}
+
+function toIso(date: Date | null | undefined): string | null {
+  return date?.toISOString() ?? null;
+}
+
+function activityTypeName(type: ActivityType): string {
+  return ACTIVITY_TYPE_NAMES[type] ?? String(type);
+}
+
+function activitySummary(
+  type: string,
+  name: string,
+  details: string | null,
+  state: string | null,
+  emoji: string | null,
+): string {
+  const parts = [`${type}: ${name}`];
+  if (details) parts.push(`details: ${details}`);
+  if (state) parts.push(`state: ${state}`);
+  if (emoji) parts.push(`emoji: ${emoji}`);
+  return parts.join(" | ");
+}
+
+function formatDiscordActivity(activity: Activity): DiscordActivityInfo {
+  const type = activityTypeName(activity.type);
+  const details = activity.details ?? null;
+  const state = activity.state ?? null;
+  const emoji = activity.emoji?.toString() ?? null;
+  const assets = activity.assets
+    ? {
+        largeImageUrl: activity.assets.largeImageURL(),
+        largeText: activity.assets.largeText,
+        smallImageUrl: activity.assets.smallImageURL(),
+        smallText: activity.assets.smallText,
+      }
+    : null;
+
+  return {
+    name: activity.name,
+    type,
+    typeCode: activity.type,
+    summary: activitySummary(type, activity.name, details, state, emoji),
+    details,
+    state,
+    emoji,
+    url: activity.url,
+    applicationId: activity.applicationId,
+    createdAt: toIso(activity.createdAt),
+    startedAt: toIso(activity.timestamps?.start),
+    endsAt: toIso(activity.timestamps?.end),
+    party: activity.party
+      ? {
+          id: activity.party.id,
+          size: activity.party.size ?? null,
+        }
+      : null,
+    assets,
+  };
+}
+
+export function buildDiscordPresence(member: GuildMember): DiscordPresenceInfo {
+  const presence = member.presence ?? member.guild.presences.cache.get(member.id);
+  if (!presence) {
+    return unavailableDiscordPresence(
+      "No current presence is visible for this server member. The user may be offline/invisible, uncached, or the Guild Presences intent may be unavailable.",
+    );
+  }
+
+  const activities = presence.activities.map(formatDiscordActivity);
+  const primaryActivity =
+    activities.find((activity) => activity.typeCode !== ActivityType.Custom) ??
+    activities[0] ??
+    null;
+
+  return {
+    available: true,
+    status: presence.status,
+    clientStatus: presence.clientStatus
+      ? { ...presence.clientStatus }
+      : null,
+    activities,
+    primaryActivity,
+    activeActivityCount: activities.length,
+    unavailableReason: null,
   };
 }
 
@@ -389,6 +529,29 @@ export function formatProfileContext(profile: DiscordProfile): string {
       ? `  - primary guild tag: ${profile.primaryGuild.tag}`
       : null,
     `  - Use get_user_info for full profile metadata; use describe_image on the relevant image URL when asked what an avatar/banner/decoration looks like.`,
+  ].filter((line): line is string => Boolean(line));
+
+  return lines.join("\n");
+}
+
+export function formatPresenceContext(
+  presence: DiscordPresenceInfo | null,
+): string {
+  if (!presence?.available) return "";
+
+  const lines = [
+    "Current Discord presence for the target user:",
+    presence.status ? `  - status: ${presence.status}` : null,
+    presence.clientStatus
+      ? `  - clients: ${Object.entries(presence.clientStatus)
+          .map(([client, status]) => `${client}=${status}`)
+          .join(", ")}`
+      : null,
+    presence.activities.length > 0
+      ? `  - activities: ${presence.activities
+          .map((activity) => activity.summary)
+          .join("; ")}`
+      : "  - activities: none visible",
   ].filter((line): line is string => Boolean(line));
 
   return lines.join("\n");

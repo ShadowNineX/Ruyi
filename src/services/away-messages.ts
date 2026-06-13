@@ -15,6 +15,11 @@ import { aiLogger, botLogger } from "../logger";
 import { agentsRuntimeManager } from "../ai/client";
 import { conversationContext, type ChatMessage } from "../ai/context";
 import { systemPrompt } from "../ai/prompt";
+import {
+  buildDiscordPresence,
+  formatPresenceContext,
+  type DiscordPresenceInfo,
+} from "../utils/discord-profile";
 import { formatMessageForAI, splitMessage } from "../utils/messages";
 
 interface AwayTimer {
@@ -195,7 +200,8 @@ class AwayMessageService {
         return;
       }
 
-      const generated = await this.generateAwayMessage(target);
+      const presence = await this.fetchTargetPresence(target);
+      const generated = await this.generateAwayMessage(target, presence);
       if (!generated) return;
 
       const chunks = splitMessage(
@@ -257,8 +263,30 @@ class AwayMessageService {
     );
   }
 
+  private async fetchTargetPresence(
+    target: AwayTarget,
+  ): Promise<DiscordPresenceInfo | null> {
+    if (!("guild" in target.channel)) return null;
+
+    try {
+      const member = await target.channel.guild.members.fetch(target.userId);
+      return buildDiscordPresence(member);
+    } catch (error) {
+      botLogger.debug(
+        {
+          error: (error as Error).message,
+          channelId: target.channelId,
+          userId: target.userId,
+        },
+        "Could not fetch Discord presence for away message",
+      );
+      return null;
+    }
+  }
+
   private async generateAwayMessage(
     target: AwayTarget,
+    presence: DiscordPresenceInfo | null,
   ): Promise<string | null> {
     const abortController = new AbortController();
     const timeout = setTimeout(
@@ -277,8 +305,10 @@ class AwayMessageService {
         ),
         this.fetchPersistedConversationSnippet(target.channelId),
       ]);
+      const presenceContext = formatPresenceContext(presence);
       const prompt = [
         dynamicContext,
+        presenceContext,
         recentHistory,
         `<instructions>\n${AWAY_MESSAGE_INSTRUCTIONS}\nTarget user display name: ${target.displayName}\n</instructions>`,
       ]

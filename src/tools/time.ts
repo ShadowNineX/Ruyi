@@ -217,12 +217,13 @@ export const resolveTimeTool = tool({
         };
       }
 
-      const preferredAnswerTime =
-        output_format === "24-hour"
-          ? parsed.localTime24h
-          : output_format === "12-hour"
-            ? parsed.localTime12h
-            : null;
+      let preferredAnswerTime: string | null = null;
+      if (output_format === "24-hour") {
+        preferredAnswerTime = parsed.localTime24h;
+      } else if (output_format === "12-hour") {
+        preferredAnswerTime = parsed.localTime12h;
+      }
+
       return {
         expression: parsed.expression,
         timezone: parsed.targetTimeZone,

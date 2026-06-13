@@ -307,6 +307,41 @@ export interface SentChunk {
   content: string;
 }
 
+async function sendInitialReplyChunk(
+  message: Message,
+  chunk: string,
+): Promise<SentChunk | null> {
+  try {
+    const sent = await message.reply(chunk);
+    return { id: sent.id, content: chunk };
+  } catch (error) {
+    const err = error as { code?: number };
+    if (err.code === DISCORD_UNKNOWN_MESSAGE_CODE) {
+      botLogger.debug(
+        {
+          channelId: message.channel.id,
+          messageId: message.id,
+        },
+        "Original message was deleted before reply could be sent",
+      );
+      return null;
+    }
+
+    if (
+      err.code === DISCORD_INVALID_FORM_BODY_CODE &&
+      "send" in message.channel
+    ) {
+      botLogger.debug(
+        "Reply reference was invalid, sending as regular message",
+      );
+      const sent = await message.channel.send(chunk);
+      return { id: sent.id, content: chunk };
+    }
+
+    throw error;
+  }
+}
+
 export async function sendReplyChunks(
   message: Message,
   reply: string,
@@ -317,35 +352,9 @@ export async function sendReplyChunks(
 
   for (const [i, chunk] of chunks.entries()) {
     if (i === 0) {
-      try {
-        const sent = await message.reply(chunk);
-        sentChunks.push({ id: sent.id, content: chunk });
-      } catch (error) {
-        const err = error as { code?: number };
-        if (err.code === DISCORD_UNKNOWN_MESSAGE_CODE) {
-          botLogger.debug(
-            {
-              channelId: message.channel.id,
-              messageId: message.id,
-            },
-            "Original message was deleted before reply could be sent",
-          );
-          return sentChunks;
-        }
-
-        if (
-          err.code === DISCORD_INVALID_FORM_BODY_CODE &&
-          "send" in message.channel
-        ) {
-          botLogger.debug(
-            "Reply reference was invalid, sending as regular message",
-          );
-          const sent = await message.channel.send(chunk);
-          sentChunks.push({ id: sent.id, content: chunk });
-        } else {
-          throw error;
-        }
-      }
+      const sent = await sendInitialReplyChunk(message, chunk);
+      if (!sent) return sentChunks;
+      sentChunks.push(sent);
     } else if ("send" in message.channel) {
       const sent = await message.channel.send(chunk);
       sentChunks.push({ id: sent.id, content: chunk });

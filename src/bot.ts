@@ -96,6 +96,7 @@ class RuyiBot {
       GatewayIntentBits.DirectMessages,
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.GuildMembers,
+      GatewayIntentBits.GuildPresences,
       GatewayIntentBits.GuildScheduledEvents,
     ],
     partials: [Partials.Channel],
