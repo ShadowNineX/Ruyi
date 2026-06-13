@@ -17,7 +17,11 @@ import { z } from "zod";
 import { allTools, externalToolNames } from "../tools";
 import { aiLogger } from "../logger";
 import { env } from "../env";
-import { AGENT_MAX_TURNS, CHAT_TIMEOUT_MS } from "../constants";
+import {
+  AGENT_MAX_TURNS,
+  CHAT_TIMEOUT_MS,
+  MAX_AGENT_IMAGE_INPUTS,
+} from "../constants";
 import type { ChatSession } from "../utils/chat-session";
 import type { MessageImageInput } from "../utils/messages";
 import { systemPrompt } from "./prompt";
@@ -32,7 +36,6 @@ import {
 import { autoExtractFacts } from "./extraction";
 
 const LOCAL_TOOL_NAMES = new Set(allTools.map((tool) => tool.name));
-const MAX_AGENT_IMAGE_INPUTS = 4;
 const ToolCallSchema = z.looseObject({
   arguments: z.unknown().optional(),
 });
@@ -197,13 +200,48 @@ function uniqueImageInputs(
   const unique: MessageImageInput[] = [];
 
   for (const imageInput of imageInputs) {
-    if (seen.has(imageInput.url)) continue;
-    seen.add(imageInput.url);
+    const dedupeKey = getImageDedupeKey(imageInput.url);
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
     unique.push(imageInput);
     if (unique.length >= MAX_AGENT_IMAGE_INPUTS) break;
   }
 
   return unique;
+}
+
+function getImageDedupeKey(imageUrl: string): string {
+  try {
+    const url = new URL(imageUrl);
+    if (
+      url.hostname === "cdn.discordapp.com" ||
+      url.hostname === "media.discordapp.net"
+    ) {
+      return `${url.origin}${url.pathname}`;
+    }
+  } catch (error) {
+    aiLogger.debug(
+      { error: (error as Error).message, imageUrl },
+      "Could not parse image URL for dedupe",
+    );
+  }
+
+  return imageUrl;
+}
+
+function formatImageInputSummary(imageInputs: MessageImageInput[]): string {
+  const uniqueInputs = uniqueImageInputs(imageInputs);
+  if (uniqueInputs.length === 0) return "";
+
+  const omittedCount = imageInputs.length - uniqueInputs.length;
+  const capNote =
+    omittedCount > 0
+      ? `\nOnly the first ${uniqueInputs.length} unique image inputs were attached natively; ${omittedCount} duplicate or over-limit image input(s) were omitted.`
+      : "";
+
+  return `\n\nNative image inputs attached for vision:${capNote}\n${uniqueInputs
+    .map((imageInput, index) => `${index + 1}. ${imageInput.source}`)
+    .join("\n")}`;
 }
 
 function buildRunnerInput(
@@ -282,14 +320,8 @@ export class ChatService {
       );
       throwIfAborted(signal);
 
-      const imageInputSummary =
-        imageInputs.length > 0
-          ? `\n\nNative image inputs attached for vision:\n${uniqueImageInputs(
-              imageInputs,
-            )
-              .map((imageInput, index) => `${index + 1}. ${imageInput.source}`)
-              .join("\n")}`
-          : "";
+      const uniqueImageInputCount = uniqueImageInputs(imageInputs).length;
+      const imageInputSummary = formatImageInputSummary(imageInputs);
       const enrichedMessage = `${dynamicContext}\n\nUser message from ${username}:\n${userMessage}${imageInputSummary}`;
       const runnerInput = buildRunnerInput(enrichedMessage, imageInputs);
 
@@ -307,6 +339,8 @@ export class ChatService {
           contextLength: dynamicContext.length,
           historyCount: chatHistory.length,
           imageInputCount: imageInputs.length,
+          uniqueImageInputCount,
+          maxImageInputs: MAX_AGENT_IMAGE_INPUTS,
           userMessagePreview: userMessage.slice(0, 80),
         },
         "Chat input received",

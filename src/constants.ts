@@ -11,6 +11,7 @@ export const CHAT_TURN_TIMEOUT_MS =
 export const DISCORD_OPERATION_TIMEOUT_MS = 10 * 1000;
 export const CHAT_TYPING_INTERVAL_MS = 8 * 1000;
 export const AGENT_MAX_TURNS = 20;
+export const MAX_AGENT_IMAGE_INPUTS = 10;
 
 export const ONGOING_CONVERSATION_WINDOW_MS = 30 * 60 * 1000;
 
