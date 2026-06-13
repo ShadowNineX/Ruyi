@@ -50,8 +50,10 @@ Each item must be one of:
 
 RULES:
 - Extract at most ${AUTO_EXTRACT_MAX_FACTS} memory operations.
-- Only extract DURABLE facts about the named user (preferences, name, age, location, timezone, clock/time-format preferences, hobbies, accounts, jobs, projects, relationships, opinions held over time).
-- DO NOT extract: passing moods, current activities ("eating lunch"), one-off events, things said by other users, things the bot said.
+- Only extract DURABLE facts about the named user (preferences, name, age, birthday, location, timezone, clock/time-format preferences, hobbies, stable account handles/usernames, jobs, relationships, opinions held over time).
+- DO NOT extract: passing moods, current activities ("eating lunch"), one-off events, temporary plans, todos, feature requests, bug reports, repositories/projects being discussed, quotes/boards/documents being edited, things said by other users, or things the bot said.
+- Work/project/repository/chat context is usually not personal memory. Store it only when the user explicitly asks Ruyi to remember it, or when it is clearly a stable personal account/handle/profile link rather than a task or project fact.
+- Avoid saving facts whose main purpose is helping the current coding/debugging task. Auto memory is for the user's long-term persona and preferences, not a project notebook.
 - Keys: short, snake_case, descriptive. Examples: "favorite_food", "occupation", "lastfm_username", "lives_in".
 - Values: concise, factual, max 200 chars. Strip "the user" / "they" — write the fact directly.
 - If the fact restates an existing memory, SKIP it.
@@ -127,7 +129,7 @@ async function findRelatedMemory(
 ): Promise<IMemory | null> {
   const memories = await Memory.find(buildUserMemoryFilter(userId, scope))
     .sort({ pinned: -1, updatedAt: -1 })
-    .limit(80);
+    .limit(USER_MEMORY_CAP);
 
   return (
     memories.find(
@@ -245,7 +247,7 @@ async function fetchExistingMemories(
     { key: 1, value: 1, pinned: 1, source: 1, _id: 0 },
   )
     .sort({ pinned: -1, updatedAt: -1 })
-    .limit(40);
+    .limit(USER_MEMORY_CAP);
 
   return memories.map((memory) => ({
     key: memory.key,

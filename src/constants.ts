@@ -24,7 +24,7 @@ export const AGENT_SESSION_SUMMARY_MAX_LEN = 4000;
 export const AGENT_SESSION_COMPACTION_TIMEOUT_MS = 60 * 1000;
 export const CHANNEL_SUMMARY_CONTEXT_MAX_LEN = 3000;
 
-export const USER_MEMORY_CAP = 30;
+export const USER_MEMORY_CAP = 100;
 export const MEMORY_VALUE_MAX_LEN = 500;
 
 // Auto-extraction (c.ai-style long-term memory)
