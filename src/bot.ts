@@ -54,6 +54,7 @@ import {
   formatProfileContext,
 } from "./utils/discord-profile";
 import { messageSyncService } from "./services/message-sync";
+import { awayMessageService } from "./services/away-messages";
 import { CHAT_TURN_TIMEOUT_MS, DISCORD_OPERATION_TIMEOUT_MS } from "./constants";
 
 interface ResponseGate {
@@ -295,6 +296,7 @@ export class RuyiBot {
         message.id,
         sentChunks.map((chunk) => chunk.id),
       );
+      await awayMessageService.scheduleAfterHandledTurn(message);
       return;
     }
 
@@ -320,7 +322,10 @@ export class RuyiBot {
           "Failed to send empty-reply notice",
         );
       }
+      return;
     }
+
+    await awayMessageService.scheduleAfterHandledTurn(message);
   }
 
   private async generateChatReply(
@@ -875,6 +880,7 @@ export class RuyiBot {
   private readonly dispatchMessage = async (message: Message): Promise<void> => {
     try {
       if (message.author.bot) return;
+      awayMessageService.recordUserActivity(message);
       if (await handleCommands(message)) return;
       await this.handleAIChat(message);
     } catch (error) {

@@ -3,6 +3,7 @@ import { prefixCommand, handlePrefixCommand } from "./prefix";
 import { smitheryCommand, handleSmitheryCommand } from "./smithery";
 import { memoriesCommand, handleMemoriesCommand } from "./memories";
 import { creditsCommand, handleCreditsCommand } from "./credits";
+import { awayCommand, handleAwayCommand } from "./away";
 import {
   modelCommand,
   handleModelCommand,
@@ -21,6 +22,7 @@ export const slashCommands = [
   modelCommand,
   searchProviderCommand,
   creditsCommand,
+  awayCommand,
   smitheryCommand,
   memoriesCommand,
 ];
@@ -53,6 +55,9 @@ export async function handleSlashCommand(
       break;
     case "credits":
       await handleCreditsCommand(interaction);
+      break;
+    case "away":
+      await handleAwayCommand(interaction);
       break;
     case "smithery":
       await handleSmitheryCommand(interaction);

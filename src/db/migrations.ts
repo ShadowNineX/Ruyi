@@ -11,6 +11,12 @@ const AGENT_SESSIONS_COLLECTION = "agentsessions";
 const CONVERSATIONS_COLLECTION = "conversations";
 const AI_MODEL_PRESET_CONFIG_KEY = "ai:model_preset";
 const DEFAULT_AI_MODEL_PRESET = "balanced";
+const AWAY_GLOBAL_ENABLED_CONFIG_KEY = "away:global_enabled";
+const AWAY_DELAY_MINUTES_CONFIG_KEY = "away:delay_minutes";
+const AWAY_COOLDOWN_HOURS_CONFIG_KEY = "away:cooldown_hours";
+const DEFAULT_AWAY_GLOBAL_ENABLED = "true";
+const DEFAULT_AWAY_DELAY_MINUTES = "120";
+const DEFAULT_AWAY_COOLDOWN_HOURS = "24";
 
 interface DatabaseMigration {
   id: string;
@@ -258,6 +264,30 @@ const migrations: DatabaseMigration[] = [
           agentSessionsInitialized,
         },
         "Message edit tracking state initialized",
+      );
+    },
+  },
+  {
+    id: "2026-06-13-initialize-away-message-settings",
+    run: async () => {
+      const defaults = [
+        [AWAY_GLOBAL_ENABLED_CONFIG_KEY, DEFAULT_AWAY_GLOBAL_ENABLED],
+        [AWAY_DELAY_MINUTES_CONFIG_KEY, DEFAULT_AWAY_DELAY_MINUTES],
+        [AWAY_COOLDOWN_HOURS_CONFIG_KEY, DEFAULT_AWAY_COOLDOWN_HOURS],
+      ] as const;
+
+      const initialized: string[] = [];
+      for (const [key, defaultValue] of defaults) {
+        const currentValue = await getConfigValue(key, "");
+        if (currentValue.length > 0) continue;
+
+        await setConfigValue(key, defaultValue);
+        initialized.push(key);
+      }
+
+      dbLogger.info(
+        { initialized },
+        "Away message configuration initialized",
       );
     },
   },

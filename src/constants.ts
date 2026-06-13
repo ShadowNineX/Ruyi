@@ -38,6 +38,16 @@ export const AUTO_EXTRACT_HISTORY_WINDOW = 25; // recent messages fed to extract
 export const AUTO_EXTRACT_MAX_FACTS = 5; // max facts stored per extraction pass
 export const AUTO_EXTRACT_TIMEOUT_MS = 45 * 1000;
 
+// Character.AI-style away messages
+export const AWAY_MESSAGE_GENERATION_TIMEOUT_MS = 45 * 1000;
+export const AWAY_MESSAGE_DEFAULT_DELAY_MINUTES = 120;
+export const AWAY_MESSAGE_DEFAULT_COOLDOWN_HOURS = 24;
+export const AWAY_MESSAGE_MIN_DELAY_MINUTES = 15;
+export const AWAY_MESSAGE_MAX_DELAY_MINUTES = 7 * 24 * 60;
+export const AWAY_MESSAGE_MIN_COOLDOWN_HOURS = 1;
+export const AWAY_MESSAGE_MAX_COOLDOWN_HOURS = 30 * 24;
+export const AWAY_MESSAGE_MAX_LENGTH = 700;
+
 // Context tiering
 export const PINNED_CONTEXT_LIMIT = 15;
 export const RECENT_USER_MEMORY_LIMIT = 8;
