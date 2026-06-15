@@ -311,8 +311,8 @@ Extract durable facts about ${username}. Return create/update memory operations,
     const agent = new Agent({
       name: "Ruyi memory extractor",
       instructions: EXTRACTION_SYSTEM_PROMPT,
-      model: agentsRuntimeManager.getModel(configScope),
-      modelSettings: agentsRuntimeManager.getModelSettings(configScope),
+      model: agentsRuntimeManager.getBackgroundTaskModel(),
+      modelSettings: agentsRuntimeManager.getBackgroundTaskModelSettings(),
       outputType: ExtractionOutputSchema,
     });
 

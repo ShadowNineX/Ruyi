@@ -1,6 +1,5 @@
 import { Agent } from "@openai/agents";
 import { z } from "zod";
-import type { ConfigScope } from "../config";
 import { CLASSIFIER_TIMEOUT_MS } from "../constants";
 import { aiLogger } from "../logger";
 import {
@@ -31,7 +30,6 @@ class EditClassifier {
   async classifyEdit(
     before: string,
     after: string,
-    configScope?: ConfigScope | null,
   ): Promise<MessageEditAssessment> {
     const deterministic = assessMessageEdit(before, after);
     if (deterministic.reason !== "needs_semantic_classification") {
@@ -48,8 +46,8 @@ class EditClassifier {
       const agent = new Agent({
         name: "Ruyi message edit classifier",
         instructions: EDIT_CLASSIFIER_PROMPT,
-        model: agentsRuntimeManager.getModel(configScope),
-        modelSettings: agentsRuntimeManager.getModelSettings(configScope),
+        model: agentsRuntimeManager.getBackgroundTaskModel(),
+        modelSettings: agentsRuntimeManager.getBackgroundTaskModelSettings(),
         outputType: EditDecisionSchema,
       });
 

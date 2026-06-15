@@ -1,6 +1,5 @@
 import { Agent } from "@openai/agents";
 import { z } from "zod";
-import type { ConfigScope } from "../config";
 import { aiLogger } from "../logger";
 import { CLASSIFIER_TIMEOUT_MS } from "../constants";
 import { conversationContext } from "./context";
@@ -173,7 +172,6 @@ class ReplyClassifier {
     message: string,
     botName: string,
     channelId?: string,
-    configScope?: ConfigScope | null,
   ): Promise<boolean> {
     const trimmedMessage = message.trim();
     const deterministicReason = getDeterministicReplyReason(
@@ -233,8 +231,8 @@ Set shouldReply to false if:
       const agent = new Agent({
         name: "Ruyi reply classifier",
         instructions: systemPromptText,
-        model: agentsRuntimeManager.getModel(configScope),
-        modelSettings: agentsRuntimeManager.getModelSettings(configScope),
+        model: agentsRuntimeManager.getBackgroundTaskModel(),
+        modelSettings: agentsRuntimeManager.getBackgroundTaskModelSettings(),
         outputType: ReplyDecisionSchema,
       });
 

@@ -242,7 +242,6 @@ class RuyiBot {
         classifierMessage,
         this.client.user?.username ?? "Bot",
         message.channel.id,
-        userConfigScope(message.guild?.id ?? null, message.author.id),
       );
       botLogger.debug(
         {
@@ -789,7 +788,6 @@ class RuyiBot {
     const assessment = await editClassifier.classifyEdit(
       update.oldContent,
       update.newContent,
-      userConfigScope(message.guild?.id ?? null, message.author.id),
     );
 
     botLogger.info(

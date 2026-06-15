@@ -1,4 +1,5 @@
 import {
+  getDefaultModelSettings,
   OpenAIProvider,
   Runner,
   setTracingDisabled,
@@ -7,6 +8,29 @@ import {
 import { aiLogger } from "../logger";
 import { env } from "../env";
 import { configManager, type ConfigScope } from "../config";
+import { BACKGROUND_TASK_MODEL } from "../constants";
+
+type ReasoningEffort = NonNullable<ModelSettings["reasoning"]>["effort"];
+type TextVerbosity = NonNullable<ModelSettings["text"]>["verbosity"];
+
+const BACKGROUND_TASK_REASONING_EFFORT: ReasoningEffort = "low";
+const BACKGROUND_TASK_TEXT_VERBOSITY: TextVerbosity = "low";
+
+function buildBackgroundTaskModelSettings(): ModelSettings {
+  const defaults = getDefaultModelSettings(BACKGROUND_TASK_MODEL);
+
+  return {
+    ...defaults,
+    reasoning: {
+      ...defaults.reasoning,
+      effort: BACKGROUND_TASK_REASONING_EFFORT,
+    },
+    text: {
+      ...defaults.text,
+      verbosity: BACKGROUND_TASK_TEXT_VERBOSITY,
+    },
+  };
+}
 
 class AgentsRuntimeManager {
   private provider: OpenAIProvider | null = null;
@@ -26,6 +50,14 @@ class AgentsRuntimeManager {
 
   getModelSettings(scope: ConfigScope | null | undefined): ModelSettings {
     return configManager.getModelSettings(scope);
+  }
+
+  getBackgroundTaskModel(): string {
+    return BACKGROUND_TASK_MODEL;
+  }
+
+  getBackgroundTaskModelSettings(): ModelSettings {
+    return buildBackgroundTaskModelSettings();
   }
 
   getProviderConfig() {
