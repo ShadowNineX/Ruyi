@@ -2,17 +2,10 @@ import {
   Agent,
   user,
   type AgentInputItem,
-  type ResponseStreamEvent,
-  type RunStreamEvent,
-  type StreamEventTextStream,
   type RunToolApprovalItem,
   type Tool,
   type ModelSettings,
 } from "@openai/agents";
-import {
-  isOpenAIChatCompletionsRawModelStreamEvent,
-  isOpenAIResponsesRawModelStreamEvent,
-} from "@openai/agents-openai";
 import type { TextBasedChannel } from "discord.js";
 import type { ConfigScope } from "../config";
 import { z } from "zod";
@@ -58,9 +51,12 @@ interface ChatOptions {
   persistUserMessage?: boolean;
 }
 
-interface StreamLike extends AsyncIterable<RunStreamEvent> {
+interface TextStreamResult {
   completed: Promise<void>;
   error: unknown;
+  toTextStream(options: {
+    compatibleWithNodeStreams: true;
+  }): AsyncIterable<unknown>;
 }
 
 interface ApprovalState {
@@ -103,130 +99,6 @@ function parseArguments(value: unknown): Record<string, unknown> {
 function getLifecycleToolArgs(toolCall: unknown): Record<string, unknown> {
   const parsed = ToolCallSchema.safeParse(toolCall);
   return parseArguments(parsed.success ? parsed.data.arguments : undefined);
-}
-
-function isCoreTextDeltaEvent(
-  event: ResponseStreamEvent,
-): event is StreamEventTextStream {
-  return event.type === "output_text_delta";
-}
-
-function isCoreTextDoneEvent(event: ResponseStreamEvent): boolean {
-  return event.type === "response_done";
-}
-
-function getCoreRawTextDelta(event: RunStreamEvent): string | null {
-  if (event.type !== "raw_model_stream_event") return null;
-  if (!isCoreTextDeltaEvent(event.data)) return null;
-
-  return event.data.delta;
-}
-
-function isCoreRawTextDeltaEvent(event: RunStreamEvent): boolean {
-  return (
-    event.type === "raw_model_stream_event" && isCoreTextDeltaEvent(event.data)
-  );
-}
-
-function isCoreRawTextDoneEvent(event: RunStreamEvent): boolean {
-  return (
-    event.type === "raw_model_stream_event" && isCoreTextDoneEvent(event.data)
-  );
-}
-
-function isResponseTextDeltaEvent(event: RunStreamEvent): boolean {
-  return (
-    isOpenAIResponsesRawModelStreamEvent(event) &&
-    (event.data.event.type === "response.output_text.delta" ||
-      event.data.event.type === "response.refusal.delta")
-  );
-}
-
-function getResponseTextDelta(event: RunStreamEvent): string | null {
-  if (!isOpenAIResponsesRawModelStreamEvent(event)) return null;
-
-  const rawEvent = event.data.event;
-  if (
-    rawEvent.type === "response.output_text.delta" ||
-    rawEvent.type === "response.refusal.delta"
-  ) {
-    return rawEvent.delta;
-  }
-
-  return null;
-}
-
-function isResponseTextDoneEvent(event: RunStreamEvent): boolean {
-  return (
-    isOpenAIResponsesRawModelStreamEvent(event) &&
-    (event.data.event.type === "response.output_text.done" ||
-      event.data.event.type === "response.refusal.done")
-  );
-}
-
-function isChatCompletionTextDeltaEvent(event: RunStreamEvent): boolean {
-  return (
-    isOpenAIChatCompletionsRawModelStreamEvent(event) &&
-    event.data.event.choices.some((choice) => {
-      const content = choice.delta.content;
-      const refusal =
-        "refusal" in choice.delta ? choice.delta.refusal : undefined;
-      return Boolean(content || refusal);
-    })
-  );
-}
-
-function getChatCompletionTextDelta(event: RunStreamEvent): string | null {
-  if (!isOpenAIChatCompletionsRawModelStreamEvent(event)) return null;
-
-  const delta = event.data.event.choices
-    .map((choice) => {
-      const content = choice.delta.content;
-      const refusal =
-        "refusal" in choice.delta ? choice.delta.refusal : undefined;
-      return content ?? refusal ?? "";
-    })
-    .join("");
-
-  return delta.length > 0 ? delta : null;
-}
-
-function isChatCompletionTextDoneEvent(event: RunStreamEvent): boolean {
-  return (
-    isOpenAIChatCompletionsRawModelStreamEvent(event) &&
-    event.data.event.choices.some((choice) => choice.finish_reason !== null)
-  );
-}
-
-function isTextDeltaEvent(event: RunStreamEvent): boolean {
-  return (
-    isCoreRawTextDeltaEvent(event) ||
-    isResponseTextDeltaEvent(event) ||
-    isChatCompletionTextDeltaEvent(event)
-  );
-}
-
-function getTextDelta(event: RunStreamEvent): string | null {
-  return (
-    getCoreRawTextDelta(event) ??
-    getResponseTextDelta(event) ??
-    getChatCompletionTextDelta(event)
-  );
-}
-
-function isTextDoneEvent(event: RunStreamEvent): boolean {
-  return (
-    isCoreRawTextDoneEvent(event) ||
-    isResponseTextDoneEvent(event) ||
-    isChatCompletionTextDoneEvent(event)
-  );
-}
-
-function isMessageOutputCreatedEvent(event: RunStreamEvent): boolean {
-  return (
-    event.type === "run_item_stream_event" &&
-    event.name === "message_output_created"
-  );
 }
 
 function formatToolDisplayName(toolName: string, isLocal: boolean): string {
@@ -564,31 +436,18 @@ class ChatService {
   }
 
   private async drainStream(
-    stream: StreamLike,
+    stream: TextStreamResult,
     session: ChatSession,
   ): Promise<void> {
-    for await (const event of stream) {
-      // Consuming the stream lets the SDK execute tool calls and surface
-      // lifecycle hooks; Discord typing is only shown while text is emitted.
-      this.handleStreamEvent(event, session);
+    const textStream = stream.toTextStream({ compatibleWithNodeStreams: true });
+    for await (const chunk of textStream) {
+      const delta = typeof chunk === "string" ? chunk : String(chunk);
+      session.onTextGenerationStart(delta);
     }
 
     session.onTextGenerationEnd();
     await stream.completed;
     if (stream.error) throw stream.error;
-  }
-
-  private handleStreamEvent(event: RunStreamEvent, session: ChatSession): void {
-    const textDelta = getTextDelta(event);
-    if (textDelta !== null) {
-      session.onTextGenerationStart(textDelta);
-    } else if (isTextDeltaEvent(event)) {
-      session.onTextGenerationStart();
-    } else if (isTextDoneEvent(event)) {
-      session.onTextGenerationEnd();
-    } else if (isMessageOutputCreatedEvent(event)) {
-      session.onTextGenerationStart();
-    }
   }
 
   private getToolDisplayName(toolName: string): {
