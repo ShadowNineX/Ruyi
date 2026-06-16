@@ -1,7 +1,7 @@
 import { createStore, type Store } from "@tanstack/store";
 import type { Message } from "discord.js";
 
-export type SessionStatus =
+type SessionStatus =
   | "thinking"
   | "generating"
   | "tool"

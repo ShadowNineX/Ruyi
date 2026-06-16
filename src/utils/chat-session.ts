@@ -12,13 +12,14 @@ import {
   type ChatSessionState,
   type PermissionPromptController,
   type PermissionPromptPayload,
-  type SessionStatus,
   type SessionStatusListener,
 } from "../stores";
 
 const TOOL_STATUS_REFRESH_INTERVAL_MS = 1000;
 
-function getStatusColor(status: SessionStatus): number {
+type ChatSessionStatus = ChatSessionState["status"];
+
+function getStatusColor(status: ChatSessionStatus): number {
   if (status === "tool") return 0x5865f2;
   if (status === "approval") return 0xffaa00;
   if (status === "error") return 0xff0000;
@@ -49,7 +50,7 @@ function formatToolList(toolCounts: Map<string, number>): string | null {
     .join("  ");
 }
 
-function getStatusTitle(status: SessionStatus): string {
+function getStatusTitle(status: ChatSessionStatus): string {
   if (status === "approval") return "Permission Needed";
   if (status === "tool") return "Using Tool";
   return "Tool Activity";
@@ -124,7 +125,7 @@ export class ChatSession {
     });
   }
 
-  private setStatus(status: SessionStatus, currentTool?: string): void {
+  private setStatus(status: ChatSessionStatus, currentTool?: string): void {
     const state = this.store.state;
     if (state.closed) return;
 
@@ -320,41 +321,35 @@ export class ChatSession {
 
   getPermissionPromptController(): PermissionPromptController {
     return {
-      showPrompt: (payload) => this.showPermissionPrompt(payload),
-      releasePrompt: () => this.releasePermissionPrompt(),
-    };
-  }
+      showPrompt: async (payload) => {
+        if (this.store.state.closed) return null;
 
-  private async showPermissionPrompt(
-    payload: PermissionPromptPayload,
-  ): Promise<Message | null> {
-    if (this.store.state.closed) return null;
+        setChatSessionPartial(this.store, { permissionPromptActive: true });
+        this.stopToolEmbedRefresh();
 
-    setChatSessionPartial(this.store, { permissionPromptActive: true });
-    this.stopToolEmbedRefresh();
+        const existingMessage = await this.getExistingStatusMessage();
+        if (existingMessage) {
+          try {
+            await existingMessage.edit(payload);
+            return existingMessage;
+          } catch (error) {
+            botLogger.debug(
+              { error: (error as Error)?.message },
+              "Status embed permission prompt update failed",
+            );
+            setChatSessionPartial(this.store, { statusMessage: null });
+          }
+        }
 
-    const existingMessage = await this.getExistingStatusMessage();
-    if (existingMessage) {
-      try {
-        await existingMessage.edit(payload);
-        return existingMessage;
-      } catch (error) {
-        botLogger.debug(
-          { error: (error as Error)?.message },
-          "Status embed permission prompt update failed",
+        const statusMessagePromise = this.createStatusMessage(payload);
+        return this.resolveStatusMessagePromise(
+          this.trackStatusMessagePromise(statusMessagePromise),
         );
-        setChatSessionPartial(this.store, { statusMessage: null });
-      }
-    }
-
-    const statusMessagePromise = this.createStatusMessage(payload);
-    return this.resolveStatusMessagePromise(
-      this.trackStatusMessagePromise(statusMessagePromise),
-    );
-  }
-
-  private releasePermissionPrompt(): void {
-    setChatSessionPartial(this.store, { permissionPromptActive: false });
+      },
+      releasePrompt: () => {
+        setChatSessionPartial(this.store, { permissionPromptActive: false });
+      },
+    };
   }
 
   private async deleteToolEmbed(): Promise<void> {

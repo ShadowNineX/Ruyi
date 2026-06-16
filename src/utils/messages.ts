@@ -195,21 +195,49 @@ export function formatMessageForAI(message: Message): string {
   return sections.length > 0 ? sections.join("\n\n") : "[no text content]";
 }
 
-// Patterns for content that should not be split
-const PROTECTED_PATTERNS = [
+interface ProtectedRange {
+  start: number;
+  end: number;
+}
+
+// Regex patterns for content that should not be split.
+const REGEX_PROTECTED_PATTERNS = [
   /https?:\/\/[^\s\])<>]+/g, // URLs
-  /\[[^\]]*\]\([^)]+\)/g, // Markdown links
   /```[\s\S]*?```/g, // Code blocks
   /`[^`]+`/g, // Inline code
 ];
 
-// Find all ranges in the text that should not be split
-function findProtectedRanges(
-  text: string,
-): Array<{ start: number; end: number }> {
-  const ranges: Array<{ start: number; end: number }> = [];
+function findMarkdownLinkRanges(text: string): ProtectedRange[] {
+  const ranges: ProtectedRange[] = [];
+  let index = 0;
 
-  for (const pattern of PROTECTED_PATTERNS) {
+  while (index < text.length) {
+    const labelStart = text.indexOf("[", index);
+    if (labelStart === -1) break;
+
+    const labelEnd = text.indexOf("]", labelStart + 1);
+    if (labelEnd === -1) break;
+
+    if (text[labelEnd + 1] !== "(") {
+      index = labelStart + 1;
+      continue;
+    }
+
+    const urlEnd = text.indexOf(")", labelEnd + 2);
+    if (urlEnd === -1) break;
+
+    ranges.push({ start: labelStart, end: urlEnd + 1 });
+    index = urlEnd + 1;
+  }
+
+  return ranges;
+}
+
+// Find all ranges in the text that should not be split
+function findProtectedRanges(text: string): ProtectedRange[] {
+  const ranges: ProtectedRange[] = findMarkdownLinkRanges(text);
+
+  for (const pattern of REGEX_PROTECTED_PATTERNS) {
     pattern.lastIndex = 0;
     let match;
     while ((match = pattern.exec(text)) !== null) {
@@ -223,7 +251,7 @@ function findProtectedRanges(
 // Check if an index falls within any protected range
 function isIndexProtected(
   index: number,
-  ranges: Array<{ start: number; end: number }>,
+  ranges: ProtectedRange[],
 ): boolean {
   return ranges.some((range) => index > range.start && index < range.end);
 }
@@ -231,7 +259,7 @@ function isIndexProtected(
 // Find the nearest protected range that the index falls within
 function findProtectedRangeStart(
   index: number,
-  ranges: Array<{ start: number; end: number }>,
+  ranges: ProtectedRange[],
 ): number | null {
   for (const range of ranges) {
     if (index > range.start && index < range.end) {
@@ -245,7 +273,7 @@ function findProtectedRangeStart(
 function findSafeSplitPoint(
   text: string,
   maxLength: number,
-  protectedRanges: Array<{ start: number; end: number }>,
+  protectedRanges: ProtectedRange[],
 ): number {
   let splitIndex = maxLength;
 
