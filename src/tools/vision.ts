@@ -5,7 +5,7 @@ import { env } from "../env";
 import { toolLogger } from "../logger";
 import { formatError, toolContextManager } from "../utils/types";
 import { configManager } from "../config";
-import { getCurrentToolConfigScope } from "../utils/discord-scope";
+import { getCurrentToolConfigScope } from "../utils/tool-config-scope";
 
 const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
 const DEFAULT_MAX_OUTPUT_TOKENS = 900;

@@ -1,8 +1,8 @@
-import mongoose, { Schema, type Document } from "mongoose";
+import mongoose, { Schema, type Document, type Model } from "mongoose";
 
 /** Supported Smithery server IDs. */
 export type SmitheryServerId = "youtube";
-export type SmitheryConnectionScopeKind = "guild" | "dm";
+export type SmitheryConnectionScopeKind = "discord:guild" | "discord:dm";
 
 export interface SmitheryConnectionScope {
   kind: SmitheryConnectionScopeKind;
@@ -31,7 +31,11 @@ export interface ISmitheryConnection extends Document {
 
 const SmitheryConnectionSchema = new Schema<ISmitheryConnection>(
   {
-    scopeKind: { type: String, enum: ["guild", "dm"], required: true },
+    scopeKind: {
+      type: String,
+      enum: ["discord:guild", "discord:dm"],
+      required: true,
+    },
     scopeId: { type: String, required: true },
     serverId: { type: String, required: true },
     connectionId: { type: String, required: true, unique: true },
@@ -48,10 +52,20 @@ SmitheryConnectionSchema.index(
 );
 SmitheryConnectionSchema.index({ scopeKind: 1, scopeId: 1, status: 1 });
 
-const SmitheryConnection = mongoose.model<ISmitheryConnection>(
-  "SmitheryConnection",
-  SmitheryConnectionSchema,
-);
+const SmitheryConnection: Model<ISmitheryConnection> =
+  (mongoose.models.SmitheryConnection as
+    | Model<ISmitheryConnection>
+    | undefined) ??
+  mongoose.model<ISmitheryConnection>(
+    "SmitheryConnection",
+    SmitheryConnectionSchema,
+  );
+
+export function isSmitheryConnectionScope(
+  scope: { kind: string; id: string },
+): scope is SmitheryConnectionScope {
+  return scope.kind === "discord:guild" || scope.kind === "discord:dm";
+}
 
 function scopeFilter(scope: SmitheryConnectionScope) {
   return { scopeKind: scope.kind, scopeId: scope.id };

@@ -59,6 +59,22 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((value) => value?.trim() || undefined),
+  STEAM_REFRESH_TOKEN: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
+  STEAM_BOT_STEAM_ID64: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
+  STEAM_OWNER_STEAM_ID64: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
+  OWNER_DISCORD_USER_ID: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
   SMITHERY_API_KEY: z
     .string()
     .optional()
@@ -73,6 +89,31 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((v) => v === "1" || v === "true"),
+}).superRefine((value, ctx) => {
+  const steamValues = [
+    value.STEAM_REFRESH_TOKEN,
+    value.STEAM_BOT_STEAM_ID64,
+    value.STEAM_OWNER_STEAM_ID64,
+    value.OWNER_DISCORD_USER_ID,
+  ];
+  const hasAnySteamConfig = steamValues.some(Boolean);
+  const hasAllSteamConfig = steamValues.every(Boolean);
+  if (!hasAnySteamConfig || hasAllSteamConfig) return;
+
+  for (const key of [
+    "STEAM_REFRESH_TOKEN",
+    "STEAM_BOT_STEAM_ID64",
+    "STEAM_OWNER_STEAM_ID64",
+    "OWNER_DISCORD_USER_ID",
+  ] as const) {
+    if (value[key]) continue;
+    ctx.addIssue({
+      code: "custom",
+      path: [key],
+      message:
+        "Steam integration requires STEAM_REFRESH_TOKEN, STEAM_BOT_STEAM_ID64, STEAM_OWNER_STEAM_ID64, and OWNER_DISCORD_USER_ID together",
+    });
+  }
 });
 
 type Env = z.infer<typeof envSchema>;

@@ -5,7 +5,7 @@ import { aiLogger } from "../logger";
 import {
   assessMessageEdit,
   type MessageEditAssessment,
-} from "../utils/message-edits";
+} from "../discord/utils/message-edits";
 import { agentsRuntimeManager } from "./client";
 
 const EditDecisionSchema = z.object({

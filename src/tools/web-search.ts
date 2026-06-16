@@ -10,7 +10,7 @@ import { z } from "zod";
 import { env } from "../env";
 import { toolLogger } from "../logger";
 import { formatError, toolContextManager } from "../utils/types";
-import { getCurrentToolConfigScope } from "../utils/discord-scope";
+import { getCurrentToolConfigScope } from "../utils/tool-config-scope";
 import {
   configManager,
   type ConfigScope,

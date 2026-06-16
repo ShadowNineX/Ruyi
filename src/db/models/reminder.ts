@@ -2,6 +2,10 @@ import mongoose, { Schema, type Document } from "mongoose";
 import type { ConfigScope } from "../../config";
 
 export type ReminderKind = "reminder" | "timer";
+type ReminderScopeKind = Extract<
+  ConfigScope["kind"],
+  "discord:guild" | "discord:dm"
+>;
 type ReminderStatus =
   | "scheduled"
   | "processing";
@@ -12,7 +16,7 @@ export interface IReminder extends Document {
   text: string;
   dueAt: Date;
   status: ReminderStatus;
-  scopeKind: ConfigScope["kind"];
+  scopeKind: ReminderScopeKind;
   scopeId: string;
   guildId: string | null;
   channelId: string;
@@ -42,7 +46,11 @@ const ReminderSchema = new Schema<IReminder>(
       required: true,
       index: true,
     },
-    scopeKind: { type: String, enum: ["guild", "dm"], required: true },
+    scopeKind: {
+      type: String,
+      enum: ["discord:guild", "discord:dm"],
+      required: true,
+    },
     scopeId: { type: String, required: true },
     guildId: { type: String, default: null },
     channelId: { type: String, required: true },

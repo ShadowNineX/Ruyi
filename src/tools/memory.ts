@@ -6,10 +6,9 @@ import {
   type TextBasedChannel,
 } from "discord.js";
 import { toolLogger } from "../logger";
-import { Memory, Conversation } from "../db/models";
+import { DiscordConversation, Memory } from "../db/models";
 import { toolContextManager, formatError } from "../utils/types";
-import { requesterHasChannelPermission } from "../utils/discord-permissions";
-import { getCurrentToolConfigScope } from "../utils/discord-scope";
+import { requesterHasChannelPermission } from "../discord/utils/discord-permissions";
 import {
   buildUserMemoryFilter,
   formatUserMemoryContext,
@@ -26,8 +25,10 @@ type MemorySearchFilter = Record<string, unknown>;
 type MemoryOwnerFilter = UserMemoryFilter;
 
 interface MemoryUserIdentity {
-  userId: string;
+  personId: string;
   username: string;
+  canWriteMemory: boolean;
+  surface: "discord" | "steam";
 }
 
 interface MemoryOwnerContext {
@@ -38,11 +39,18 @@ interface MemoryOwnerContext {
   username: string | null;
 }
 
-// Get the actual Discord user identity from context - don't trust model parameters.
+// Get the actual runtime user identity from context - don't trust model parameters.
 function getContextUserIdentity(): MemoryUserIdentity | null {
   const ctx = toolContextManager.get();
-  const author = ctx.message?.author;
-  return author ? { userId: author.id, username: author.username } : null;
+  const identity = ctx.identity;
+  return identity
+    ? {
+        personId: identity.personId,
+        username: identity.username,
+        canWriteMemory: identity.canWriteMemory,
+        surface: identity.surface,
+      }
+    : null;
 }
 
 function normalizeMemoryKey(key: string | null): string | null {
@@ -58,19 +66,16 @@ function resolveMemoryOwner(
   user: MemoryUserIdentity | null,
 ): MemoryOwnerContext | string {
   if (!user) {
-    return "Discord user context required for memories";
+    return "User context required for memories";
   }
-
-  const { guild } = toolContextManager.get();
-  const scope = getCurrentToolConfigScope();
-  if (!scope) {
-    return "Discord scope required for memories";
+  if (!user.canWriteMemory) {
+    return "Memory writes are disabled for this unlinked Steam commenter";
   }
 
   return {
     createdBy: user.username,
-    filter: buildUserMemoryFilter(user.userId, scope),
-    label: formatUserMemoryContext(user.username, scope, guild?.name),
+    filter: buildUserMemoryFilter(user),
+    label: formatUserMemoryContext(user),
     limit: USER_MEMORY_CAP,
     username: user.username,
   };
@@ -97,7 +102,7 @@ async function evictMemoryIfNeeded(
     updatedAt: 1,
   });
   if (!oldest) {
-    return `Memory cap reached for ${owner.filter.scope}. Unpin or delete an existing memory before saving more.`;
+    return `Memory cap reached for ${owner.label}. Unpin or delete an existing memory before saving more.`;
   }
 
   await oldest.deleteOne();
@@ -136,9 +141,7 @@ async function handleSaveMemory(
       key: normalizedKey,
       value: truncatedValue,
       scope: owner.filter.scope,
-      scopeKind: owner.filter.scopeKind,
-      scopeId: owner.filter.scopeId,
-      userId: owner.filter.userId,
+      personId: owner.filter.personId,
       username: owner.username,
       createdBy: owner.createdBy,
       pinned,
@@ -260,7 +263,7 @@ async function handleListMemories(
 export const memoryStoreTool = tool({
   name: "memory_store",
   description:
-    "Store, retrieve, pin, or delete memories. PINNED memories are always loaded into context (treat them as the user's persona/core facts). Use 'pin' to mark an existing memory as pinned, 'unpin' to remove that flag. The Discord user is automatically detected.",
+    "Store, retrieve, pin, or delete memories. PINNED memories are always loaded into context (treat them as the user's persona/core facts). Use 'pin' to mark an existing memory as pinned, 'unpin' to remove that flag. The runtime user identity is automatically detected.",
   parameters: z.object({
     action: z
       .enum(["save", "get", "delete", "list", "pin", "unpin"])
@@ -288,7 +291,8 @@ export const memoryStoreTool = tool({
       {
         action,
         key,
-        userId: user?.userId,
+        personId: user?.personId,
+        surface: user?.surface,
         username: user?.username,
         pinned,
       },
@@ -361,12 +365,12 @@ function collectMemoryLines(
 export const memoryRecallTool = tool({
   name: "memory_recall",
   description:
-    "Recall a broad list of stored memories for the current Discord context and current user. Use proactively when answering user-specific questions where older or non-loaded memories may matter, such as preferences, identity, accounts, relationships, hobbies, tailored advice, or 'what do you know/remember about me?'. Discord context and user identity are automatically detected.",
+    "Recall a broad list of stored memories for the current runtime user. Use proactively when answering user-specific questions where older or non-loaded memories may matter, such as preferences, identity, accounts, relationships, hobbies, tailored advice, or 'what do you know/remember about me?'. Runtime identity is automatically detected.",
   parameters: z.object({}),
   execute: async () => {
     const user = getContextUserIdentity();
     toolLogger.info(
-      { userId: user?.userId, username: user?.username },
+      { personId: user?.personId, surface: user?.surface, username: user?.username },
       "Recalling memories",
     );
 
@@ -396,7 +400,8 @@ export const memoryRecallTool = tool({
     const result = { hasMemories: true, summary: allLines.join("\n") };
     toolLogger.info(
       {
-        userId: user?.userId,
+        personId: user?.personId,
+        surface: user?.surface,
         username: user?.username,
         lineCount: allLines.length,
       },
@@ -409,7 +414,7 @@ export const memoryRecallTool = tool({
 export const searchMemoryTool = tool({
   name: "search_memory",
   description:
-    "Search stored memories for the current Discord context and current user by keyword. Use proactively when the user asks about a specific remembered topic, person, place, account, preference, date, project, character, or relationship and the loaded context does not already contain the exact fact.",
+    "Search stored memories for the current runtime user by keyword. Use proactively when the user asks about a specific remembered topic, person, place, account, preference, date, project, character, or relationship and the loaded context does not already contain the exact fact.",
   parameters: z.object({
     query: z
       .string()
@@ -418,7 +423,7 @@ export const searchMemoryTool = tool({
   execute: async ({ query }) => {
     const user = getContextUserIdentity();
     toolLogger.info(
-      { query, userId: user?.userId, username: user?.username },
+      { query, personId: user?.personId, surface: user?.surface, username: user?.username },
       "Searching memories",
     );
 
@@ -640,7 +645,7 @@ export const searchConversationTool = tool({
         return { error: channelIds };
       }
 
-      const conversations = await Conversation.find({
+      const conversations = await DiscordConversation.find({
         channelId: { $in: channelIds },
       }).lean();
       const matchingMessages = extractMatchingMessages(

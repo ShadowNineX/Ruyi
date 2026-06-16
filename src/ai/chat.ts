@@ -9,7 +9,11 @@ import {
 import type { TextBasedChannel } from "discord.js";
 import type { ConfigScope } from "../config";
 import { z } from "zod";
-import { allTools, externalToolNames } from "../tools";
+import {
+  getToolsForSurface,
+  getToolNamesForSurface,
+  isExternalToolName,
+} from "../tools";
 import { aiLogger } from "../logger";
 import { env } from "../env";
 import {
@@ -17,12 +21,16 @@ import {
   CHAT_TIMEOUT_MS,
   MAX_AGENT_IMAGE_INPUTS,
 } from "../constants";
-import type { ChatSession } from "../utils/chat-session";
-import type { MessageImageInput } from "../utils/messages";
+import type { MessageImageInput } from "../discord/utils/messages";
 import { systemPrompt } from "./prompt";
 import { sessionManager } from "./session";
 import { agentsRuntimeManager } from "./client";
-import { conversationContext, type ChatMessage } from "./context";
+import type { ChatRuntimeSession } from "./chat-runtime-session";
+import {
+  conversationContext,
+  type ChatMessage,
+  type ConversationSurface,
+} from "./context";
 import {
   getApprovalToolName,
   permissionManager,
@@ -30,8 +38,11 @@ import {
 } from "./permissions";
 import { autoExtractFacts } from "./extraction";
 import { parseToolArguments } from "../utils/tool-arguments";
+import {
+  buildDiscordUserIdentity,
+  type RuyiUserIdentity,
+} from "../utils/user-identity";
 
-const LOCAL_TOOL_NAMES = new Set(allTools.map((tool) => tool.name));
 const ToolCallSchema = z.looseObject({
   arguments: z.unknown().optional(),
 });
@@ -40,14 +51,17 @@ interface ChatOptions {
   userMessage: string;
   username: string;
   channelId: string;
-  channel: TextBasedChannel;
+  channel?: TextBasedChannel | null;
   configScope?: ConfigScope | null;
   userId: string;
-  session: ChatSession;
+  session: ChatRuntimeSession;
   chatHistory?: ChatMessage[];
   imageInputs?: MessageImageInput[];
   profileContext?: string;
   messageId: string;
+  surface?: ConversationSurface;
+  identity?: RuyiUserIdentity | null;
+  surfaceLabel?: string;
   signal?: AbortSignal;
   persistUserMessage?: boolean;
 }
@@ -176,7 +190,7 @@ class ChatService {
       userMessage,
       username,
       channelId,
-      channel,
+      channel = null,
       configScope = null,
       userId,
       session,
@@ -184,11 +198,20 @@ class ChatService {
       imageInputs = [],
       profileContext = "",
       messageId,
+      surface = "discord",
+      identity = buildDiscordUserIdentity(userId, username),
+      surfaceLabel,
       signal,
       persistUserMessage = true,
     } = options;
+    const conversationId = channelId;
+    const cacheIdentity = identity ?? buildDiscordUserIdentity(userId, username);
 
-    if (channel.isSendable()) {
+    if (
+      surface === "discord" &&
+      channel?.isSendable() &&
+      session.getPermissionPromptController
+    ) {
       permissionManager.setContext(channelId, {
         channel,
         promptController: session.getPermissionPromptController(),
@@ -222,9 +245,10 @@ class ChatService {
       const dynamicContext = await conversationContext.buildDynamicContext(
         username,
         userId,
-        channelId,
+        conversationId,
         chatHistory,
         configScope,
+        { surface, identity: cacheIdentity, surfaceLabel },
       );
       throwIfAborted(signal);
 
@@ -257,28 +281,49 @@ class ChatService {
       );
 
       if (persistUserMessage) {
-        await conversationContext.rememberMessage(
-          channelId,
-          username,
-          userMessage,
-          false,
-          messageId,
-        );
+        if (surface === "discord") {
+          await conversationContext.rememberMessage(
+            conversationId,
+            username,
+            userMessage,
+            false,
+            messageId,
+          );
+        } else {
+          await conversationContext.rememberSteamMessage({
+            profileId: conversationId,
+            authorSteamId: cacheIdentity.surfaceUserId,
+            authorName: username,
+            content: userMessage,
+            isBot: false,
+            commentId: messageId,
+          });
+        }
 
         const { shouldExtract } = conversationContext.trackUserMessage(
-          channelId,
-          userId,
+          conversationId,
+          cacheIdentity,
+          surface,
         );
         if (shouldExtract) {
-          void autoExtractFacts(username, userId, channelId, configScope)
+          void autoExtractFacts(username, cacheIdentity, conversationId, surface)
             .then((completed) => {
               if (completed) {
-                conversationContext.markExtracted(channelId, userId);
+                conversationContext.markExtracted(
+                  conversationId,
+                  cacheIdentity,
+                  surface,
+                );
               }
             })
             .catch((error: unknown) =>
               aiLogger.warn(
-                { error: (error as Error).message, username, channelId },
+                {
+                  error: (error as Error).message,
+                  username,
+                  surface,
+                  conversationId,
+                },
                 "Background fact extraction crashed",
               ),
             );
@@ -288,16 +333,23 @@ class ChatService {
       const model = agentsRuntimeManager.getModel(configScope);
       const modelSettings = agentsRuntimeManager.getModelSettings(configScope);
       const agentSession = await sessionManager.getOrCreate(
-        channelId,
+        conversationId,
         messageId,
         model,
         modelSettings,
+        surface,
       );
       throwIfAborted(signal);
 
       const agentSessionId = await agentSession.getSessionId();
       const toolUsage = createTurnToolUsage();
-      const agent = this.createAgent(session, toolUsage, model, modelSettings);
+      const agent = this.createAgent(
+        session,
+        toolUsage,
+        model,
+        modelSettings,
+        surface,
+      );
       const runner = agentsRuntimeManager.getRunner();
       const runOptions = {
         stream: true,
@@ -309,9 +361,10 @@ class ChatService {
 
       aiLogger.debug(
         {
-          channelId,
+          surface,
+          conversationId,
           sessionId: agentSessionId,
-          localToolCount: allTools.length,
+          localToolCount: getToolsForSurface(surface).length,
           maxTurns: AGENT_MAX_TURNS,
         },
         "Using persistent OpenAI Agents session",
@@ -360,7 +413,7 @@ class ChatService {
 
       if (!finalContent) {
         aiLogger.warn(
-          { username, channelId },
+          { username, surface, conversationId },
           "Chat request returned empty response from model",
         );
       }
@@ -375,12 +428,13 @@ class ChatService {
           name: err.name,
           status: err.status ?? err.code,
           username,
-          channelId,
+          surface,
+          conversationId,
         },
         "Chat request failed",
       );
 
-      await sessionManager.invalidate(channelId);
+      await sessionManager.invalidate(conversationId, surface);
       session.onError();
       throw error;
     } finally {
@@ -391,25 +445,26 @@ class ChatService {
   }
 
   private createAgent(
-    session: ChatSession,
+    session: ChatRuntimeSession,
     toolUsage: TurnToolUsage,
     model: string,
     modelSettings: ModelSettings,
+    surface: ConversationSurface,
   ) {
     const agent = new Agent({
       name: "Ruyi",
       instructions: systemPrompt,
       model,
       modelSettings,
-      tools: [...allTools],
+      tools: [...getToolsForSurface(surface)],
       toolUseBehavior: "run_llm_again",
     });
 
     agent.on("agent_tool_start", (_context, tool, details) => {
-      this.handleToolStart(tool, details.toolCall, session, toolUsage);
+      this.handleToolStart(tool, details.toolCall, session, toolUsage, surface);
     });
     agent.on("agent_tool_end", (_context, tool) => {
-      this.handleToolEnd(tool, session);
+      this.handleToolEnd(tool, session, surface);
     });
 
     return agent;
@@ -417,7 +472,7 @@ class ChatService {
 
   private async drainStream(
     stream: TextStreamResult,
-    session: ChatSession,
+    session: ChatRuntimeSession,
   ): Promise<void> {
     const textStream = stream.toTextStream({ compatibleWithNodeStreams: true });
     for await (const chunk of textStream) {
@@ -430,11 +485,11 @@ class ChatService {
     if (stream.error) throw stream.error;
   }
 
-  private getToolDisplayName(toolName: string): {
+  private getToolDisplayName(toolName: string, surface: ConversationSurface): {
     displayName: string;
     isLocalTool: boolean;
   } {
-    const isLocalTool = LOCAL_TOOL_NAMES.has(toolName);
+    const isLocalTool = getToolNamesForSurface(surface).has(toolName);
     const displayName = formatToolDisplayName(toolName, isLocalTool);
     return { displayName, isLocalTool };
   }
@@ -442,11 +497,12 @@ class ChatService {
   private handleToolStart(
     tool: Tool,
     toolCall: unknown,
-    session: ChatSession,
+    session: ChatRuntimeSession,
     toolUsage: TurnToolUsage,
+    surface: ConversationSurface,
   ): void {
-    const { displayName, isLocalTool } = this.getToolDisplayName(tool.name);
-    if (externalToolNames.has(tool.name)) {
+    const { displayName, isLocalTool } = this.getToolDisplayName(tool.name, surface);
+    if (isExternalToolName(tool.name, surface)) {
       toolUsage.externalToolCallCount += 1;
     } else if (isLocalTool) {
       toolUsage.localToolCallCount += 1;
@@ -454,14 +510,18 @@ class ChatService {
       toolUsage.externalToolCallCount += 1;
     }
     aiLogger.info(
-      { tool: tool.name, external: externalToolNames.has(tool.name) },
+      { tool: tool.name, external: isExternalToolName(tool.name, surface) },
       "Tool execution starting",
     );
     session.onToolStart(displayName, getLifecycleToolArgs(toolCall));
   }
 
-  private handleToolEnd(tool: Tool, session: ChatSession): void {
-    const { displayName } = this.getToolDisplayName(tool.name);
+  private handleToolEnd(
+    tool: Tool,
+    session: ChatRuntimeSession,
+    surface: ConversationSurface,
+  ): void {
+    const { displayName } = this.getToolDisplayName(tool.name, surface);
     aiLogger.debug({ tool: displayName }, "Tool execution complete");
     session.onToolEnd(displayName);
     session.onThinking();

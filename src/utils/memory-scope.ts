@@ -1,34 +1,23 @@
-import type { ConfigScope } from "../config";
+import type { RuyiUserIdentity } from "./user-identity";
 
 export interface UserMemoryFilter {
   scope: "user";
-  scopeKind: ConfigScope["kind"];
-  scopeId: string;
-  userId: string;
+  personId: string;
 }
 
 export function buildUserMemoryFilter(
-  userId: string,
-  scope: ConfigScope,
+  identity: Pick<RuyiUserIdentity, "personId">,
 ): UserMemoryFilter {
   return {
     scope: "user",
-    scopeKind: scope.kind,
-    scopeId: scope.id,
-    userId,
+    personId: identity.personId,
   };
 }
 
 export function formatUserMemoryContext(
-  username: string,
-  scope: ConfigScope,
-  guildName?: string | null,
+  identity: Pick<RuyiUserIdentity, "surface" | "username" | "personId">,
 ): string {
-  if (scope.kind === "guild") {
-    return guildName
-      ? `${username} in server ${guildName}`
-      : `${username} in this server`;
-  }
-
-  return `${username} in this private chat`;
+  return identity.personId === "owner"
+    ? `${identity.username} across linked Discord and Steam identities`
+    : `${identity.username} on ${identity.surface}`;
 }

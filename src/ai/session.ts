@@ -7,9 +7,16 @@ import {
   type OpenAIResponsesCompactionArgs,
   type Session,
 } from "@openai/agents";
+import type { UpdateQuery } from "mongoose";
 import { aiLogger } from "../logger";
-import { AgentSession, Conversation } from "../db/models";
-import type { IAgentSession } from "../db/models";
+import {
+  DiscordAgentSession,
+  DiscordConversation,
+  SteamAgentSession,
+  SteamConversation,
+} from "../db/models";
+import type { IDiscordAgentSession, ISteamAgentSession } from "../db/models";
+import type { ConversationSurface } from "./context";
 import {
   AGENT_SESSION_COMPACTION_ITEM_MAX_LEN,
   AGENT_SESSION_COMPACTION_TIMEOUT_MS,
@@ -32,14 +39,93 @@ import {
 
 const TRACKED_MESSAGE_ID_CAP = 200;
 
-const SUMMARY_SYSTEM_PROMPT = `You maintain Ruyi's compacted Discord channel memory.
+type PersistedAgentSession = IDiscordAgentSession | ISteamAgentSession;
+type SessionUpdate =
+  | UpdateQuery<IDiscordAgentSession>
+  | UpdateQuery<ISteamAgentSession>;
+type SessionUpdateOptions = {
+  upsert?: boolean;
+};
+
+function getSessionFilter(
+  surface: ConversationSurface,
+  conversationId: string,
+): { channelId: string } | { profileId: string } {
+  return surface === "discord"
+    ? { channelId: conversationId }
+    : { profileId: conversationId };
+}
+
+async function updateSessionDocument(
+  surface: ConversationSurface,
+  conversationId: string,
+  update: SessionUpdate,
+  options?: SessionUpdateOptions,
+): Promise<void> {
+  if (surface === "discord") {
+    await DiscordAgentSession.updateOne(
+      getSessionFilter(surface, conversationId),
+      update as UpdateQuery<IDiscordAgentSession>,
+      options,
+    );
+    return;
+  }
+
+  await SteamAgentSession.updateOne(
+    getSessionFilter(surface, conversationId),
+    update as UpdateQuery<ISteamAgentSession>,
+    options,
+  );
+}
+
+async function findActiveSessionDocument(
+  surface: ConversationSurface,
+  conversationId: string,
+): Promise<PersistedAgentSession | null> {
+  if (surface === "discord") {
+    return DiscordAgentSession.findOne({
+      channelId: conversationId,
+      isActive: true,
+      provider: "openai-agents",
+    });
+  }
+
+  return SteamAgentSession.findOne({
+    profileId: conversationId,
+    isActive: true,
+    provider: "openai-agents",
+  });
+}
+
+async function upsertSessionDocument(
+  surface: ConversationSurface,
+  conversationId: string,
+  update: SessionUpdate,
+): Promise<void> {
+  if (surface === "discord") {
+    await DiscordAgentSession.findOneAndUpdate(
+      { channelId: conversationId },
+      update as UpdateQuery<IDiscordAgentSession>,
+      { upsert: true },
+    );
+    return;
+  }
+
+  await SteamAgentSession.findOneAndUpdate(
+    { profileId: conversationId },
+    update as UpdateQuery<ISteamAgentSession>,
+    { upsert: true },
+  );
+}
+
+const SUMMARY_SYSTEM_PROMPT = `You maintain Ruyi's compacted conversation memory.
 
 Return only the refreshed summary text. No preface, markdown heading, JSON, or code fence.
 
 Keep:
 - Durable facts, preferences, names, relationships, projects, and decisions.
 - Open threads, unresolved requests, promised follow-ups, and current tasks.
-- Important Discord context such as channels, message IDs, user names, URLs, permissions, and moderation actions.
+- Important surface context such as channels/profile IDs, message/comment IDs, user names, URLs, permissions, and actions taken.
 - Tool calls only when their outcome matters later: tool name, purpose, result, errors, IDs, URLs, files, or destructive/admin action taken.
 
 Prune:
@@ -307,7 +393,8 @@ class MongoAgentSession implements Session {
   private invalidated = false;
 
   constructor(
-    private readonly channelId: string,
+    private readonly surface: ConversationSurface,
+    private readonly conversationId: string,
     private readonly sessionId: string,
     private readonly model: string,
     private readonly modelSettings: ModelSettings,
@@ -379,12 +466,13 @@ class MongoAgentSession implements Session {
 
       aiLogger.info(
         {
-          channelId: this.channelId,
+          surface: this.surface,
+          conversationId: this.conversationId,
           compactedCount: result.compactedCount,
           retainedCount: result.items.length,
           summaryLength: result.summary.length,
         },
-        "Agent session compacted into channel summary",
+        "Agent session compacted into conversation summary",
       );
     } catch (error) {
       await this.trimAfterFailedCompaction();
@@ -393,7 +481,8 @@ class MongoAgentSession implements Session {
           error: (error as Error).message,
           stack: (error as Error).stack,
           name: (error as Error).name,
-          channelId: this.channelId,
+          surface: this.surface,
+          conversationId: this.conversationId,
           itemCount: this.items.length,
         },
         "Agent session compaction failed; retaining raw session items",
@@ -404,8 +493,9 @@ class MongoAgentSession implements Session {
   private async persist(): Promise<void> {
     if (this.invalidated) return;
 
-    await AgentSession.updateOne(
-      { channelId: this.channelId },
+    await updateSessionDocument(
+      this.surface,
+      this.conversationId,
       {
         $set: {
           sessionId: this.sessionId,
@@ -425,8 +515,9 @@ class MongoAgentSession implements Session {
   private async persistCompaction(): Promise<void> {
     if (this.invalidated) return;
 
-    await AgentSession.updateOne(
-      { channelId: this.channelId },
+    await updateSessionDocument(
+      this.surface,
+      this.conversationId,
       {
         $set: {
           summary: this.summary ?? "",
@@ -450,21 +541,24 @@ class MongoAgentSession implements Session {
 
     aiLogger.warn(
       {
-        channelId: this.channelId,
+        surface: this.surface,
+        conversationId: this.conversationId,
         originalCount,
         retainedCount: this.items.length,
       },
       "Agent session exceeded hard cap after failed compaction; trimmed raw items",
     );
   }
+
 }
 
-function toAgentItems(doc: IAgentSession): AgentInputItem[] {
+function toAgentItems(doc: PersistedAgentSession): AgentInputItem[] {
   return doc.items as AgentInputItem[];
 }
 
 async function compactPersistedItemsIfNeeded(
-  channelId: string,
+  surface: ConversationSurface,
+  conversationId: string,
   items: AgentInputItem[],
   existingSummary: string | null,
   model: string,
@@ -483,8 +577,9 @@ async function compactPersistedItemsIfNeeded(
     );
     if (!result) return { items, summary: existingSummary };
 
-    await AgentSession.updateOne(
-      { channelId },
+    await updateSessionDocument(
+      surface,
+      conversationId,
       {
         $set: {
           items: result.items,
@@ -499,7 +594,8 @@ async function compactPersistedItemsIfNeeded(
 
     aiLogger.info(
       {
-        channelId,
+        surface,
+        conversationId,
         compactedCount: result.compactedCount,
         retainedCount: result.items.length,
         summaryLength: result.summary.length,
@@ -514,7 +610,8 @@ async function compactPersistedItemsIfNeeded(
         error: (error as Error).message,
         stack: (error as Error).stack,
         name: (error as Error).name,
-        channelId,
+        surface,
+        conversationId,
         itemCount: items.length,
       },
       "Failed to compact loaded agent session; using existing raw items",
@@ -531,10 +628,10 @@ function normalizeMessageIds(messageIds: Array<string | undefined>): string[] {
 }
 
 function upsertAssistantReplyLink(
-  replies: IAgentSession["assistantReplies"],
+  replies: IDiscordAgentSession["assistantReplies"],
   userMessageId: string,
   assistantMessageIds: string[],
-): IAgentSession["assistantReplies"] {
+): IDiscordAgentSession["assistantReplies"] {
   const now = new Date();
   const nextReplies = replies.filter(
     (reply) => reply.userMessageId !== userMessageId,
@@ -552,10 +649,36 @@ function upsertAssistantReplyLink(
 }
 
 async function buildSeedSessionData(
-  channelId: string,
+  surface: ConversationSurface,
+  conversationId: string,
   currentMessageId?: string,
 ): Promise<SeedSessionData> {
-  const conversation = await Conversation.findOne({ channelId });
+  if (surface === "steam") {
+    const conversation = await SteamConversation.findOne({
+      profileId: conversationId,
+    });
+    if (!conversation || conversation.messages.length === 0) {
+      return { items: [], messageIds: [] };
+    }
+
+    const messages = conversation.messages
+      .filter((message) => message.commentId !== currentMessageId)
+      .slice(-AGENT_SESSION_SEED_MESSAGE_LIMIT);
+
+    return {
+      items: messages.map((message) => {
+        const content = `${message.authorName}: ${message.content}`;
+        return message.isBot ? assistant(content) : user(content);
+      }),
+      messageIds: normalizeMessageIds(
+        messages.map((message) => message.commentId),
+      ),
+    };
+  }
+
+  const conversation = await DiscordConversation.findOne({
+    channelId: conversationId,
+  });
   if (!conversation || conversation.messages.length === 0) {
     return { items: [], messageIds: [] };
   }
@@ -578,9 +701,12 @@ async function buildSeedSessionData(
 class SessionManager {
   async loadPersisted(): Promise<void> {
     try {
-      const count = await AgentSession.countDocuments({ isActive: true });
+      const [discordCount, steamCount] = await Promise.all([
+        DiscordAgentSession.countDocuments({ isActive: true }),
+        SteamAgentSession.countDocuments({ isActive: true }),
+      ]);
       aiLogger.info(
-        { count },
+        { discordCount, steamCount },
         "Agent sessions are persisted in Mongo and will be loaded lazily",
       );
     } catch (error) {
@@ -588,37 +714,43 @@ class SessionManager {
     }
   }
 
+  private cacheKey(surface: ConversationSurface, conversationId: string): string {
+    return `${surface}:${conversationId}`;
+  }
+
   async getOrCreate(
-    channelId: string,
+    conversationId: string,
     currentMessageId?: string,
     model = agentsRuntimeManager.model,
     modelSettings = agentsRuntimeManager.modelSettings,
+    surface: ConversationSurface = "discord",
   ): Promise<MongoAgentSession> {
-    const existingSession = getCachedAgentSession<MongoAgentSession>(channelId);
+    const cacheKey = this.cacheKey(surface, conversationId);
+    const existingSession = getCachedAgentSession<MongoAgentSession>(cacheKey);
     if (existingSession) {
       if (existingSession.matchesModel(model)) {
-        aiLogger.debug({ channelId }, "Using cached agent session");
-        await this.touchSession(channelId, model, currentMessageId);
+        aiLogger.debug({ surface, conversationId }, "Using cached agent session");
+        await this.touchSession(surface, conversationId, model, currentMessageId);
         return existingSession;
       }
 
       existingSession.markInvalidated();
-      deleteCachedAgentSession(channelId);
-      await AgentSession.updateOne(
-        { channelId, isActive: true, provider: "openai-agents" },
+      deleteCachedAgentSession(cacheKey);
+      await updateSessionDocument(
+        surface,
+        conversationId,
         { $set: { isActive: false } },
       );
       aiLogger.info(
-        { channelId, currentModel: model },
+        { surface, conversationId, currentModel: model },
         "Cached agent session model changed; creating fresh agent session",
       );
     }
 
-    const persistedSession = await AgentSession.findOne({
-      channelId,
-      isActive: true,
-      provider: "openai-agents",
-    });
+    const persistedSession = await findActiveSessionDocument(
+      surface,
+      conversationId,
+    );
 
     if (persistedSession) {
       const promptVersionMatches =
@@ -628,25 +760,27 @@ class SessionManager {
 
       if (promptVersionMatches && modelMatches) {
         const compactedSession = await compactPersistedItemsIfNeeded(
-          channelId,
+          surface,
+          conversationId,
           toAgentItems(persistedSession),
           persistedSession.summary ?? null,
           model,
           modelSettings,
         );
         const session = new MongoAgentSession(
-          channelId,
+          surface,
+          conversationId,
           persistedSession.sessionId,
           model,
           modelSettings,
           compactedSession.items,
           compactedSession.summary,
         );
-        setCachedAgentSession(channelId, session);
-        await this.touchSession(channelId, model, currentMessageId);
+        setCachedAgentSession(cacheKey, session);
+        await this.touchSession(surface, conversationId, model, currentMessageId);
 
         aiLogger.debug(
-          { channelId, sessionId: persistedSession.sessionId },
+          { surface, conversationId, sessionId: persistedSession.sessionId },
           "Loaded agent session from Mongo",
         );
         return session;
@@ -654,7 +788,8 @@ class SessionManager {
 
       aiLogger.info(
         {
-          channelId,
+          surface,
+          conversationId,
           sessionId: persistedSession.sessionId,
           storedVersion: persistedSession.promptVersion,
           currentVersion: systemPromptVersion,
@@ -663,20 +798,26 @@ class SessionManager {
         },
         "Agent session configuration changed; creating fresh agent session",
       );
-      await AgentSession.updateOne(
-        { channelId },
+      await updateSessionDocument(
+        surface,
+        conversationId,
         { $set: { isActive: false } },
       );
     }
 
-    const sessionId = `ruyi-${channelId}-${Date.now()}`;
-    const seedData = await buildSeedSessionData(channelId, currentMessageId);
+    const sessionId = `ruyi-${surface}-${conversationId}-${Date.now()}`;
+    const seedData = await buildSeedSessionData(
+      surface,
+      conversationId,
+      currentMessageId,
+    );
     const userMessageIds = normalizeMessageIds([
       ...seedData.messageIds,
       currentMessageId,
     ]).slice(-TRACKED_MESSAGE_ID_CAP);
     const session = new MongoAgentSession(
-      channelId,
+      surface,
+      conversationId,
       sessionId,
       model,
       modelSettings,
@@ -684,28 +825,33 @@ class SessionManager {
       null,
     );
 
-    await AgentSession.findOneAndUpdate(
-      { channelId },
+    const setFields =
+      surface === "discord"
+        ? { userMessageIds }
+        : { processedCommentIds: userMessageIds };
+
+    await upsertSessionDocument(
+      surface,
+      conversationId,
       {
         $set: {
           sessionId,
           provider: "openai-agents",
           model,
           items: seedData.items,
-          userMessageIds,
+          ...setFields,
           lastUsed: new Date(),
           isActive: true,
           promptVersion: systemPromptVersion,
         },
         $setOnInsert: { createdAt: new Date() },
       },
-      { upsert: true },
     );
 
-    setCachedAgentSession(channelId, session);
+    setCachedAgentSession(cacheKey, session);
 
     aiLogger.info(
-      { channelId, sessionId, seedCount: seedData.items.length },
+      { surface, conversationId, sessionId, seedCount: seedData.items.length },
       "Created new agent session",
     );
 
@@ -713,15 +859,18 @@ class SessionManager {
   }
 
   private async touchSession(
-    channelId: string,
+    surface: ConversationSurface,
+    conversationId: string,
     model: string,
     currentMessageId?: string,
   ): Promise<void> {
+    const idArrayField =
+      surface === "discord" ? "userMessageIds" : "processedCommentIds";
     const update =
       currentMessageId && currentMessageId.length > 0
         ? {
             $push: {
-              userMessageIds: {
+              [idArrayField]: {
                 $each: [currentMessageId],
                 $slice: -TRACKED_MESSAGE_ID_CAP,
               },
@@ -738,19 +887,24 @@ class SessionManager {
             },
           };
 
-    await AgentSession.updateOne({ channelId }, update);
+    await updateSessionDocument(surface, conversationId, update);
   }
 
-  async invalidate(channelId: string): Promise<void> {
-    getCachedAgentSession(channelId)?.markInvalidated();
-    deleteCachedAgentSession(channelId);
+  async invalidate(
+    conversationId: string,
+    surface: ConversationSurface = "discord",
+  ): Promise<void> {
+    const cacheKey = this.cacheKey(surface, conversationId);
+    getCachedAgentSession(cacheKey)?.markInvalidated();
+    deleteCachedAgentSession(cacheKey);
 
-    await AgentSession.updateOne(
-      { channelId },
+    await updateSessionDocument(
+      surface,
+      conversationId,
       { $set: { isActive: false } },
     );
 
-    aiLogger.debug({ channelId }, "Agent session invalidated");
+    aiLogger.debug({ surface, conversationId }, "Agent session invalidated");
   }
 
   async invalidateAll(reason: string): Promise<void> {
@@ -760,13 +914,24 @@ class SessionManager {
     }
     clearCachedAgentSessions();
 
-    const result = await AgentSession.updateMany(
-      { isActive: true, provider: "openai-agents" },
-      { $set: { isActive: false } },
-    );
+    const [discordResult, steamResult] = await Promise.all([
+      DiscordAgentSession.updateMany(
+        { isActive: true, provider: "openai-agents" },
+        { $set: { isActive: false } },
+      ),
+      SteamAgentSession.updateMany(
+        { isActive: true, provider: "openai-agents" },
+        { $set: { isActive: false } },
+      ),
+    ]);
 
     aiLogger.info(
-      { reason, activeCount, modifiedCount: result.modifiedCount },
+      {
+        reason,
+        activeCount,
+        modifiedCount:
+          discordResult.modifiedCount + steamResult.modifiedCount,
+      },
       "All active agent sessions invalidated",
     );
   }
@@ -778,7 +943,7 @@ class SessionManager {
   ): Promise<void> {
     if (messageIds.length === 0) return;
 
-    const session = await AgentSession.findOne({
+    const session = await DiscordAgentSession.findOne({
       channelId,
       isActive: true,
       provider: "openai-agents",
@@ -802,7 +967,7 @@ class SessionManager {
     channelId: string,
     userMessageId: string,
   ): Promise<string[]> {
-    const session = await AgentSession.findOne(
+    const session = await DiscordAgentSession.findOne(
       {
         channelId,
         provider: "openai-agents",
@@ -817,7 +982,7 @@ class SessionManager {
     channelId: string,
     messageId: string,
   ): Promise<boolean> {
-    const session = await AgentSession.exists({
+    const session = await DiscordAgentSession.exists({
       channelId,
       isActive: true,
       provider: "openai-agents",
@@ -854,7 +1019,7 @@ class SessionManager {
     const uniqueMessageIds = [...new Set(messageIds)].filter(Boolean);
     if (uniqueMessageIds.length === 0) return false;
 
-    const session = await AgentSession.exists({
+    const session = await DiscordAgentSession.exists({
       channelId,
       isActive: true,
       provider: "openai-agents",

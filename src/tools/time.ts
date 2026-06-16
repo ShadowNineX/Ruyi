@@ -2,7 +2,6 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 import { conversationContext } from "../ai/context";
 import { toolLogger } from "../logger";
-import { getCurrentToolConfigScope } from "../utils/discord-scope";
 import {
   expressionMentionsTimeTarget,
   parseNaturalTime,
@@ -24,15 +23,10 @@ async function fetchCurrentUserTimeZone(): Promise<{
   timeZone: string;
   source: string;
 } | null> {
-  const message = toolContextManager.get().message;
-  const scope = getCurrentToolConfigScope();
-  if (!message || !scope) return null;
+  const identity = toolContextManager.get().identity;
+  if (!identity) return null;
 
-  return conversationContext.fetchUserTimeZone(
-    message.author.id,
-    message.author.username,
-    scope,
-  );
+  return conversationContext.fetchUserTimeZone(identity);
 }
 
 function shouldPreferUserLocalTarget(
@@ -152,7 +146,7 @@ export const resolveTimeTool = tool({
       .boolean()
       .default(false)
       .describe(
-        "Set true when the user asks for their own local time/timezone. Code will resolve the stored Discord-user timezone; do not pass user IDs.",
+        "Set true when the user asks for their own local time/timezone. Code resolves the active user's stored timezone; do not pass user IDs.",
       ),
     output_format: z
       .enum(["natural", "24-hour", "12-hour"])

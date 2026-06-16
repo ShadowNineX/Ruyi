@@ -60,6 +60,9 @@ export const AWAY_MESSAGE_MIN_COOLDOWN_HOURS = 1;
 export const AWAY_MESSAGE_MAX_COOLDOWN_HOURS = 30 * 24;
 export const AWAY_MESSAGE_MAX_LENGTH = 700;
 
+// Steam Community profile comments
+export const STEAM_PROFILE_COMMENT_MAX_LENGTH = 1000;
+
 // Context tiering
 export const PINNED_CONTEXT_LIMIT = 15;
 export const RECENT_USER_MEMORY_LIMIT = 20;

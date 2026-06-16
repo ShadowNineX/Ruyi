@@ -1,4 +1,10 @@
-import { AgentSession, Conversation, Memory } from "../db/models";
+import {
+  DiscordAgentSession,
+  DiscordConversation,
+  Memory,
+  SteamAgentSession,
+  SteamConversation,
+} from "../db/models";
 import type { IMemory } from "../db/models/memory";
 import type { ConfigScope } from "../config";
 import { aiLogger } from "../logger";
@@ -7,7 +13,15 @@ import {
   formatTemporalContext,
   resolveTimeZone,
 } from "../utils/natural-time";
-import { buildUserMemoryFilter } from "../utils/memory-scope";
+import {
+  buildUserMemoryFilter,
+  formatUserMemoryContext,
+} from "../utils/memory-scope";
+import {
+  buildDiscordUserIdentity,
+  type RuyiUserIdentity,
+  type UserSurface,
+} from "../utils/user-identity";
 import {
   AUTO_EXTRACT_COOLDOWN_MS,
   AUTO_EXTRACT_THRESHOLD,
@@ -15,6 +29,7 @@ import {
   ONGOING_CONVERSATION_WINDOW_MS,
   PINNED_CONTEXT_LIMIT,
   RECENT_USER_MEMORY_LIMIT,
+  STEAM_PROFILE_COMMENT_MAX_LENGTH,
   USER_MEMORY_CAP,
 } from "../constants";
 import {
@@ -25,6 +40,8 @@ import {
   setLastExtractionAt,
   setLastInteractionAt,
 } from "../stores";
+
+export type ConversationSurface = UserSurface;
 
 export interface ChatMessage {
   author: string;
@@ -40,9 +57,29 @@ interface ConversationMessageUpdateResult {
   newContent: string;
 }
 
+interface DynamicContextOptions {
+  surface?: ConversationSurface;
+  identity?: RuyiUserIdentity | null;
+  surfaceLabel?: string;
+}
+
+type ConversationMemoryMessage = {
+  author: string;
+  content: string;
+  isBot: boolean;
+};
+
 class ConversationContext {
-  private userKey(channelId: string, userId: string): string {
-    return `${channelId}::${userId}`;
+  private conversationKey(surface: ConversationSurface, conversationId: string): string {
+    return `${surface}:${conversationId}`;
+  }
+
+  private userKey(
+    surface: ConversationSurface,
+    conversationId: string,
+    personId: string,
+  ): string {
+    return `${this.conversationKey(surface, conversationId)}::${personId}`;
   }
 
   async rememberMessage(
@@ -55,13 +92,13 @@ class ConversationContext {
     if (isBot) {
       aiLogger.debug(
         { channelId, author, messageId },
-        "Skipping bot message for human conversation archive",
+        "Skipping bot message for human Discord conversation archive",
       );
       return;
     }
 
     try {
-      const existingResult = await Conversation.updateOne(
+      const existingResult = await DiscordConversation.updateOne(
         { channelId, "messages.messageId": messageId },
         {
           $set: {
@@ -72,11 +109,11 @@ class ConversationContext {
         },
       );
       if (existingResult.matchedCount > 0) {
-        setLastInteractionAt(channelId, Date.now());
+        setLastInteractionAt(this.conversationKey("discord", channelId), Date.now());
         return;
       }
 
-      await Conversation.updateOne(
+      await DiscordConversation.updateOne(
         { channelId },
         {
           $push: {
@@ -99,9 +136,68 @@ class ConversationContext {
         },
         { upsert: true },
       );
-      setLastInteractionAt(channelId, Date.now());
+      setLastInteractionAt(this.conversationKey("discord", channelId), Date.now());
     } catch (error) {
-      aiLogger.error({ error }, "Failed to save message to memory");
+      aiLogger.error({ error }, "Failed to save Discord message to memory");
+    }
+  }
+
+  async rememberSteamMessage(args: {
+    profileId: string;
+    authorSteamId: string;
+    authorName: string;
+    content: string;
+    isBot: boolean;
+    commentId: string;
+    timestamp?: Date;
+  }): Promise<void> {
+    try {
+      await SteamConversation.updateOne(
+        { profileId: args.profileId, "messages.commentId": args.commentId },
+        {
+          $set: {
+            "messages.$.authorSteamId": args.authorSteamId,
+            "messages.$.authorName": args.authorName,
+            "messages.$.content": args.content,
+            "messages.$.isBot": args.isBot,
+          },
+        },
+      ).then(async (result) => {
+        if (result.matchedCount > 0) return;
+        await SteamConversation.updateOne(
+          { profileId: args.profileId },
+          {
+            $push: {
+              messages: {
+                $each: [
+                  {
+                    commentId: args.commentId,
+                    profileId: args.profileId,
+                    authorSteamId: args.authorSteamId,
+                    authorName: args.authorName,
+                    content: args.content,
+                    isBot: args.isBot,
+                    timestamp: args.timestamp ?? new Date(),
+                  },
+                ],
+                $slice: -100,
+              },
+            },
+            $set: { lastInteraction: new Date() },
+          },
+          { upsert: true },
+        );
+      });
+
+      setLastInteractionAt(
+        this.conversationKey("steam", args.profileId),
+        Date.now(),
+      );
+    } catch (error) {
+      aiLogger.error(
+        { error, profileId: args.profileId, commentId: args.commentId },
+        "Failed to save Steam comment to memory",
+      );
     }
   }
 
@@ -112,7 +208,7 @@ class ConversationContext {
     content: string,
   ): Promise<ConversationMessageUpdateResult> {
     try {
-      const conversation = await Conversation.findOne(
+      const conversation = await DiscordConversation.findOne(
         { channelId, "messages.messageId": messageId },
         { "messages.$": 1 },
       );
@@ -135,7 +231,7 @@ class ConversationContext {
         };
       }
 
-      await Conversation.updateOne(
+      await DiscordConversation.updateOne(
         { channelId, "messages.messageId": messageId },
         {
           $set: {
@@ -148,7 +244,7 @@ class ConversationContext {
           $inc: { "messages.$.editCount": 1 },
         },
       );
-      setLastInteractionAt(channelId, Date.now());
+      setLastInteractionAt(this.conversationKey("discord", channelId), Date.now());
 
       return {
         found: true,
@@ -159,7 +255,7 @@ class ConversationContext {
     } catch (error) {
       aiLogger.error(
         { error, channelId, messageId },
-        "Failed to update archived message content",
+        "Failed to update archived Discord message content",
       );
       return {
         found: false,
@@ -170,32 +266,43 @@ class ConversationContext {
     }
   }
 
-  async getMemoryContext(channelId: string, limit = 20): Promise<string> {
+  async getMemoryContext(
+    conversationId: string,
+    limit = 20,
+    surface: ConversationSurface = "discord",
+  ): Promise<string> {
     try {
-      const conversation = await Conversation.findOne({ channelId });
-      if (!conversation || conversation.messages.length === 0) return "";
+      const messages = await this.fetchConversationMessages(surface, conversationId);
+      if (messages.length === 0) return "";
 
-      const recent = conversation.messages
-        .filter((m) => !m.isBot)
-        .slice(-limit);
-      return recent.map((m) => `${m.author}: ${m.content}`).join("\n");
+      return messages
+        .filter((message) => !message.isBot)
+        .slice(-limit)
+        .map((message) => `${message.author}: ${message.content}`)
+        .join("\n");
     } catch (error) {
-      aiLogger.error({ error }, "Failed to get memory context");
+      aiLogger.error({ error, surface, conversationId }, "Failed to get memory context");
       return "";
     }
   }
 
-  isOngoingConversation(channelId: string): boolean {
-    const lastTime = getLastInteractionAt(channelId);
+  isOngoingConversation(
+    conversationId: string,
+    surface: ConversationSurface = "discord",
+  ): boolean {
+    const lastTime = getLastInteractionAt(this.conversationKey(surface, conversationId));
     if (!lastTime) return false;
     return Date.now() - lastTime < ONGOING_CONVERSATION_WINDOW_MS;
   }
 
   trackUserMessage(
-    channelId: string,
-    userId: string,
+    conversationId: string,
+    identity: RuyiUserIdentity,
+    surface: ConversationSurface = "discord",
   ): { shouldExtract: boolean } {
-    const key = this.userKey(channelId, userId);
+    if (!identity.canWriteMemory) return { shouldExtract: false };
+
+    const key = this.userKey(surface, conversationId, identity.personId);
     const next = incrementUserMessageCount(key);
 
     if (next < AUTO_EXTRACT_THRESHOLD) return { shouldExtract: false };
@@ -208,25 +315,44 @@ class ConversationContext {
     return { shouldExtract: true };
   }
 
-  markExtracted(channelId: string, userId: string): void {
-    const key = this.userKey(channelId, userId);
+  markExtracted(
+    conversationId: string,
+    identity: RuyiUserIdentity,
+    surface: ConversationSurface = "discord",
+  ): void {
+    const key = this.userKey(surface, conversationId, identity.personId);
     resetUserMessageCount(key);
     setLastExtractionAt(key, Date.now());
   }
 
   async loadLastInteractions(): Promise<void> {
     try {
-      const conversations = await Conversation.find(
-        {},
-        { channelId: 1, lastInteraction: 1 },
-      );
-      for (const conv of conversations) {
-        if (conv.lastInteraction) {
-          setLastInteractionAt(conv.channelId, conv.lastInteraction.getTime());
-        }
+      const [discordConversations, steamConversations] = await Promise.all([
+        DiscordConversation.find({}, { channelId: 1, lastInteraction: 1 }),
+        SteamConversation.find({}, { profileId: 1, lastInteraction: 1 }),
+      ]);
+
+      for (const conversation of discordConversations) {
+        if (!conversation.lastInteraction) continue;
+        setLastInteractionAt(
+          this.conversationKey("discord", conversation.channelId),
+          conversation.lastInteraction.getTime(),
+        );
       }
+
+      for (const conversation of steamConversations) {
+        if (!conversation.lastInteraction) continue;
+        setLastInteractionAt(
+          this.conversationKey("steam", conversation.profileId),
+          conversation.lastInteraction.getTime(),
+        );
+      }
+
       aiLogger.info(
-        { count: conversations.length },
+        {
+          discord: discordConversations.length,
+          steam: steamConversations.length,
+        },
         "Loaded last interaction times",
       );
     } catch (error) {
@@ -240,24 +366,17 @@ class ConversationContext {
   ): string[] {
     if (memories.length === 0) return [];
     const lines = [title];
-    for (const m of memories) lines.push(`  - ${m.key}: ${m.value}`);
+    for (const memory of memories) {
+      lines.push(`  - ${memory.key}: ${memory.value}`);
+    }
     return lines;
   }
 
-  /**
-   * Tiered user memory context for the current Discord scope:
-   *   1. Pinned facts about the current user (always loaded)
-   *   2. Recently-updated user memories (auto + manual, non-pinned)
-   */
-  async fetchUserMemories(
-    userId: string,
-    username: string,
-    scope: ConfigScope | null,
-  ): Promise<string> {
+  async fetchUserMemories(identity: RuyiUserIdentity | null): Promise<string> {
     try {
-      if (!scope) return "";
+      if (!identity) return "";
 
-      const userFilter = buildUserMemoryFilter(userId, scope);
+      const userFilter = buildUserMemoryFilter(identity);
       const [pinnedUser, recentUser] = await Promise.all([
         Memory.find({ ...userFilter, pinned: true })
           .sort({ updatedAt: -1 })
@@ -267,26 +386,23 @@ class ConversationContext {
           .limit(RECENT_USER_MEMORY_LIMIT),
       ]);
 
+      const label = formatUserMemoryContext(identity);
       const lines: string[] = [
         ...this.formatMemorySection(
-          `Pinned facts about ${username} (always relevant, treat as core persona context):`,
+          `Pinned facts about ${label} (always relevant, treat as core persona context):`,
           pinnedUser,
         ),
-        ...this.formatMemorySection(
-          `Recent memories about ${username}:`,
-          recentUser,
-        ),
+        ...this.formatMemorySection(`Recent memories about ${label}:`, recentUser),
       ];
 
       if (lines.length === 0) return "";
 
       aiLogger.debug(
         {
-          username,
+          username: identity.username,
+          personId: identity.personId,
           pinnedUser: pinnedUser.length,
           recentUser: recentUser.length,
-          scopeKind: scope?.kind,
-          scopeId: scope?.id,
         },
         "Fetched memories for context",
       );
@@ -298,25 +414,42 @@ class ConversationContext {
     }
   }
 
-  async fetchChannelSummary(channelId: string): Promise<string> {
+  async fetchConversationSummary(
+    conversationId: string,
+    surface: ConversationSurface = "discord",
+  ): Promise<string> {
     try {
-      const session = await AgentSession.findOne(
-        {
-          channelId,
-          isActive: true,
-          provider: "openai-agents",
-        },
-        { summary: 1, _id: 0 },
-      );
+      const session =
+        surface === "discord"
+          ? await DiscordAgentSession.findOne(
+              {
+                channelId: conversationId,
+                isActive: true,
+                provider: "openai-agents",
+              },
+              { summary: 1, _id: 0 },
+            )
+          : await SteamAgentSession.findOne(
+              {
+                profileId: conversationId,
+                isActive: true,
+                provider: "openai-agents",
+              },
+              { summary: 1, _id: 0 },
+            );
       const summary = session?.summary?.trim();
       if (!summary) return "";
 
-      return `\n\nChannel summary (compacted older context):\n${summary.slice(
+      const label = surface === "discord" ? "Channel" : "Steam profile";
+      return `\n\n${label} summary (compacted older context):\n${summary.slice(
         0,
         CHANNEL_SUMMARY_CONTEXT_MAX_LEN,
       )}`;
     } catch (error) {
-      aiLogger.error({ error, channelId }, "Failed to fetch channel summary");
+      aiLogger.error(
+        { error, surface, conversationId },
+        "Failed to fetch conversation summary",
+      );
       return "";
     }
   }
@@ -347,13 +480,11 @@ class ConversationContext {
   }
 
   async fetchUserTimeZone(
-    userId: string,
-    username: string,
-    scope: ConfigScope | null,
+    identity: RuyiUserIdentity | null,
   ): Promise<{ timeZone: string; source: string } | null> {
     try {
-      if (!scope) return null;
-      const memories = await Memory.find(buildUserMemoryFilter(userId, scope), {
+      if (!identity) return null;
+      const memories = await Memory.find(buildUserMemoryFilter(identity), {
         key: 1,
         value: 1,
         _id: 0,
@@ -368,25 +499,19 @@ class ConversationContext {
 
       return null;
     } catch (error) {
-      aiLogger.error({ error, username }, "Failed to fetch user timezone");
+      aiLogger.error({ error, username: identity?.username }, "Failed to fetch user timezone");
       return null;
     }
   }
 
-  buildConversationHistory(chatHistory: ChatMessage[]): string {
-    // The persistent AgentSession normally retains the bot's own turns.
-    // We still surface a tiny slice of visible bot replies so a freshly
-    // rebuilt session can recover continuity after Discord deletions.
-    // We surface:
-    //   - the reply chain the user explicitly cited (might be older or
-    //     external messages the session has not seen)
-    //   - recent ambient channel activity from other humans (the session
-    //     never saw these because the bot didn't reply to them)
-    //   - a few visible bot replies for ambiguous follow-ups/mention-only pings
-    const replyChain = chatHistory.filter((m) => m.isReplyContext && !m.isBot);
-    const ambient = chatHistory.filter((m) => !m.isReplyContext && !m.isBot);
+  buildConversationHistory(
+    chatHistory: ChatMessage[],
+    surface: ConversationSurface = "discord",
+  ): string {
+    const replyChain = chatHistory.filter((message) => message.isReplyContext && !message.isBot);
+    const ambient = chatHistory.filter((message) => !message.isReplyContext && !message.isBot);
     const visibleBotReplies = chatHistory.filter(
-      (m) => !m.isReplyContext && m.isBot,
+      (message) => !message.isReplyContext && message.isBot,
     );
 
     const sections: string[] = [];
@@ -394,7 +519,7 @@ class ConversationContext {
     if (replyChain.length > 0) {
       const lines = replyChain
         .slice(-10)
-        .map((m) => `${m.author}: ${m.content}`)
+        .map((message) => `${message.author}: ${message.content}`)
         .join("\n");
       sections.push(
         `Reply context (the message thread the user is referring to):\n${lines}`,
@@ -402,19 +527,21 @@ class ConversationContext {
     }
 
     if (ambient.length > 0) {
+      const label =
+        surface === "discord"
+          ? "Recent channel activity (other people talking, for situational awareness — do NOT respond to these directly unless the user asks)"
+          : "Recent Steam profile comments (public profile-comment context for situational awareness)";
       const lines = ambient
         .slice(-15)
-        .map((m) => `${m.author}: ${m.content}`)
+        .map((message) => `${message.author}: ${message.content}`)
         .join("\n");
-      sections.push(
-        `Recent channel activity (other people talking, for situational awareness — do NOT respond to these directly unless the user asks):\n${lines}`,
-      );
+      sections.push(`${label}:\n${lines}`);
     }
 
     if (visibleBotReplies.length > 0) {
       const lines = visibleBotReplies
         .slice(-5)
-        .map((m) => `${m.author}: ${m.content}`)
+        .map((message) => `${message.author}: ${message.content}`)
         .join("\n");
       sections.push(
         `Recent visible bot replies (for continuity and ambiguous follow-ups; do not repeat them):\n${lines}`,
@@ -427,27 +554,41 @@ class ConversationContext {
   async buildDynamicContext(
     username: string,
     userId: string,
-    channelId: string,
+    conversationId: string,
     chatHistory: ChatMessage[],
     configScope: ConfigScope | null,
+    options: DynamicContextOptions = {},
   ): Promise<string> {
-    const historyContext = this.buildConversationHistory(chatHistory);
-    const [memoryContext, channelSummary, userTimeZone] = await Promise.all([
-      this.fetchUserMemories(userId, username, configScope),
-      this.fetchChannelSummary(channelId),
-      this.fetchUserTimeZone(userId, username, configScope),
+    const surface = options.surface ?? "discord";
+    const identity =
+      options.identity ?? buildDiscordUserIdentity(userId, username);
+    const historyContext = this.buildConversationHistory(chatHistory, surface);
+    const [memoryContext, conversationSummary, userTimeZone] = await Promise.all([
+      this.fetchUserMemories(identity),
+      this.fetchConversationSummary(conversationId, surface),
+      this.fetchUserTimeZone(identity),
     ]);
     const temporalContext = buildCurrentTemporalContext(userTimeZone?.timeZone);
-    const isOngoing = this.isOngoingConversation(channelId);
+    const isOngoing = this.isOngoingConversation(conversationId, surface);
+    const surfaceLabel =
+      options.surfaceLabel ??
+      (surface === "discord" ? "Discord conversation" : "Steam profile comments");
+    const surfaceConstraints =
+      surface === "steam"
+        ? `Steam profile comment constraints: keep the final reply under ${STEAM_PROFILE_COMMENT_MAX_LENGTH} characters. Use Steam BBCode/plain text, not Discord Markdown.`
+        : null;
 
     const contextLines = [
       `<context>`,
+      `Surface: ${surfaceLabel}`,
+      surfaceConstraints,
       `Current user: ${username}`,
       formatTemporalContext(temporalContext),
       userTimeZone
         ? `User timezone inferred from memory "${userTimeZone.source}".`
         : `User timezone memory not found; reference timezone is the bot runtime zone.`,
-      channelSummary ? `${channelSummary}` : null,
+      configScope ? null : `No scoped config was available for this surface.`,
+      conversationSummary ? `${conversationSummary}` : null,
       historyContext ? `${historyContext}` : null,
       memoryContext ? `${memoryContext}` : null,
       `</context>`,
@@ -460,6 +601,35 @@ class ConversationContext {
       : "";
 
     return `${contextLines}${instructionsSection}`;
+  }
+
+  private async fetchConversationMessages(
+    surface: ConversationSurface,
+    conversationId: string,
+  ): Promise<ConversationMemoryMessage[]> {
+    if (surface === "discord") {
+      const conversation = await DiscordConversation.findOne({
+        channelId: conversationId,
+      });
+      return (
+        conversation?.messages.map((message) => ({
+          author: message.author,
+          content: message.content,
+          isBot: message.isBot,
+        })) ?? []
+      );
+    }
+
+    const conversation = await SteamConversation.findOne({
+      profileId: conversationId,
+    });
+    return (
+      conversation?.messages.map((message) => ({
+        author: message.authorName,
+        content: message.content,
+        isBot: message.isBot,
+      })) ?? []
+    );
   }
 }
 

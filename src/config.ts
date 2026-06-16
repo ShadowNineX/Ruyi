@@ -31,8 +31,9 @@ const DEFAULT_SEARCH_PROVIDER = "openai";
 const DEFAULT_AI_MODEL_PRESET = "balanced";
 const DEFAULT_AWAY_SCOPE_ENABLED = true;
 
-const GUILD_CONFIG_PREFIX = "guild:";
-const DM_CONFIG_PREFIX = "dm:";
+const DISCORD_GUILD_CONFIG_PREFIX = "discord:guild:";
+const DISCORD_DM_CONFIG_PREFIX = "discord:dm:";
+const STEAM_PROFILE_CONFIG_PREFIX = "steam:profile:";
 const USER_SEGMENT = "user";
 const PREFIX_SETTING = "prefix";
 const SEARCH_PROVIDER_SETTING = "search:primary_provider";
@@ -45,7 +46,7 @@ const AWAY_USER_LAST_SENT_SETTING = "away:last_sent_at";
 
 export const SEARCH_PROVIDERS = ["openai", "tavily"] as const;
 export type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
-type ConfigScopeKind = "guild" | "dm";
+type ConfigScopeKind = "discord:guild" | "discord:dm" | "steam:profile";
 
 export interface ConfigScope {
   kind: ConfigScopeKind;
@@ -136,11 +137,15 @@ interface AwayMessageSettings {
 }
 
 export function guildConfigScope(guildId: string): ConfigScope {
-  return { kind: "guild", id: guildId };
+  return { kind: "discord:guild", id: guildId };
 }
 
 function dmConfigScope(userId: string): ConfigScope {
-  return { kind: "dm", id: userId };
+  return { kind: "discord:dm", id: userId };
+}
+
+export function steamProfileConfigScope(profileId: string): ConfigScope {
+  return { kind: "steam:profile", id: profileId };
 }
 
 export function userConfigScope(
@@ -155,7 +160,14 @@ export function configScopeKey(scope: ConfigScope): string {
 }
 
 export function formatConfigScope(scope: ConfigScope): string {
-  return scope.kind === "guild" ? "this server" : "this private chat";
+  switch (scope.kind) {
+    case "discord:guild":
+      return "this server";
+    case "discord:dm":
+      return "this private chat";
+    case "steam:profile":
+      return "this Steam profile";
+  }
 }
 
 function defaultScopedSettings(): ScopedSettings {
@@ -241,12 +253,17 @@ function parseScopeUserConfigKey(key: string): ParsedScopeUserConfigKey | null {
 }
 
 function parseScopePrefix(key: string): ConfigScope | null {
-  for (const kind of ["guild", "dm"] as const) {
-    const prefix = kind === "guild" ? GUILD_CONFIG_PREFIX : DM_CONFIG_PREFIX;
-    if (!key.startsWith(prefix)) continue;
+  const prefixes = [
+    { kind: "discord:guild", prefix: DISCORD_GUILD_CONFIG_PREFIX },
+    { kind: "discord:dm", prefix: DISCORD_DM_CONFIG_PREFIX },
+    { kind: "steam:profile", prefix: STEAM_PROFILE_CONFIG_PREFIX },
+  ] as const;
 
-    const id = key.slice(prefix.length).split(":")[0];
-    return id ? { kind, id } : null;
+  for (const { kind, prefix } of prefixes) {
+    if (key.startsWith(prefix)) {
+      const id = key.slice(prefix.length).split(":")[0];
+      return id ? { kind, id } : null;
+    }
   }
 
   return null;
@@ -290,8 +307,9 @@ class ConfigManager {
 
     const entries = (
       await Promise.all([
-        getConfigValuesByPrefix(GUILD_CONFIG_PREFIX),
-        getConfigValuesByPrefix(DM_CONFIG_PREFIX),
+        getConfigValuesByPrefix(DISCORD_GUILD_CONFIG_PREFIX),
+        getConfigValuesByPrefix(DISCORD_DM_CONFIG_PREFIX),
+        getConfigValuesByPrefix(STEAM_PROFILE_CONFIG_PREFIX),
       ])
     ).flat();
 

@@ -1,10 +1,11 @@
 import { Agent } from "@openai/agents";
 import { z } from "zod";
-import type { ConfigScope } from "../config";
 import { aiLogger } from "../logger";
 import { Memory } from "../db/models";
 import type { IMemory } from "../db/models/memory";
 import { buildUserMemoryFilter } from "../utils/memory-scope";
+import type { ConversationSurface } from "./context";
+import type { RuyiUserIdentity } from "../utils/user-identity";
 import {
   sanitizeMemoryKey,
   truncateMemoryValue,
@@ -104,10 +105,9 @@ function formatExistingMemories(memories: ExistingMemorySummary[]): string {
 }
 
 async function evictOldestWritableMemory(
-  userId: string,
-  scope: ConfigScope,
+  identity: RuyiUserIdentity,
 ): Promise<boolean> {
-  const filter = buildUserMemoryFilter(userId, scope);
+  const filter = buildUserMemoryFilter(identity);
   const count = await Memory.countDocuments(filter);
   if (count < USER_MEMORY_CAP) return true;
 
@@ -122,12 +122,11 @@ async function evictOldestWritableMemory(
 }
 
 async function findRelatedMemory(
-  userId: string,
-  scope: ConfigScope,
+  identity: RuyiUserIdentity,
   key: string,
   value: string,
 ): Promise<IMemory | null> {
-  const memories = await Memory.find(buildUserMemoryFilter(userId, scope))
+  const memories = await Memory.find(buildUserMemoryFilter(identity))
     .sort({ pinned: -1, updatedAt: -1 })
     .limit(USER_MEMORY_CAP);
 
@@ -141,27 +140,26 @@ async function findRelatedMemory(
 }
 
 async function findOperationTarget(
-  userId: string,
-  scope: ConfigScope,
+  identity: RuyiUserIdentity,
   key: string,
   existingKey: string | null,
   value: string,
 ): Promise<IMemory | null> {
   if (existingKey) {
     const existing = await Memory.findOne({
-      ...buildUserMemoryFilter(userId, scope),
+      ...buildUserMemoryFilter(identity),
       key: existingKey,
     });
     if (existing) return existing;
   }
 
   const exact = await Memory.findOne({
-    ...buildUserMemoryFilter(userId, scope),
+    ...buildUserMemoryFilter(identity),
     key,
   });
   if (exact) return exact;
 
-  return findRelatedMemory(userId, scope, key, value);
+  return findRelatedMemory(identity, key, value);
 }
 
 async function renameMemoryIfNeeded(
@@ -171,9 +169,7 @@ async function renameMemoryIfNeeded(
   if (memory.key === nextKey) return memory;
 
   const conflicting = await Memory.findOne({
-    scope: memory.scope,
-    scopeKind: memory.scopeKind,
-    scopeId: memory.scopeId,
+    personId: memory.personId,
     key: nextKey,
   });
   if (!conflicting) {
@@ -190,8 +186,7 @@ async function renameMemoryIfNeeded(
 
 async function applyMemoryOperation(
   username: string,
-  userId: string,
-  scope: ConfigScope,
+  identity: RuyiUserIdentity,
   operation: ExtractedMemoryOperation,
 ): Promise<MemoryOperationOutcome> {
   const key = sanitizeMemoryKey(operation.key);
@@ -203,8 +198,7 @@ async function applyMemoryOperation(
     : null;
 
   const target = await findOperationTarget(
-    userId,
-    scope,
+    identity,
     key,
     existingKey,
     value,
@@ -224,10 +218,10 @@ async function applyMemoryOperation(
   }
 
   if (operation.action === "update") return "skipped";
-  if (!(await evictOldestWritableMemory(userId, scope))) return "skipped";
+  if (!(await evictOldestWritableMemory(identity))) return "skipped";
 
   await Memory.create({
-    ...buildUserMemoryFilter(userId, scope),
+    ...buildUserMemoryFilter(identity),
     key,
     value,
     username,
@@ -239,11 +233,10 @@ async function applyMemoryOperation(
 }
 
 async function fetchExistingMemories(
-  userId: string,
-  scope: ConfigScope,
+  identity: RuyiUserIdentity,
 ): Promise<ExistingMemorySummary[]> {
   const memories = await Memory.find(
-    buildUserMemoryFilter(userId, scope),
+    buildUserMemoryFilter(identity),
     { key: 1, value: 1, pinned: 1, source: 1, _id: 0 },
   )
     .sort({ pinned: -1, updatedAt: -1 })
@@ -264,31 +257,32 @@ async function fetchExistingMemories(
  */
 export async function autoExtractFacts(
   username: string,
-  userId: string,
-  channelId: string,
-  configScope: ConfigScope | null,
+  identity: RuyiUserIdentity,
+  conversationId: string,
+  surface: ConversationSurface = "discord",
 ): Promise<boolean> {
-  if (!configScope) {
+  if (!identity.canWriteMemory) {
     aiLogger.debug(
-      { username, channelId },
-      "Skip extraction: Discord config scope unavailable",
+      { username, conversationId, surface },
+      "Skip extraction: identity is not allowed to write memories",
     );
     return false;
   }
 
   const history = await conversationContext.getMemoryContext(
-    channelId,
+    conversationId,
     AUTO_EXTRACT_HISTORY_WINDOW,
+    surface,
   );
   if (!history || history.length < 80) {
     aiLogger.debug(
-      { username, channelId },
+      { username, conversationId, surface },
       "Skip extraction: history too short",
     );
     return false;
   }
 
-  const existing = await fetchExistingMemories(userId, configScope);
+  const existing = await fetchExistingMemories(identity);
   const existingBlock =
     existing.length > 0
       ? `\nExisting memories about ${username}:\n${formatExistingMemories(existing)}`
@@ -333,8 +327,7 @@ Extract durable facts about ${username}. Return create/update memory operations,
       try {
         const outcome = await applyMemoryOperation(
           username,
-          userId,
-          configScope,
+          identity,
           operation,
         );
         outcomes[outcome] += 1;
@@ -354,7 +347,8 @@ Extract durable facts about ${username}. Return create/update memory operations,
     aiLogger.info(
       {
         username,
-        channelId,
+        conversationId,
+        surface,
         count: operations.length,
         created: outcomes.created,
         updated: outcomes.updated,
@@ -371,7 +365,8 @@ Extract durable facts about ${username}. Return create/update memory operations,
         stack: (error as Error).stack,
         name: (error as Error).name,
         username,
-        channelId,
+        conversationId,
+        surface,
       },
       "Auto-extraction failed",
     );

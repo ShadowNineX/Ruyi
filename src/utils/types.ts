@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Message, TextBasedChannel, Guild } from "discord.js";
 import { toolLogger } from "../logger";
+import type { RuyiUserIdentity } from "./user-identity";
 
 type ReverseImageBudgetedTool =
   | "reverse_image_search"
@@ -17,10 +18,16 @@ interface ToolTurnBudget {
 }
 
 export interface ToolContext {
+  surface: "discord" | "steam";
+  identity: RuyiUserIdentity | null;
   message: Message | null;
   channel: TextBasedChannel | null;
   guild: Guild | null;
   referencedMessage: Message | null;
+  steam?: {
+    profileId: string;
+    sourceCommentId?: string | null;
+  };
   toolBudget?: ToolTurnBudget;
 }
 
@@ -40,6 +47,8 @@ type ToolBudgetDecision =
     };
 
 const EMPTY_CONTEXT: ToolContext = {
+  surface: "discord",
+  identity: null,
   message: null,
   channel: null,
   guild: null,
@@ -98,9 +107,7 @@ export function runWithToolContext<T>(
 }
 
 /**
- * Backwards-compatible facade over the AsyncLocalStorage-backed context.
- * Tools should keep calling `toolContextManager.get()` /
- * `toolContextManager.resolveTargetMessage(...)` exactly as before.
+ * Facade over the AsyncLocalStorage-backed context used by tool executions.
  */
 class ToolContextFacade {
   get(): ToolContext {

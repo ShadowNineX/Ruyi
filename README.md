@@ -49,6 +49,24 @@ SCRAPECREATORS_API_KEY=your_scrapecreators_api_key
 The `pinterest` tool is read-only and returns bounded summaries so board and
 pin lookups do not flood Discord.
 
+## Steam Profile Comments
+
+Ruyi can also use Steam Community profile comments as a second chat surface.
+Steam is optional: omit all four variables to disable it, or set all four to
+enable profile-comment notifications and posting. Ruyi listens for Steam
+comment notifications first and uses a slow profile-comment reconciliation check
+only as a fallback.
+
+```bash
+STEAM_REFRESH_TOKEN=your_steam_refresh_token
+STEAM_BOT_STEAM_ID64=7656119xxxxxxxxxx
+STEAM_OWNER_STEAM_ID64=7656119xxxxxxxxxx
+OWNER_DISCORD_USER_ID=123456789012345678
+```
+
+Steam and Discord use the same AI/persona and memories, but separate persisted
+conversation history and Agent sessions.
+
 ## Smithery MCP
 
 Set `SMITHERY_API_KEY` and `SMITHERY_NAMESPACE`, restart the bot, then run
