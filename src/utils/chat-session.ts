@@ -4,7 +4,11 @@ import {
   type TextBasedChannel,
 } from "discord.js";
 import { botLogger } from "../logger";
-import { CHAT_TYPING_INTERVAL_MS } from "../constants";
+import {
+  CHAT_TYPING_INTERVAL_MS,
+  STREAM_PREVIEW_EDIT_INTERVAL_MS,
+  STREAM_PREVIEW_MAX_LENGTH,
+} from "../constants";
 import {
   createChatSessionStore,
   incrementChatSessionToolCount,
@@ -97,6 +101,13 @@ function buildToolStatusPayload(
     embeds: [buildToolStatusEmbed(state)],
     components: [],
   };
+}
+
+function formatStreamPreviewContent(text: string): string | null {
+  if (text.trim().length === 0) return null;
+  if (text.length <= STREAM_PREVIEW_MAX_LENGTH) return text;
+
+  return `${text.slice(0, STREAM_PREVIEW_MAX_LENGTH - 3)}...`;
 }
 
 /**
@@ -255,6 +266,41 @@ export class ChatSession {
     }
   }
 
+  private async createReplyMessage(content: string): Promise<Message | null> {
+    const { closed, replyTarget } = this.store.state;
+    if (closed) return null;
+
+    try {
+      const sent = replyTarget
+        ? await replyTarget.reply(content)
+        : "send" in this.channel
+          ? await this.channel.send(content)
+          : null;
+
+      if (!sent) return null;
+      if (this.store.state.closed) {
+        await sent.delete().catch((error: unknown) => {
+          botLogger.debug(
+            { error: (error as Error)?.message },
+            "Late stream preview delete failed",
+          );
+        });
+        return null;
+      }
+      return sent;
+    } catch (error) {
+      botLogger.debug(
+        {
+          error: (error as Error)?.message,
+          channelId: this.channel.id,
+          messageId: replyTarget?.id,
+        },
+        "Stream preview send failed",
+      );
+      return null;
+    }
+  }
+
   private trackStatusMessagePromise(
     statusMessagePromise: Promise<Message | null>,
   ): Promise<Message | null> {
@@ -272,6 +318,22 @@ export class ChatSession {
     } finally {
       if (this.store.state.statusMessagePromise === pendingMessage) {
         setChatSessionPartial(this.store, { statusMessagePromise: null });
+      }
+    }
+  }
+
+  private async resolveStreamPreviewMessagePromise(
+    pendingMessage: Promise<Message | null>,
+  ): Promise<Message | null> {
+    try {
+      const streamPreviewMessage = await pendingMessage;
+      setChatSessionPartial(this.store, { streamPreviewMessage });
+      return streamPreviewMessage;
+    } finally {
+      if (this.store.state.streamPreviewMessagePromise === pendingMessage) {
+        setChatSessionPartial(this.store, {
+          streamPreviewMessagePromise: null,
+        });
       }
     }
   }
@@ -307,6 +369,108 @@ export class ChatSession {
       botLogger.debug(
         { error: (error as Error)?.message },
         "Tool embed update failed",
+      );
+    }
+  }
+
+  private appendStreamPreviewDelta(delta: string): void {
+    setChatSessionPartial(this.store, {
+      streamPreviewText: `${this.store.state.streamPreviewText}${delta}`,
+    });
+  }
+
+  private clearStreamPreviewEditTimer(): void {
+    const { streamPreviewEditTimer } = this.store.state;
+    if (!streamPreviewEditTimer) return;
+
+    clearTimeout(streamPreviewEditTimer);
+    setChatSessionPartial(this.store, { streamPreviewEditTimer: null });
+  }
+
+  private async ensureStreamPreviewMessage(
+    content: string,
+  ): Promise<Message | null> {
+    const state = this.store.state;
+    if (state.streamPreviewMessage) return state.streamPreviewMessage;
+
+    const streamPreviewMessagePromise =
+      state.streamPreviewMessagePromise ?? this.createReplyMessage(content);
+    setChatSessionPartial(this.store, { streamPreviewMessagePromise });
+    return this.resolveStreamPreviewMessagePromise(
+      streamPreviewMessagePromise,
+    );
+  }
+
+  private async flushStreamPreview(): Promise<void> {
+    const state = this.store.state;
+    if (state.closed) return;
+    if (state.streamPreviewEditInFlight) return;
+
+    const content = formatStreamPreviewContent(state.streamPreviewText);
+    if (!content) return;
+
+    setChatSessionPartial(this.store, { streamPreviewEditInFlight: true });
+    try {
+      const message = await this.ensureStreamPreviewMessage(content);
+      if (!message) return;
+
+      await message.edit(content);
+      setChatSessionPartial(this.store, {
+        streamPreviewLastEditAt: Date.now(),
+      });
+    } catch (error) {
+      botLogger.debug(
+        { error: (error as Error)?.message },
+        "Stream preview update failed",
+      );
+    } finally {
+      setChatSessionPartial(this.store, {
+        streamPreviewEditInFlight: false,
+      });
+    }
+  }
+
+  private scheduleStreamPreviewUpdate(): void {
+    if (this.store.state.closed) return;
+    if (this.store.state.streamPreviewEditTimer) return;
+
+    const elapsedSinceLastEdit =
+      Date.now() - this.store.state.streamPreviewLastEditAt;
+    const delay = Math.max(
+      0,
+      STREAM_PREVIEW_EDIT_INTERVAL_MS - elapsedSinceLastEdit,
+    );
+
+    const streamPreviewEditTimer = setTimeout(() => {
+      setChatSessionPartial(this.store, { streamPreviewEditTimer: null });
+      void this.flushStreamPreview();
+    }, delay);
+    setChatSessionPartial(this.store, { streamPreviewEditTimer });
+  }
+
+  private async deleteStreamPreview(): Promise<void> {
+    this.clearStreamPreviewEditTimer();
+    const { streamPreviewMessage, streamPreviewMessagePromise } =
+      this.store.state;
+    const pendingMessage = streamPreviewMessagePromise
+      ? await streamPreviewMessagePromise
+      : null;
+    const message = streamPreviewMessage ?? pendingMessage;
+    setChatSessionPartial(this.store, {
+      streamPreviewMessage: null,
+      streamPreviewMessagePromise: null,
+      streamPreviewText: "",
+      streamPreviewEditInFlight: false,
+    });
+
+    if (!message) return;
+
+    try {
+      await message.delete();
+    } catch (error) {
+      botLogger.debug(
+        { error: (error as Error)?.message },
+        "Stream preview delete failed",
       );
     }
   }
@@ -380,6 +544,7 @@ export class ChatSession {
   async deleteStatusEmbed(): Promise<void> {
     setChatSessionPartial(this.store, { closed: true });
     this.stopTyping();
+    await this.deleteStreamPreview();
     await this.deleteToolEmbed();
   }
 
@@ -391,15 +556,21 @@ export class ChatSession {
   }
 
   /** Called when the SDK is actively streaming assistant text. */
-  onTextGenerationStart(): void {
+  onTextGenerationStart(delta?: string): void {
     this.setStatus("generating");
     this.startTyping();
+    if (delta) {
+      this.appendStreamPreviewDelta(delta);
+      this.scheduleStreamPreviewUpdate();
+    }
     void this.updateToolEmbed();
   }
 
   /** Called when the current assistant text stream finishes. */
   onTextGenerationEnd(): void {
     this.stopTyping();
+    this.clearStreamPreviewEditTimer();
+    void this.flushStreamPreview();
   }
 
   /** Called when a tool starts executing */
@@ -440,6 +611,7 @@ export class ChatSession {
     setChatSessionPartial(this.store, { closed: true });
     this.stopTyping();
     this.stopToolEmbedRefresh();
+    this.clearStreamPreviewEditTimer();
   }
 
   /** Check if a self-responding tool was used */

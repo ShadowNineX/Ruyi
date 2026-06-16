@@ -26,6 +26,12 @@ export interface ChatSessionState {
   statusMessage: Message | null;
   statusMessagePromise: Promise<Message | null> | null;
   statusRefreshInFlight: boolean;
+  streamPreviewMessage: Message | null;
+  streamPreviewMessagePromise: Promise<Message | null> | null;
+  streamPreviewText: string;
+  streamPreviewLastEditAt: number;
+  streamPreviewEditTimer: ReturnType<typeof setTimeout> | null;
+  streamPreviewEditInFlight: boolean;
   permissionPromptActive: boolean;
   replyTarget: Message | null;
   hasNotifiedStatus: boolean;
@@ -44,6 +50,12 @@ export function createChatSessionStore(): ChatSessionStore {
     statusMessage: null,
     statusMessagePromise: null,
     statusRefreshInFlight: false,
+    streamPreviewMessage: null,
+    streamPreviewMessagePromise: null,
+    streamPreviewText: "",
+    streamPreviewLastEditAt: 0,
+    streamPreviewEditTimer: null,
+    streamPreviewEditInFlight: false,
     permissionPromptActive: false,
     replyTarget: null,
     hasNotifiedStatus: false,

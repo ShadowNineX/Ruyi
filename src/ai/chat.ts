@@ -115,6 +115,13 @@ function isCoreTextDoneEvent(event: ResponseStreamEvent): boolean {
   return event.type === "response_done";
 }
 
+function getCoreRawTextDelta(event: RunStreamEvent): string | null {
+  if (event.type !== "raw_model_stream_event") return null;
+  if (!isCoreTextDeltaEvent(event.data)) return null;
+
+  return event.data.delta;
+}
+
 function isCoreRawTextDeltaEvent(event: RunStreamEvent): boolean {
   return (
     event.type === "raw_model_stream_event" && isCoreTextDeltaEvent(event.data)
@@ -133,6 +140,20 @@ function isResponseTextDeltaEvent(event: RunStreamEvent): boolean {
     (event.data.event.type === "response.output_text.delta" ||
       event.data.event.type === "response.refusal.delta")
   );
+}
+
+function getResponseTextDelta(event: RunStreamEvent): string | null {
+  if (!isOpenAIResponsesRawModelStreamEvent(event)) return null;
+
+  const rawEvent = event.data.event;
+  if (
+    rawEvent.type === "response.output_text.delta" ||
+    rawEvent.type === "response.refusal.delta"
+  ) {
+    return rawEvent.delta;
+  }
+
+  return null;
 }
 
 function isResponseTextDoneEvent(event: RunStreamEvent): boolean {
@@ -155,6 +176,21 @@ function isChatCompletionTextDeltaEvent(event: RunStreamEvent): boolean {
   );
 }
 
+function getChatCompletionTextDelta(event: RunStreamEvent): string | null {
+  if (!isOpenAIChatCompletionsRawModelStreamEvent(event)) return null;
+
+  const delta = event.data.event.choices
+    .map((choice) => {
+      const content = choice.delta.content;
+      const refusal =
+        "refusal" in choice.delta ? choice.delta.refusal : undefined;
+      return content ?? refusal ?? "";
+    })
+    .join("");
+
+  return delta.length > 0 ? delta : null;
+}
+
 function isChatCompletionTextDoneEvent(event: RunStreamEvent): boolean {
   return (
     isOpenAIChatCompletionsRawModelStreamEvent(event) &&
@@ -167,6 +203,14 @@ function isTextDeltaEvent(event: RunStreamEvent): boolean {
     isCoreRawTextDeltaEvent(event) ||
     isResponseTextDeltaEvent(event) ||
     isChatCompletionTextDeltaEvent(event)
+  );
+}
+
+function getTextDelta(event: RunStreamEvent): string | null {
+  return (
+    getCoreRawTextDelta(event) ??
+    getResponseTextDelta(event) ??
+    getChatCompletionTextDelta(event)
   );
 }
 
@@ -535,7 +579,10 @@ class ChatService {
   }
 
   private handleStreamEvent(event: RunStreamEvent, session: ChatSession): void {
-    if (isTextDeltaEvent(event)) {
+    const textDelta = getTextDelta(event);
+    if (textDelta !== null) {
+      session.onTextGenerationStart(textDelta);
+    } else if (isTextDeltaEvent(event)) {
       session.onTextGenerationStart();
     } else if (isTextDoneEvent(event)) {
       session.onTextGenerationEnd();
