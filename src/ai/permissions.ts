@@ -23,6 +23,12 @@ import {
   type PermissionPromptController,
   type PermissionPromptPayload,
 } from "../stores";
+import {
+  argumentEntriesToRecord,
+  formatToolArgumentLines,
+  parseNullableToolArguments,
+  parseToolArguments,
+} from "../utils/tool-arguments";
 
 export type PermissionDecision =
   | "approve_once"
@@ -97,25 +103,10 @@ function decisionFromCustomId(customId: string): PermissionDecision | null {
   return null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function parseApprovalArguments(
   rawArguments: string | undefined,
 ): Record<string, unknown> | null {
-  if (!rawArguments) return null;
-
-  try {
-    const parsed: unknown = JSON.parse(rawArguments);
-    return isRecord(parsed) ? parsed : null;
-  } catch (error) {
-    aiLogger.debug(
-      { error: (error as Error).message },
-      "Tool approval arguments were not JSON",
-    );
-    return null;
-  }
+  return parseNullableToolArguments(rawArguments);
 }
 
 function getStringField(
@@ -126,145 +117,34 @@ function getStringField(
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-function isPrimitiveValue(value: unknown): boolean {
-  return (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  );
+function hasToolArguments(args: Record<string, unknown>): boolean {
+  return Object.keys(args).length > 0;
 }
 
-function formatReadableValue(value: unknown): string {
-  if (value === null) return "null";
-  if (typeof value === "string") return truncate(value.replace(/\s+/g, " "), 700);
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (Array.isArray(value)) return formatReadableArray(value);
-  if (isRecord(value)) return formatReadableRecord(value);
-  return String(value);
-}
-
-function formatReadableArray(values: unknown[]): string {
-  if (values.length === 0) return "none";
-  if (values.length <= 3 && values.every(isPrimitiveValue)) {
-    return values.map(formatReadableValue).join(", ");
-  }
-  return `${values.length} item(s)`;
-}
-
-function formatReadableRecord(record: Record<string, unknown>): string {
-  const entries = Object.entries(record).filter((entry) =>
-    isMeaningfulArgumentValue(entry[1]),
-  );
-  if (entries.length === 0) return "fields: none";
-
-  const simpleEntries = entries.filter((entry) => isPrimitiveValue(entry[1]));
-  if (simpleEntries.length > 0) {
-    const preview = simpleEntries
-      .slice(0, 4)
-      .map(([key, value]) => `${key}: ${formatReadableValue(value)}`)
-      .join("; ");
-    return simpleEntries.length > 4 ? `${preview}; ...` : preview;
-  }
-
-  return `fields: ${entries
-    .slice(0, 6)
-    .map(([key]) => key)
-    .join(", ")}${entries.length > 6 ? ", ..." : ""}`;
-}
-
-function parseJsonArgumentValue(value: unknown): unknown {
-  if (typeof value !== "string" || !value.trim()) return null;
-
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return value;
-  }
-}
-
-function getArgumentEntryName(entry: unknown): string | null {
-  if (!isRecord(entry)) return null;
-  return getStringField(entry, "name");
-}
-
-function getArgumentEntryValue(entry: unknown): unknown {
-  if (!isRecord(entry)) return null;
-  const jsonValue = entry.json_value;
-  return jsonValue !== null && jsonValue !== undefined
-    ? parseJsonArgumentValue(jsonValue)
-    : entry.value;
-}
-
-function argumentEntriesToRecord(entries: unknown): Record<string, unknown> | null {
-  if (!Array.isArray(entries)) return null;
-
-  const record: Record<string, unknown> = {};
-  for (const entry of entries) {
-    const name = getArgumentEntryName(entry);
-    if (!name) continue;
-    record[name] = getArgumentEntryValue(entry);
-  }
-  return record;
-}
-
-function getSmitheryToolArguments(
+function getApprovalToolArguments(
   approvalArgs: Record<string, unknown>,
+  fallback: Record<string, unknown>,
 ): Record<string, unknown> {
   const toolArgumentEntries = argumentEntriesToRecord(approvalArgs.tool_arguments);
-  if (toolArgumentEntries) return toolArgumentEntries;
+  if (toolArgumentEntries && hasToolArguments(toolArgumentEntries)) {
+    return toolArgumentEntries;
+  }
 
-  const directArgs = approvalArgs.arguments;
-  if (isRecord(directArgs)) return directArgs;
+  const directArgs = parseToolArguments(approvalArgs.arguments);
+  if (hasToolArguments(directArgs)) return directArgs;
 
   const argumentsJson = approvalArgs.arguments_json;
-  if (typeof argumentsJson !== "string") return {};
+  if (typeof argumentsJson !== "string") return fallback;
 
-  try {
-    const parsed: unknown = JSON.parse(argumentsJson);
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
+  const parsedArgumentsJson = parseToolArguments(argumentsJson);
+  return hasToolArguments(parsedArgumentsJson) ? parsedArgumentsJson : fallback;
 }
 
-function isMeaningfulArgumentValue(value: unknown): boolean {
-  if (value === null || value === undefined) return false;
-  if (typeof value === "string") return value.trim().length > 0;
-  if (Array.isArray(value)) return value.length > 0;
-  if (isRecord(value)) return Object.keys(value).length > 0;
-  return true;
-}
-
-function formatArgumentLines(args: Record<string, unknown>): string[] {
-  const entries = Object.entries(args).filter((entry) =>
-    isMeaningfulArgumentValue(entry[1]),
-  );
-  const lines = entries.slice(0, ARGUMENT_LINE_LIMIT).map(
-    ([key, value]) => `- ${key}: ${formatReadableValue(value)}`,
-  );
-
-  if (entries.length > ARGUMENT_LINE_LIMIT) {
-    lines.push(`- ...and ${entries.length - ARGUMENT_LINE_LIMIT} more`);
-  }
-
-  return lines;
-}
-
-function getGenericToolArguments(
-  approvalArgs: Record<string, unknown>,
-): Record<string, unknown> {
-  const toolArgumentEntries = argumentEntriesToRecord(approvalArgs.tool_arguments);
-  if (toolArgumentEntries) return toolArgumentEntries;
-
-  const directArgs = approvalArgs.arguments;
-  if (isRecord(directArgs)) return directArgs;
-
-  const parsedDirectArgs = parseJsonArgumentValue(directArgs);
-  if (isRecord(parsedDirectArgs)) return parsedDirectArgs;
-
-  return approvalArgs;
+function formatPermissionArgumentLines(args: Record<string, unknown>): string[] {
+  return formatToolArgumentLines(args, {
+    lineLimit: ARGUMENT_LINE_LIMIT,
+    valueMaxLength: 700,
+  });
 }
 
 function formatRawArgumentLine(rawArguments: string | undefined): string | null {
@@ -291,7 +171,9 @@ function getGenericPermissionDescription(
   if (approvalArgs) {
     appendArgumentLines(
       lines,
-      formatArgumentLines(getGenericToolArguments(approvalArgs)),
+      formatPermissionArgumentLines(
+        getApprovalToolArguments(approvalArgs, approvalArgs),
+      ),
     );
   } else {
     const rawArgumentLine = formatRawArgumentLine(approvalItem.arguments);
@@ -301,23 +183,19 @@ function getGenericPermissionDescription(
   return truncate(lines.join("\n"), 3900);
 }
 
-function formatSmitheryToolArguments(args: Record<string, unknown>): string[] {
-  return formatArgumentLines(args);
-}
-
 function getSmitheryPermissionDescription(
   approvalArgs: Record<string, unknown>,
 ): string {
   const serverId = getStringField(approvalArgs, "server_id") ?? "unknown";
   const serviceName = SMITHERY_SERVICE_NAMES[serverId] ?? serverId;
   const toolName = getStringField(approvalArgs, "tool_name") ?? "unknown";
-  const mcpArgs = getSmitheryToolArguments(approvalArgs);
+  const mcpArgs = getApprovalToolArguments(approvalArgs, {});
   const lines = [
     `Service: **${serviceName}**`,
     `MCP tool: \`${toolName}\``,
   ];
 
-  const argumentLines = formatSmitheryToolArguments(mcpArgs);
+  const argumentLines = formatPermissionArgumentLines(mcpArgs);
   appendArgumentLines(lines, argumentLines);
 
   return truncate(lines.join("\n"), 3900);

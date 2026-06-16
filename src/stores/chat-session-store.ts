@@ -19,6 +19,10 @@ export type SessionStatusListener = (state: SessionStatusSnapshot) => void;
 export interface ChatSessionState {
   status: SessionStatus;
   currentTool?: string;
+  latestToolCall: {
+    toolName: string;
+    args: Record<string, unknown>;
+  } | null;
   toolCounts: Map<string, number>;
   startTime: number;
   typingInterval: ReturnType<typeof setInterval> | null;
@@ -43,6 +47,7 @@ export type ChatSessionStore = Store<ChatSessionState>;
 export function createChatSessionStore(): ChatSessionStore {
   return createStore<ChatSessionState>({
     status: "thinking",
+    latestToolCall: null,
     toolCounts: new Map(),
     startTime: Date.now(),
     typingInterval: null,

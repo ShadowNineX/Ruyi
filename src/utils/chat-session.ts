@@ -18,8 +18,10 @@ import {
   type PermissionPromptPayload,
   type SessionStatusListener,
 } from "../stores";
+import { formatToolArgumentsMarkdown } from "./tool-arguments";
 
 const TOOL_STATUS_REFRESH_INTERVAL_MS = 1000;
+const TOOL_ARGUMENT_FIELD_MAX_LENGTH = 1000;
 
 type ChatSessionStatus = ChatSessionState["status"];
 
@@ -89,6 +91,20 @@ function buildToolStatusEmbed(state: ChatSessionState): EmbedBuilder {
   const toolList = formatToolList(state.toolCounts);
   if (toolList) {
     embed.addFields({ name: "Used This Turn", value: toolList });
+  }
+
+  const latestToolCall = state.latestToolCall;
+  const toolArguments = latestToolCall
+    ? formatToolArgumentsMarkdown(latestToolCall.args, {
+        fieldMaxLength: TOOL_ARGUMENT_FIELD_MAX_LENGTH,
+      })
+    : null;
+  if (latestToolCall && toolArguments) {
+    const fieldName =
+      state.status === "tool"
+        ? `Arguments for ${latestToolCall.toolName}`
+        : `Latest Arguments (${latestToolCall.toolName})`;
+    embed.addFields({ name: fieldName, value: toolArguments });
   }
 
   return embed;
@@ -574,7 +590,10 @@ export class ChatSession {
   }
 
   /** Called when a tool starts executing */
-  onToolStart(toolName: string, _args: Record<string, unknown>): void {
+  onToolStart(toolName: string, args: Record<string, unknown>): void {
+    setChatSessionPartial(this.store, {
+      latestToolCall: { toolName, args },
+    });
     this.setStatus("tool", toolName);
     this.stopTyping();
     void this.updateToolEmbed();

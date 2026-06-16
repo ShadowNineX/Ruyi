@@ -29,6 +29,7 @@ import {
   type PermissionResult,
 } from "./permissions";
 import { autoExtractFacts } from "./extraction";
+import { parseToolArguments } from "../utils/tool-arguments";
 
 const LOCAL_TOOL_NAMES = new Set(allTools.map((tool) => tool.name));
 const ToolCallSchema = z.looseObject({
@@ -75,30 +76,9 @@ interface TurnToolUsage {
   externalToolCallCount: number;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseArguments(value: unknown): Record<string, unknown> {
-  if (!value) return {};
-  if (typeof value === "string") {
-    try {
-      const parsed: unknown = JSON.parse(value);
-      return isRecord(parsed) ? parsed : {};
-    } catch (error) {
-      aiLogger.debug(
-        { error: (error as Error).message },
-        "Tool arguments were not JSON",
-      );
-      return {};
-    }
-  }
-  return isRecord(value) ? value : {};
-}
-
 function getLifecycleToolArgs(toolCall: unknown): Record<string, unknown> {
   const parsed = ToolCallSchema.safeParse(toolCall);
-  return parseArguments(parsed.success ? parsed.data.arguments : undefined);
+  return parseToolArguments(parsed.success ? parsed.data.arguments : undefined);
 }
 
 function formatToolDisplayName(toolName: string, isLocal: boolean): string {
