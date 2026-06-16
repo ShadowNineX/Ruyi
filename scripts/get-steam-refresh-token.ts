@@ -1,5 +1,6 @@
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
+import { toString as qrToString } from "qrcode";
 import {
   EAuthSessionGuardType,
   EAuthTokenPlatformType,
@@ -7,8 +8,12 @@ import {
 } from "steam-session";
 
 const TOKEN_WAIT_TIMEOUT_MS = 90_000;
+const START_LOGIN_TIMEOUT_MS = 60_000;
+const START_LOGIN_STATUS_INTERVAL_MS = 10_000;
 const MASKED_INPUT_FALLBACK_WARNING =
   "Password input is not hidden because this terminal is not interactive.";
+
+type LoginMode = "qr" | "password";
 
 interface LoginCredentials {
   accountName: string;
@@ -16,9 +21,9 @@ interface LoginCredentials {
   guardCode: string | null;
 }
 
-type StartCredentialsResponse = Awaited<
-  ReturnType<LoginSession["startWithCredentials"]>
->;
+type StartCredentialsResponse = Awaited<ReturnType<LoginSession["startWithCredentials"]>>;
+type StartQrResponse = Awaited<ReturnType<LoginSession["startWithQR"]>>;
+type StartSessionResponse = StartCredentialsResponse | StartQrResponse;
 
 interface AuthenticationWaiter {
   promise: Promise<void>;
@@ -29,6 +34,12 @@ function getArgValue(name: string): string | null {
   const prefix = `--${name}=`;
   const value = process.argv.find((arg) => arg.startsWith(prefix));
   return value ? value.slice(prefix.length).trim() : null;
+}
+
+function getLoginMode(): LoginMode {
+  const mode = getArgValue("mode") ?? "qr";
+  if (mode === "qr" || mode === "password") return mode;
+  throw new Error('Unsupported mode. Use "--mode=qr" or "--mode=password".');
 }
 
 async function readLine(prompt: string): Promise<string> {
@@ -141,6 +152,56 @@ function printStatus(message: string): void {
   stdout.write(`[steam-token] ${message}\n`);
 }
 
+function getElapsedSeconds(startedAt: number): number {
+  return Math.round((Date.now() - startedAt) / 1000);
+}
+
+async function startWithQr(session: LoginSession): Promise<StartQrResponse> {
+  printStatus("Creating Steam QR login challenge.");
+  return session.startWithQR();
+}
+
+async function startWithCredentials(
+  session: LoginSession,
+  credentials: LoginCredentials,
+): Promise<StartCredentialsResponse> {
+  const startedAt = Date.now();
+  let statusTick: ReturnType<typeof setInterval> | null = setInterval(() => {
+    printStatus(
+      `Still waiting for Steam to answer the login request (${getElapsedSeconds(startedAt)}s).`,
+    );
+  }, START_LOGIN_STATUS_INTERVAL_MS);
+
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      session.startWithCredentials({
+        accountName: credentials.accountName,
+        password: credentials.password,
+        steamGuardCode: credentials.guardCode ?? undefined,
+      }),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(
+            new Error(
+              "Timed out waiting for Steam to answer the login request. Steam may be slow, blocked, or unreachable from this terminal.",
+            ),
+          );
+        }, START_LOGIN_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (statusTick) {
+      clearInterval(statusTick);
+      statusTick = null;
+    }
+    if (timeout) {
+      clearTimeout(timeout);
+      timeout = null;
+    }
+  }
+}
+
 function formatGuardAction(type: EAuthSessionGuardType): string {
   switch (type) {
     case EAuthSessionGuardType.EmailCode:
@@ -157,13 +218,13 @@ function formatGuardAction(type: EAuthSessionGuardType): string {
 }
 
 function hasGuardAction(
-  response: StartCredentialsResponse,
+  response: StartSessionResponse,
   type: EAuthSessionGuardType,
 ): boolean {
   return response.validActions?.some((action) => action.type === type) ?? false;
 }
 
-function formatGuardActions(response: StartCredentialsResponse): string {
+function formatGuardActions(response: StartSessionResponse): string {
   const actions = response.validActions ?? [];
   if (actions.length === 0) return "none";
 
@@ -173,6 +234,23 @@ function formatGuardActions(response: StartCredentialsResponse): string {
       return action.detail ? `${label} (${action.detail})` : label;
     })
     .join(", ");
+}
+
+async function printQrLogin(response: StartQrResponse): Promise<void> {
+  if (!response.qrChallengeUrl) {
+    throw new Error("Steam did not return a QR challenge URL");
+  }
+
+  const qrCode = await qrToString(response.qrChallengeUrl, {
+    type: "terminal",
+    small: true,
+    margin: 1,
+  });
+  stdout.write("\n");
+  stdout.write(qrCode);
+  stdout.write("\n");
+  stdout.write("Scan this QR code with the Steam mobile app.\n");
+  stdout.write(`Fallback URL: ${response.qrChallengeUrl}\n\n`);
 }
 
 function createAuthenticationWaiter(session: LoginSession): AuthenticationWaiter {
@@ -218,7 +296,7 @@ function createAuthenticationWaiter(session: LoginSession): AuthenticationWaiter
 
 async function submitCodeIfNeeded(
   session: LoginSession,
-  response: StartCredentialsResponse,
+  response: StartSessionResponse,
   suppliedCode: string | null,
 ): Promise<void> {
   if (suppliedCode) {
@@ -248,8 +326,9 @@ async function submitCodeIfNeeded(
 
 async function main(): Promise<void> {
   printStatus("Starting one-time Steam refresh token login.");
-  const credentials = await getCredentials();
-  printStatus(`Using Steam account "${credentials.accountName}".`);
+  const mode = getLoginMode();
+  let guardCode = getArgValue("guard-code");
+  printStatus(`Login mode: ${mode}.`);
 
   const session = new LoginSession(EAuthTokenPlatformType.SteamClient, {
     machineFriendlyName: "Ruyi refresh token helper",
@@ -265,19 +344,33 @@ async function main(): Promise<void> {
   session.once("steamGuardMachineToken", () => {
     printStatus("Steam issued a machine token for this device.");
   });
+  session.on("debug", (message: unknown) => {
+    if (typeof message !== "string") return;
+    printStatus(`Steam session: ${message}`);
+  });
 
   const authentication = createAuthenticationWaiter(session);
-  printStatus("Submitting login to Steam.");
-  let response: StartCredentialsResponse;
-  try {
-    response = await session.startWithCredentials({
-      accountName: credentials.accountName,
-      password: credentials.password,
-      steamGuardCode: credentials.guardCode ?? undefined,
-    });
-  } catch (error: unknown) {
-    authentication.cancel();
-    throw error;
+  let response: StartSessionResponse;
+
+  if (mode === "qr") {
+    try {
+      response = await startWithQr(session);
+      await printQrLogin(response);
+    } catch (error: unknown) {
+      authentication.cancel();
+      throw error;
+    }
+  } else {
+    const credentials = await getCredentials();
+    guardCode = credentials.guardCode;
+    printStatus(`Using Steam account "${credentials.accountName}".`);
+    printStatus("Submitting login to Steam.");
+    try {
+      response = await startWithCredentials(session, credentials);
+    } catch (error: unknown) {
+      authentication.cancel();
+      throw error;
+    }
   }
 
   if (response.actionRequired) {
@@ -288,7 +381,7 @@ async function main(): Promise<void> {
     if (hasGuardAction(response, EAuthSessionGuardType.EmailConfirmation)) {
       printStatus("Approve the Steam login confirmation email.");
     }
-    await submitCodeIfNeeded(session, response, credentials.guardCode);
+    await submitCodeIfNeeded(session, response, guardCode);
   } else {
     printStatus("No Steam Guard action is required.");
   }
