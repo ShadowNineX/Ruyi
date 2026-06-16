@@ -34,6 +34,7 @@ import {
   isSearchProviderSelect,
   handleModelSelect,
   isModelSelect,
+  handleReminderAutocomplete,
 } from "./slash-commands";
 import { ChatSession } from "./utils/chat-session";
 import {
@@ -989,7 +990,9 @@ class RuyiBot {
   private readonly dispatchInteraction = async (
     interaction: Interaction,
   ): Promise<void> => {
-    if (interaction.isChatInputCommand()) {
+    if (interaction.isAutocomplete()) {
+      await handleReminderAutocomplete(interaction);
+    } else if (interaction.isChatInputCommand()) {
       await handleSlashCommand(interaction);
     } else if (
       interaction.isStringSelectMenu() &&

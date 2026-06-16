@@ -80,9 +80,7 @@ export function formatReminderLine(
 ): string {
   const unix = Math.floor(reminder.dueAt.getTime() / 1000);
   const text = truncateReminderListText(reminder.text, maxTextLength);
-  return `\`${formatReminderId(reminder)}\` - ${formatReminderKind(
-    reminder.kind,
-  )}: ${text} - <t:${unix}:F> (<t:${unix}:R>)`;
+  return `${formatReminderKind(reminder.kind)}: ${text} - <t:${unix}:F> (<t:${unix}:R>)`;
 }
 
 function getReminderErrorMessage(error: unknown): string {

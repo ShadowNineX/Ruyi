@@ -20,6 +20,7 @@ import {
   handleRemindCommand,
   handleTimersCommand,
   handleCancelReminderCommand,
+  handleReminderAutocomplete,
 } from "./reminders";
 
 export const slashCommands = [
@@ -48,6 +49,8 @@ export {
 } from "./search-provider";
 
 export { handleModelSelect, isModelSelect } from "./model";
+
+export { handleReminderAutocomplete };
 
 export async function handleSlashCommand(
   interaction: ChatInputCommandInteraction,
