@@ -13,6 +13,14 @@ import {
   searchProviderCommand,
   handleSearchProviderCommand,
 } from "./search-provider";
+import {
+  remindCommand,
+  timersCommand,
+  cancelReminderCommand,
+  handleRemindCommand,
+  handleTimersCommand,
+  handleCancelReminderCommand,
+} from "./reminders";
 
 export const slashCommands = [
   prefixCommand,
@@ -21,6 +29,9 @@ export const slashCommands = [
   creditsCommand,
   scrapeCreatorsCommand,
   awayCommand,
+  remindCommand,
+  timersCommand,
+  cancelReminderCommand,
   smitheryCommand,
   memoriesCommand,
 ];
@@ -59,6 +70,15 @@ export async function handleSlashCommand(
       break;
     case "away":
       await handleAwayCommand(interaction);
+      break;
+    case "remind":
+      await handleRemindCommand(interaction);
+      break;
+    case "timers":
+      await handleTimersCommand(interaction);
+      break;
+    case "cancel-reminder":
+      await handleCancelReminderCommand(interaction);
       break;
     case "smithery":
       await handleSmitheryCommand(interaction);

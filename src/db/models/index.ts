@@ -4,6 +4,7 @@ export {
   setConfigValue,
 } from "./config";
 export { Memory } from "./memory";
+export { Reminder, type IReminder, type ReminderKind } from "./reminder";
 export {
   Conversation,
   type IConversation,

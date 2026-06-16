@@ -6,4 +6,5 @@ export * from "./config-store";
 export * from "./conversation-store";
 export * from "./message-sync-store";
 export * from "./permission-store";
+export * from "./reminder-store";
 export * from "./runtime-store";

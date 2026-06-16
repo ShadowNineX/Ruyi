@@ -1,4 +1,4 @@
-import type { Attachment, Message } from "discord.js";
+import type { Attachment, Message, TextBasedChannel } from "discord.js";
 import type { ChatMessage } from "../ai";
 import { botLogger } from "../logger";
 
@@ -562,6 +562,38 @@ export async function fetchChatHistory(
   }
 
   return chatHistory;
+}
+
+export async function fetchRecentChatMessages(
+  channel: Message["channel"] | TextBasedChannel,
+  options: {
+    limit?: number;
+    context: Record<string, unknown>;
+    failureMessage: string;
+  },
+): Promise<ChatMessage[]> {
+  if (!("messages" in channel)) return [];
+
+  try {
+    const messages = await channel.messages.fetch({
+      limit: options.limit ?? 20,
+    });
+    return [...messages.values()].reverse().map((message) => ({
+      author: message.author.username,
+      content: formatMessageForAI(message),
+      isBot: message.author.bot,
+    }));
+  } catch (error) {
+    botLogger.debug(
+      {
+        ...options.context,
+        error: (error as Error).message,
+        channelId: channel.id,
+      },
+      options.failureMessage,
+    );
+    return [];
+  }
 }
 
 export async function fetchReferencedMessage(

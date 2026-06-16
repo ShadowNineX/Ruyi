@@ -53,6 +53,7 @@ import {
 } from "./utils/discord-profile";
 import { messageSyncService } from "./services/message-sync";
 import { awayMessageService } from "./services/away-messages";
+import { reminderService } from "./services/reminders";
 import {
   CHAT_TURN_TIMEOUT_MS,
   DISCORD_OPERATION_TIMEOUT_MS,
@@ -1024,6 +1025,7 @@ class RuyiBot {
       this.setDefaultPresence();
       await this.registerSlashCommands();
       messageSyncService.start(this.client);
+      reminderService.start(this.client);
     });
 
     this.client.on(Events.InteractionCreate, this.dispatchInteraction);

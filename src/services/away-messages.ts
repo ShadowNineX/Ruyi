@@ -13,14 +13,14 @@ import {
 import { Conversation } from "../db/models";
 import { aiLogger, botLogger } from "../logger";
 import { agentsRuntimeManager } from "../ai/client";
-import { conversationContext, type ChatMessage } from "../ai/context";
+import { conversationContext } from "../ai/context";
 import { systemPrompt } from "../ai/prompt";
 import {
   buildDiscordPresence,
   formatPresenceContext,
   type DiscordPresenceInfo,
 } from "../utils/discord-profile";
-import { formatMessageForAI, splitMessage } from "../utils/messages";
+import { fetchRecentChatMessages, splitMessage } from "../utils/messages";
 import {
   deleteAwayTimer,
   getAwayTimer,
@@ -298,7 +298,13 @@ class AwayMessageService {
           target.username,
           target.userId,
           target.channelId,
-          await this.fetchRecentChannelHistory(target),
+          await fetchRecentChatMessages(target.channel, {
+            context: {
+              channelId: target.channelId,
+              userId: target.userId,
+            },
+            failureMessage: "Could not fetch live history for away message",
+          }),
           target.scope,
         ),
         this.fetchPersistedConversationSnippet(target.channelId),
@@ -343,31 +349,6 @@ class AwayMessageService {
       return null;
     } finally {
       clearTimeout(timeout);
-    }
-  }
-
-  private async fetchRecentChannelHistory(
-    target: AwayTarget,
-  ): Promise<ChatMessage[]> {
-    if (!("messages" in target.channel)) return [];
-
-    try {
-      const messages = await target.channel.messages.fetch({ limit: 20 });
-      return [...messages.values()].reverse().map((message) => ({
-        author: message.author.username,
-        content: formatMessageForAI(message),
-        isBot: message.author.bot,
-      }));
-    } catch (error) {
-      botLogger.debug(
-        {
-          error: (error as Error).message,
-          channelId: target.channelId,
-          userId: target.userId,
-        },
-        "Could not fetch live history for away message",
-      );
-      return [];
     }
   }
 

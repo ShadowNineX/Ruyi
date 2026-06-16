@@ -11,6 +11,7 @@ const AGENT_SESSIONS_COLLECTION = "agentsessions";
 const CONVERSATIONS_COLLECTION = "conversations";
 const CONFIGS_COLLECTION = "configs";
 const MEMORIES_COLLECTION = "memories";
+const REMINDERS_COLLECTION = "reminders";
 const AI_MODEL_PRESET_CONFIG_KEY = "ai:model_preset";
 const PREFIX_CONFIG_KEY = "prefix";
 const SEARCH_PROVIDER_CONFIG_KEY = "search:primary_provider";
@@ -563,6 +564,76 @@ const migrations: DatabaseMigration[] = [
       dbLogger.info(
         { collection: MEMORIES_COLLECTION, deletedCount: 0 },
         "Context user memory enforcement skipped",
+      );
+    },
+  },
+  {
+    id: "2026-06-16-create-reminder-indexes",
+    run: async () => {
+      const collection = getDb().collection(REMINDERS_COLLECTION);
+      await collection.createIndex({ status: 1, dueAt: 1 });
+      await collection.createIndex({
+        scopeKind: 1,
+        scopeId: 1,
+        userId: 1,
+        status: 1,
+        dueAt: 1,
+      });
+
+      dbLogger.info(
+        { collection: REMINDERS_COLLECTION },
+        "Reminder indexes ensured",
+      );
+    },
+  },
+  {
+    id: "2026-06-16-initialize-reminder-processing-state",
+    run: async () => {
+      const collection = getDb().collection(REMINDERS_COLLECTION);
+      const result = await collection.updateMany(
+        { processingStartedAt: { $exists: false } },
+        { $set: { processingStartedAt: null } },
+      );
+      await collection.createIndex({ status: 1, processingStartedAt: 1 });
+
+      dbLogger.info(
+        {
+          collection: REMINDERS_COLLECTION,
+          matchedCount: result.matchedCount,
+          modifiedCount: result.modifiedCount,
+        },
+        "Reminder processing state initialized",
+      );
+    },
+  },
+  {
+    id: "2026-06-16-delete-completed-reminders",
+    run: async () => {
+      if (!(await collectionExists(REMINDERS_COLLECTION))) {
+        dbLogger.info(
+          { collection: REMINDERS_COLLECTION, deletedCount: 0 },
+          "Completed reminder cleanup skipped",
+        );
+        return;
+      }
+
+      const collection = getDb().collection(REMINDERS_COLLECTION);
+      const deleteResult = await collection.deleteMany({
+        status: { $nin: ["scheduled", "processing"] },
+      });
+      const unsetResult = await collection.updateMany(
+        {},
+        { $unset: { deliveredAt: "", cancelledAt: "" } },
+      );
+
+      dbLogger.info(
+        {
+          collection: REMINDERS_COLLECTION,
+          deletedCount: deleteResult.deletedCount,
+          unsetMatchedCount: unsetResult.matchedCount,
+          unsetModifiedCount: unsetResult.modifiedCount,
+        },
+        "Completed reminder cleanup complete",
       );
     },
   },
