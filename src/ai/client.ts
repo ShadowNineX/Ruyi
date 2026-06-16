@@ -9,6 +9,12 @@ import { aiLogger } from "../logger";
 import { env } from "../env";
 import { configManager, type ConfigScope } from "../config";
 import { BACKGROUND_TASK_MODEL } from "../constants";
+import {
+  getAgentsProvider,
+  getAgentsRunner,
+  resetAgentsRuntime,
+  setAgentsRuntime,
+} from "../stores";
 
 type ReasoningEffort = NonNullable<ModelSettings["reasoning"]>["effort"];
 type TextVerbosity = NonNullable<ModelSettings["text"]>["verbosity"];
@@ -33,9 +39,6 @@ function buildBackgroundTaskModelSettings(): ModelSettings {
 }
 
 class AgentsRuntimeManager {
-  private provider: OpenAIProvider | null = null;
-  private runner: Runner | null = null;
-
   get model(): string {
     return configManager.getChatModel(null);
   }
@@ -69,22 +72,23 @@ class AgentsRuntimeManager {
   }
 
   initialize(): void {
-    if (this.runner) {
+    if (getAgentsRunner()) {
       aiLogger.info("OpenAI Agents runtime already initialized");
       return;
     }
 
     setTracingDisabled(true);
-    this.provider = new OpenAIProvider(this.getProviderConfig());
-    this.runner = new Runner({
+    const provider = new OpenAIProvider(this.getProviderConfig());
+    const runner = new Runner({
       model: this.model,
       modelSettings: this.modelSettings,
-      modelProvider: this.provider,
+      modelProvider: provider,
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
       workflowName: "Ruyi Discord chat",
       toolNotFoundBehavior: "return_error_to_model",
     });
+    setAgentsRuntime(provider, runner);
 
     aiLogger.info(
       {
@@ -97,29 +101,32 @@ class AgentsRuntimeManager {
   }
 
   getRunner(): Runner {
-    if (!this.runner) {
+    let runner = getAgentsRunner();
+    if (!runner) {
       this.initialize();
+      runner = getAgentsRunner();
     }
-    return this.runner!;
+    if (!runner) throw new Error("OpenAI Agents runner was not initialized");
+    return runner;
   }
 
   async stop(): Promise<void> {
-    if (!this.provider) return;
+    const provider = getAgentsProvider();
+    if (!provider) return;
 
     try {
-      await this.provider.close();
+      await provider.close();
     } catch (error) {
       aiLogger.warn(
         { error: (error as Error).message },
         "Error stopping OpenAI Agents provider",
       );
     }
-    this.provider = null;
-    this.runner = null;
+    resetAgentsRuntime();
   }
 
   isConnected(): boolean {
-    return this.runner !== null;
+    return getAgentsRunner() !== null;
   }
 }
 

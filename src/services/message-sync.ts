@@ -7,6 +7,12 @@ import type {
 import { AgentSession, Conversation, type IConversation } from "../db/models";
 import { sessionManager } from "../ai/session";
 import { syncLogger } from "../logger";
+import {
+  getMessageSyncInterval,
+  isMessageSyncRunning,
+  setMessageSyncInterval,
+  setMessageSyncRunning,
+} from "../stores";
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const BATCH_SIZE = 10;
@@ -257,16 +263,13 @@ async function syncAgentSessionMessages(
 }
 
 class MessageSyncService {
-  private syncInterval: ReturnType<typeof setInterval> | null = null;
-  private isRunning = false;
-
   private async runSync(client: Client): Promise<void> {
-    if (this.isRunning) {
+    if (isMessageSyncRunning()) {
       syncLogger.warn("Message sync already in progress; skipping sweep");
       return;
     }
 
-    this.isRunning = true;
+    setMessageSyncRunning(true);
     const startTime = Date.now();
     syncLogger.info("Starting message sync sweep");
 
@@ -325,12 +328,12 @@ class MessageSyncService {
     } catch (error) {
       syncLogger.error({ error }, "Message sync sweep failed");
     } finally {
-      this.isRunning = false;
+      setMessageSyncRunning(false);
     }
   }
 
   start(client: Client): void {
-    if (this.syncInterval) {
+    if (getMessageSyncInterval()) {
       syncLogger.warn("Message sync already running");
       return;
     }
@@ -341,16 +344,18 @@ class MessageSyncService {
     );
 
     void this.runSync(client);
-    this.syncInterval = setInterval(
+    const syncInterval = setInterval(
       () => this.runSync(client),
       SYNC_INTERVAL_MS,
     );
+    setMessageSyncInterval(syncInterval);
   }
 
   stop(): void {
-    if (this.syncInterval) {
-      clearInterval(this.syncInterval);
-      this.syncInterval = null;
+    const syncInterval = getMessageSyncInterval();
+    if (syncInterval) {
+      clearInterval(syncInterval);
+      setMessageSyncInterval(null);
       syncLogger.info("Message sync service stopped");
     }
   }

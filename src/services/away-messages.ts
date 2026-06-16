@@ -21,12 +21,18 @@ import {
   type DiscordPresenceInfo,
 } from "../utils/discord-profile";
 import { formatMessageForAI, splitMessage } from "../utils/messages";
-
-interface AwayTimer {
-  timer: ReturnType<typeof setTimeout>;
-  dueAt: number;
-  userId: string;
-}
+import {
+  deleteAwayTimer,
+  getAwayTimer,
+  getAwayTimerEntries,
+  getLastChannelActivityAt,
+  getLastScopedUserActivityAt,
+  getLastUserActivityAt,
+  setAwayTimer,
+  setLastChannelActivityAt,
+  setLastScopedUserActivityAt,
+  setLastUserActivityAt,
+} from "../stores";
 
 interface AwayTarget {
   channel: Message["channel"];
@@ -70,22 +76,17 @@ function sanitizeAwayMessage(content: string): string {
 }
 
 class AwayMessageService {
-  private readonly timers = new Map<string, AwayTimer>();
-  private readonly lastUserActivityAt = new Map<string, number>();
-  private readonly lastScopedUserActivityAt = new Map<string, number>();
-  private readonly lastChannelActivityAt = new Map<string, number>();
-
   recordUserActivity(message: Message): void {
     if (message.author.bot) return;
 
     const scope = userConfigScope(message.guild?.id ?? null, message.author.id);
     const now = Date.now();
-    this.lastUserActivityAt.set(message.author.id, now);
-    this.lastScopedUserActivityAt.set(
+    setLastUserActivityAt(message.author.id, now);
+    setLastScopedUserActivityAt(
       scopedUserActivityKey(scope, message.author.id),
       now,
     );
-    this.lastChannelActivityAt.set(message.channel.id, now);
+    setLastChannelActivityAt(message.channel.id, now);
     this.clearTimersForUser(message.author.id);
   }
 
@@ -124,7 +125,7 @@ class AwayMessageService {
       void this.sendAwayMessageIfStillInactive(key, target);
     }, settings.delayMs);
 
-    this.timers.set(key, {
+    setAwayTimer(key, {
       timer,
       dueAt,
       userId: message.author.id,
@@ -142,15 +143,15 @@ class AwayMessageService {
   }
 
   private clearTimer(key: string): void {
-    const existing = this.timers.get(key);
+    const existing = getAwayTimer(key);
     if (!existing) return;
 
     clearTimeout(existing.timer);
-    this.timers.delete(key);
+    deleteAwayTimer(key);
   }
 
   private clearTimersForUser(userId: string): void {
-    for (const [key, timer] of this.timers) {
+    for (const [key, timer] of getAwayTimerEntries()) {
       if (timer.userId === userId) this.clearTimer(key);
     }
   }
@@ -168,7 +169,7 @@ class AwayMessageService {
     key: string,
     target: AwayTarget,
   ): Promise<void> {
-    this.timers.delete(key);
+    deleteAwayTimer(key);
 
     try {
       const settings = configManager.getAwaySettings(target.scope);
@@ -245,14 +246,11 @@ class AwayMessageService {
 
   private isStillAway(target: AwayTarget, delayMs: number): boolean {
     const now = Date.now();
-    const lastGlobalUserActivity =
-      this.lastUserActivityAt.get(target.userId) ?? 0;
-    const lastUserActivity =
-      this.lastScopedUserActivityAt.get(
-        scopedUserActivityKey(target.scope, target.userId),
-      ) ?? 0;
-    const lastChannelActivity =
-      this.lastChannelActivityAt.get(target.channelId) ?? 0;
+    const lastGlobalUserActivity = getLastUserActivityAt(target.userId);
+    const lastUserActivity = getLastScopedUserActivityAt(
+      scopedUserActivityKey(target.scope, target.userId),
+    );
+    const lastChannelActivity = getLastChannelActivityAt(target.channelId);
 
     if (lastGlobalUserActivity > target.scheduledAt) return false;
     if (lastUserActivity > target.scheduledAt) return false;

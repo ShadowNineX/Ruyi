@@ -1,30 +1,22 @@
-import { EmbedBuilder, type Message, type TextBasedChannel } from "discord.js";
+import {
+  EmbedBuilder,
+  type Message,
+  type TextBasedChannel,
+} from "discord.js";
 import { botLogger } from "../logger";
 import { CHAT_TYPING_INTERVAL_MS } from "../constants";
+import {
+  createChatSessionStore,
+  incrementChatSessionToolCount,
+  setChatSessionPartial,
+  type ChatSessionState,
+  type PermissionPromptController,
+  type PermissionPromptPayload,
+  type SessionStatus,
+  type SessionStatusListener,
+} from "../stores";
 
 const TOOL_STATUS_REFRESH_INTERVAL_MS = 1000;
-
-export type SessionStatus =
-  | "thinking"
-  | "generating"
-  | "tool"
-  | "approval"
-  | "complete"
-  | "error";
-
-export interface SessionStatusSnapshot {
-  status: SessionStatus;
-  currentTool?: string;
-}
-
-export type SessionStatusListener = (state: SessionStatusSnapshot) => void;
-
-interface StatusState {
-  status: SessionStatus;
-  currentTool?: string;
-  toolCounts: Map<string, number>;
-  startTime: number;
-}
 
 function getStatusColor(status: SessionStatus): number {
   if (status === "tool") return 0x5865f2;
@@ -63,7 +55,7 @@ function getStatusTitle(status: SessionStatus): string {
   return "Tool Activity";
 }
 
-function getStatusDescription(state: StatusState): string {
+function getStatusDescription(state: ChatSessionState): string {
   if (state.status === "approval") {
     return "Waiting for your choice in the permission prompt.";
   }
@@ -80,7 +72,7 @@ function getStatusDescription(state: StatusState): string {
   return "Reviewing tool results.";
 }
 
-function buildToolStatusEmbed(state: StatusState): EmbedBuilder {
+function buildToolStatusEmbed(state: ChatSessionState): EmbedBuilder {
   const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
 
   const embed = new EmbedBuilder()
@@ -97,19 +89,20 @@ function buildToolStatusEmbed(state: StatusState): EmbedBuilder {
   return embed;
 }
 
+function buildToolStatusPayload(
+  state: ChatSessionState,
+): PermissionPromptPayload {
+  return {
+    embeds: [buildToolStatusEmbed(state)],
+    components: [],
+  };
+}
+
 /**
  * Manages a chat session's typing indicator and temporary tool-call embed.
  */
 export class ChatSession {
-  private readonly state: StatusState;
-  private typingInterval: ReturnType<typeof setInterval> | null = null;
-  private statusRefreshInterval: ReturnType<typeof setInterval> | null = null;
-  private statusMessage: Message | null = null;
-  private statusMessagePromise: Promise<Message | null> | null = null;
-  private statusRefreshInFlight = false;
-  private replyTarget: Message | null = null;
-  private hasNotifiedStatus = false;
-  private closed = false;
+  private readonly store = createChatSessionStore();
   private readonly channel: TextBasedChannel;
   private readonly onStatusChange?: SessionStatusListener;
 
@@ -119,31 +112,26 @@ export class ChatSession {
   ) {
     this.channel = channel;
     this.onStatusChange = onStatusChange;
-    this.state = {
-      status: "thinking",
-      toolCounts: new Map(),
-      startTime: Date.now(),
-    };
   }
 
   private notifyStatusChange(): void {
-    if (this.closed) return;
+    if (this.store.state.closed) return;
 
-    this.hasNotifiedStatus = true;
+    setChatSessionPartial(this.store, { hasNotifiedStatus: true });
     this.onStatusChange?.({
-      status: this.state.status,
-      currentTool: this.state.currentTool,
+      status: this.store.state.status,
+      currentTool: this.store.state.currentTool,
     });
   }
 
   private setStatus(status: SessionStatus, currentTool?: string): void {
-    if (this.closed) return;
+    const state = this.store.state;
+    if (state.closed) return;
 
     const changed =
-      this.state.status !== status || this.state.currentTool !== currentTool;
-    this.state.status = status;
-    this.state.currentTool = currentTool;
-    if (changed || !this.hasNotifiedStatus) this.notifyStatusChange();
+      state.status !== status || state.currentTool !== currentTool;
+    setChatSessionPartial(this.store, { status, currentTool });
+    if (changed || !state.hasNotifiedStatus) this.notifyStatusChange();
   }
 
   private sendTypingOnce(reason: "initial" | "periodic"): void {
@@ -159,89 +147,95 @@ export class ChatSession {
 
   /** Start the typing indicator */
   startTyping(): void {
-    if (this.closed) return;
-    if (this.typingInterval) return;
+    if (this.store.state.closed) return;
+    if (this.store.state.typingInterval) return;
     if ("sendTyping" in this.channel) {
       this.sendTypingOnce("initial");
-      this.typingInterval = setInterval(() => {
+      const typingInterval = setInterval(() => {
         this.sendTypingOnce("periodic");
       }, CHAT_TYPING_INTERVAL_MS);
+      setChatSessionPartial(this.store, { typingInterval });
     }
   }
 
   /** Stop the typing indicator */
   stopTyping(): void {
-    if (this.typingInterval) {
-      clearInterval(this.typingInterval);
-      this.typingInterval = null;
+    const { typingInterval } = this.store.state;
+    if (typingInterval) {
+      clearInterval(typingInterval);
+      setChatSessionPartial(this.store, { typingInterval: null });
     }
   }
 
   private startToolEmbedRefresh(): void {
-    if (this.closed) return;
-    if (this.statusRefreshInterval) return;
+    if (this.store.state.closed) return;
+    if (this.store.state.statusRefreshInterval) return;
 
-    this.statusRefreshInterval = setInterval(() => {
+    const statusRefreshInterval = setInterval(() => {
       void this.refreshToolEmbedTimer();
     }, TOOL_STATUS_REFRESH_INTERVAL_MS);
+    setChatSessionPartial(this.store, { statusRefreshInterval });
   }
 
   private stopToolEmbedRefresh(): void {
-    if (!this.statusRefreshInterval) return;
+    const { statusRefreshInterval } = this.store.state;
+    if (!statusRefreshInterval) return;
 
-    clearInterval(this.statusRefreshInterval);
-    this.statusRefreshInterval = null;
+    clearInterval(statusRefreshInterval);
+    setChatSessionPartial(this.store, { statusRefreshInterval: null });
   }
 
   private async refreshToolEmbedTimer(): Promise<void> {
-    if (this.closed) return;
-    if (!this.statusMessage) return;
+    const state = this.store.state;
+    if (state.closed) return;
+    if (!state.statusMessage) return;
+    if (state.permissionPromptActive) return;
     if (!this.shouldShowToolEmbed()) return;
-    if (this.statusRefreshInFlight) return;
+    if (state.statusRefreshInFlight) return;
 
-    this.statusRefreshInFlight = true;
+    setChatSessionPartial(this.store, { statusRefreshInFlight: true });
     try {
-      await this.statusMessage.edit({
-        embeds: [buildToolStatusEmbed(this.state)],
-      });
+      if (this.store.state.permissionPromptActive) return;
+      await state.statusMessage.edit(buildToolStatusPayload(this.store.state));
     } catch (error) {
       botLogger.debug(
         { error: (error as Error)?.message },
         "Tool embed timer refresh failed",
       );
     } finally {
-      this.statusRefreshInFlight = false;
+      setChatSessionPartial(this.store, { statusRefreshInFlight: false });
     }
   }
 
   /** Set the message that temporary tool-call embeds should reply to. */
   setReplyTarget(replyTo: Message): void {
-    this.replyTarget = replyTo;
+    setChatSessionPartial(this.store, { replyTarget: replyTo });
   }
 
   private shouldShowToolEmbed(): boolean {
+    const state = this.store.state;
     return (
-      this.state.status === "tool" ||
-      this.state.status === "approval" ||
-      this.state.toolCounts.size > 0
+      state.status === "tool" ||
+      state.status === "approval" ||
+      state.toolCounts.size > 0
     );
   }
 
-  private async createToolEmbed(): Promise<Message | null> {
-    if (this.closed) return null;
-    if (!this.replyTarget) return null;
-    if (!this.shouldShowToolEmbed()) return null;
+  private async createStatusMessage(
+    payload: PermissionPromptPayload,
+  ): Promise<Message | null> {
+    const { closed, replyTarget } = this.store.state;
+    if (closed) return null;
+    if (!replyTarget) return null;
 
-    const replyTo = this.replyTarget;
+    const replyTo = replyTarget;
     try {
-      const statusMessage = await replyTo.reply({
-        embeds: [buildToolStatusEmbed(this.state)],
-      });
-      if (this.closed || !this.shouldShowToolEmbed()) {
+      const statusMessage = await replyTo.reply(payload);
+      if (this.store.state.closed) {
         await statusMessage.delete().catch((error: unknown) => {
           botLogger.debug(
             { error: (error as Error)?.message },
-            "Late tool embed delete failed",
+            "Late status embed delete failed",
           );
         });
         return null;
@@ -254,39 +248,59 @@ export class ChatSession {
           channelId: replyTo.channel.id,
           messageId: replyTo.id,
         },
-        "Tool embed send failed",
+        "Status embed send failed",
       );
       return null;
     }
   }
 
-  private async ensureToolEmbed(): Promise<void> {
-    if (this.statusMessage) return;
-    this.statusMessagePromise ??= this.createToolEmbed();
-    const pendingMessage = this.statusMessagePromise;
+  private trackStatusMessagePromise(
+    statusMessagePromise: Promise<Message | null>,
+  ): Promise<Message | null> {
+    setChatSessionPartial(this.store, { statusMessagePromise });
+    return statusMessagePromise;
+  }
+
+  private async resolveStatusMessagePromise(
+    pendingMessage: Promise<Message | null>,
+  ): Promise<Message | null> {
     try {
-      this.statusMessage = await pendingMessage;
-      if (this.statusMessage) this.startToolEmbedRefresh();
+      const statusMessage = await pendingMessage;
+      setChatSessionPartial(this.store, { statusMessage });
+      return statusMessage;
     } finally {
-      if (this.statusMessagePromise === pendingMessage) {
-        this.statusMessagePromise = null;
+      if (this.store.state.statusMessagePromise === pendingMessage) {
+        setChatSessionPartial(this.store, { statusMessagePromise: null });
       }
     }
   }
 
+  private async ensureToolEmbed(): Promise<void> {
+    const state = this.store.state;
+    if (state.statusMessage) return;
+    const statusMessagePromise =
+      state.statusMessagePromise ??
+      this.createStatusMessage(buildToolStatusPayload(state));
+    const statusMessage = await this.resolveStatusMessagePromise(
+      this.trackStatusMessagePromise(statusMessagePromise),
+    );
+    if (statusMessage) this.startToolEmbedRefresh();
+  }
+
   /** Update the temporary tool-call embed. */
   private async updateToolEmbed(): Promise<void> {
-    if (this.closed) return;
+    if (this.store.state.closed) return;
+    if (this.store.state.permissionPromptActive) return;
     if (!this.shouldShowToolEmbed()) return;
-    if (!this.statusMessage) {
+    if (!this.store.state.statusMessage) {
       await this.ensureToolEmbed();
-      if (!this.statusMessage) return;
+      if (!this.store.state.statusMessage) return;
     }
 
     try {
-      await this.statusMessage.edit({
-        embeds: [buildToolStatusEmbed(this.state)],
-      });
+      await this.store.state.statusMessage.edit(
+        buildToolStatusPayload(this.store.state),
+      );
       this.startToolEmbedRefresh();
     } catch (error) {
       botLogger.debug(
@@ -296,13 +310,64 @@ export class ChatSession {
     }
   }
 
+  private async getExistingStatusMessage(): Promise<Message | null> {
+    const state = this.store.state;
+    if (state.statusMessage) return state.statusMessage;
+    if (!state.statusMessagePromise) return null;
+
+    return this.resolveStatusMessagePromise(state.statusMessagePromise);
+  }
+
+  getPermissionPromptController(): PermissionPromptController {
+    return {
+      showPrompt: (payload) => this.showPermissionPrompt(payload),
+      releasePrompt: () => this.releasePermissionPrompt(),
+    };
+  }
+
+  private async showPermissionPrompt(
+    payload: PermissionPromptPayload,
+  ): Promise<Message | null> {
+    if (this.store.state.closed) return null;
+
+    setChatSessionPartial(this.store, { permissionPromptActive: true });
+    this.stopToolEmbedRefresh();
+
+    const existingMessage = await this.getExistingStatusMessage();
+    if (existingMessage) {
+      try {
+        await existingMessage.edit(payload);
+        return existingMessage;
+      } catch (error) {
+        botLogger.debug(
+          { error: (error as Error)?.message },
+          "Status embed permission prompt update failed",
+        );
+        setChatSessionPartial(this.store, { statusMessage: null });
+      }
+    }
+
+    const statusMessagePromise = this.createStatusMessage(payload);
+    return this.resolveStatusMessagePromise(
+      this.trackStatusMessagePromise(statusMessagePromise),
+    );
+  }
+
+  private releasePermissionPrompt(): void {
+    setChatSessionPartial(this.store, { permissionPromptActive: false });
+  }
+
   private async deleteToolEmbed(): Promise<void> {
     this.stopToolEmbedRefresh();
-    const pendingMessage = this.statusMessagePromise
-      ? await this.statusMessagePromise
+    const { statusMessage, statusMessagePromise } = this.store.state;
+    const pendingMessage = statusMessagePromise
+      ? await statusMessagePromise
       : null;
-    const message = this.statusMessage ?? pendingMessage;
-    this.statusMessage = null;
+    const message = statusMessage ?? pendingMessage;
+    setChatSessionPartial(this.store, {
+      statusMessage: null,
+      statusMessagePromise: null,
+    });
 
     if (!message) return;
 
@@ -318,7 +383,7 @@ export class ChatSession {
 
   /** Delete the temporary tool-call embed and stop typing. */
   async deleteStatusEmbed(): Promise<void> {
-    this.closed = true;
+    setChatSessionPartial(this.store, { closed: true });
     this.stopTyping();
     await this.deleteToolEmbed();
   }
@@ -351,12 +416,9 @@ export class ChatSession {
 
   /** Called when a tool finishes executing */
   onToolEnd(toolName: string): void {
-    if (this.closed) return;
+    if (this.store.state.closed) return;
 
-    this.state.toolCounts.set(
-      toolName,
-      (this.state.toolCounts.get(toolName) ?? 0) + 1,
-    );
+    incrementChatSessionToolCount(this.store, toolName);
     void this.updateToolEmbed();
   }
 
@@ -364,7 +426,6 @@ export class ChatSession {
   onApprovalPending(): void {
     this.setStatus("approval");
     this.stopTyping();
-    void this.updateToolEmbed();
   }
 
   /** Called when generation is complete */
@@ -381,14 +442,14 @@ export class ChatSession {
 
   /** Clean up all resources */
   cleanup(): void {
-    this.closed = true;
+    setChatSessionPartial(this.store, { closed: true });
     this.stopTyping();
     this.stopToolEmbedRefresh();
   }
 
   /** Check if a self-responding tool was used */
   usedSelfRespondingTool(selfRespondingTools: ReadonlySet<string>): boolean {
-    for (const toolName of this.state.toolCounts.keys()) {
+    for (const toolName of this.store.state.toolCounts.keys()) {
       if (selfRespondingTools.has(toolName)) return true;
     }
     return false;

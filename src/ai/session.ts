@@ -21,6 +21,14 @@ import {
 } from "../constants";
 import { agentsRuntimeManager } from "./client";
 import { systemPromptVersion } from "./prompt";
+import {
+  clearCachedAgentSessions,
+  deleteCachedAgentSession,
+  getCachedAgentSession,
+  getCachedAgentSessionCount,
+  getCachedAgentSessions,
+  setCachedAgentSession,
+} from "../stores";
 
 const TRACKED_MESSAGE_ID_CAP = 200;
 
@@ -568,8 +576,6 @@ async function buildSeedSessionData(
 }
 
 class SessionManager {
-  private readonly activeSessions = new Map<string, MongoAgentSession>();
-
   async loadPersisted(): Promise<void> {
     try {
       const count = await AgentSession.countDocuments({ isActive: true });
@@ -588,7 +594,7 @@ class SessionManager {
     model = agentsRuntimeManager.model,
     modelSettings = agentsRuntimeManager.modelSettings,
   ): Promise<MongoAgentSession> {
-    const existingSession = this.activeSessions.get(channelId);
+    const existingSession = getCachedAgentSession<MongoAgentSession>(channelId);
     if (existingSession) {
       if (existingSession.matchesModel(model)) {
         aiLogger.debug({ channelId }, "Using cached agent session");
@@ -597,7 +603,7 @@ class SessionManager {
       }
 
       existingSession.markInvalidated();
-      this.activeSessions.delete(channelId);
+      deleteCachedAgentSession(channelId);
       await AgentSession.updateOne(
         { channelId, isActive: true, provider: "openai-agents" },
         { $set: { isActive: false } },
@@ -636,7 +642,7 @@ class SessionManager {
           compactedSession.items,
           compactedSession.summary,
         );
-        this.activeSessions.set(channelId, session);
+        setCachedAgentSession(channelId, session);
         await this.touchSession(channelId, model, currentMessageId);
 
         aiLogger.debug(
@@ -696,7 +702,7 @@ class SessionManager {
       { upsert: true },
     );
 
-    this.activeSessions.set(channelId, session);
+    setCachedAgentSession(channelId, session);
 
     aiLogger.info(
       { channelId, sessionId, seedCount: seedData.items.length },
@@ -736,8 +742,8 @@ class SessionManager {
   }
 
   async invalidate(channelId: string): Promise<void> {
-    this.activeSessions.get(channelId)?.markInvalidated();
-    this.activeSessions.delete(channelId);
+    getCachedAgentSession(channelId)?.markInvalidated();
+    deleteCachedAgentSession(channelId);
 
     await AgentSession.updateOne(
       { channelId },
@@ -748,11 +754,11 @@ class SessionManager {
   }
 
   async invalidateAll(reason: string): Promise<void> {
-    const activeCount = this.activeSessions.size;
-    for (const session of this.activeSessions.values()) {
+    const activeCount = getCachedAgentSessionCount();
+    for (const session of getCachedAgentSessions()) {
       session.markInvalidated();
     }
-    this.activeSessions.clear();
+    clearCachedAgentSessions();
 
     const result = await AgentSession.updateMany(
       { isActive: true, provider: "openai-agents" },
@@ -869,11 +875,11 @@ class SessionManager {
   }
 
   async destroyAll(): Promise<void> {
-    this.activeSessions.clear();
+    clearCachedAgentSessions();
   }
 
   getActiveCount(): number {
-    return this.activeSessions.size;
+    return getCachedAgentSessionCount();
   }
 }
 

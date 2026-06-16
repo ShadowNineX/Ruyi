@@ -15,6 +15,16 @@ import {
   AWAY_MESSAGE_MIN_COOLDOWN_HOURS,
   AWAY_MESSAGE_MIN_DELAY_MINUTES,
 } from "./constants";
+import {
+  getAwayLastSentAtCache,
+  getAwayUserEnabledCache,
+  getScopedSettingsCache,
+  resetConfigStore,
+  setAwayLastSentAtCache,
+  setAwayUserEnabledCache,
+  updateScopedSettingsCache,
+  type ScopedSettings,
+} from "./stores";
 
 const DEFAULT_PREFIX = "!";
 const DEFAULT_SEARCH_PROVIDER = "openai";
@@ -53,15 +63,6 @@ interface AiModelPresetDefinition {
   visionModel: string;
   reasoningEffort: ReasoningEffort;
   textVerbosity: TextVerbosity;
-}
-
-interface ScopedSettings {
-  prefix: string;
-  searchProvider: SearchProvider;
-  modelPreset: AiModelPresetId;
-  awayScopeEnabled: boolean;
-  awayDelayMinutes: number;
-  awayCooldownHours: number;
 }
 
 interface ParsedScopeConfigKey {
@@ -284,14 +285,8 @@ function buildModelSettings(preset: AiModelPreset): ModelSettings {
 }
 
 class ConfigManager {
-  private readonly scopedSettings = new Map<string, ScopedSettings>();
-  private readonly awayUserEnabled = new Map<string, boolean>();
-  private readonly awayLastSentAt = new Map<string, number>();
-
   async load(): Promise<void> {
-    this.scopedSettings.clear();
-    this.awayUserEnabled.clear();
-    this.awayLastSentAt.clear();
+    resetConfigStore();
 
     const entries = (
       await Promise.all([
@@ -312,50 +307,75 @@ class ConfigManager {
     if (!scope) return defaultScopedSettings();
 
     const key = configScopeKey(scope);
-    const existing = this.scopedSettings.get(key);
+    const existing = getScopedSettingsCache(key);
     if (existing) return existing;
 
-    const settings = defaultScopedSettings();
-    this.scopedSettings.set(key, settings);
-    return settings;
+    return updateScopedSettingsCache(key, defaultScopedSettings(), (settings) =>
+      settings,
+    );
+  }
+
+  private updateScopedSettings(
+    scope: ConfigScope,
+    updater: (settings: ScopedSettings) => ScopedSettings,
+  ): ScopedSettings {
+    return updateScopedSettingsCache(
+      configScopeKey(scope),
+      defaultScopedSettings(),
+      updater,
+    );
   }
 
   private loadScopedConfigEntry(key: string, value: string): void {
     const parsed = parseScopeConfigKey(key);
     if (!parsed) return;
 
-    const settings = this.getScopedSettings(parsed.scope);
     switch (parsed.setting) {
       case PREFIX_SETTING:
-        settings.prefix = value || DEFAULT_PREFIX;
+        this.updateScopedSettings(parsed.scope, (settings) => ({
+          ...settings,
+          prefix: value || DEFAULT_PREFIX,
+        }));
         break;
       case SEARCH_PROVIDER_SETTING:
-        settings.searchProvider = parseSearchProvider(value);
+        this.updateScopedSettings(parsed.scope, (settings) => ({
+          ...settings,
+          searchProvider: parseSearchProvider(value),
+        }));
         break;
       case AI_MODEL_PRESET_SETTING:
-        settings.modelPreset = parseAiModelPreset(value);
+        this.updateScopedSettings(parsed.scope, (settings) => ({
+          ...settings,
+          modelPreset: parseAiModelPreset(value),
+        }));
         break;
       case AWAY_SCOPE_ENABLED_SETTING:
-        settings.awayScopeEnabled = parseBoolean(
-          value,
-          DEFAULT_AWAY_SCOPE_ENABLED,
-        );
+        this.updateScopedSettings(parsed.scope, (settings) => ({
+          ...settings,
+          awayScopeEnabled: parseBoolean(value, DEFAULT_AWAY_SCOPE_ENABLED),
+        }));
         break;
       case AWAY_DELAY_MINUTES_SETTING:
-        settings.awayDelayMinutes = parseIntegerSetting(
-          value,
-          AWAY_MESSAGE_DEFAULT_DELAY_MINUTES,
-          AWAY_MESSAGE_MIN_DELAY_MINUTES,
-          AWAY_MESSAGE_MAX_DELAY_MINUTES,
-        );
+        this.updateScopedSettings(parsed.scope, (settings) => ({
+          ...settings,
+          awayDelayMinutes: parseIntegerSetting(
+            value,
+            AWAY_MESSAGE_DEFAULT_DELAY_MINUTES,
+            AWAY_MESSAGE_MIN_DELAY_MINUTES,
+            AWAY_MESSAGE_MAX_DELAY_MINUTES,
+          ),
+        }));
         break;
       case AWAY_COOLDOWN_HOURS_SETTING:
-        settings.awayCooldownHours = parseIntegerSetting(
-          value,
-          AWAY_MESSAGE_DEFAULT_COOLDOWN_HOURS,
-          AWAY_MESSAGE_MIN_COOLDOWN_HOURS,
-          AWAY_MESSAGE_MAX_COOLDOWN_HOURS,
-        );
+        this.updateScopedSettings(parsed.scope, (settings) => ({
+          ...settings,
+          awayCooldownHours: parseIntegerSetting(
+            value,
+            AWAY_MESSAGE_DEFAULT_COOLDOWN_HOURS,
+            AWAY_MESSAGE_MIN_COOLDOWN_HOURS,
+            AWAY_MESSAGE_MAX_COOLDOWN_HOURS,
+          ),
+        }));
         break;
     }
   }
@@ -367,12 +387,12 @@ class ConfigManager {
     const cacheKey = scopedUserCacheKey(parsed.scope, parsed.userId);
     switch (parsed.setting) {
       case AWAY_USER_ENABLED_SETTING:
-        this.awayUserEnabled.set(cacheKey, parseBoolean(value, false));
+        setAwayUserEnabledCache(cacheKey, parseBoolean(value, false));
         break;
       case AWAY_USER_LAST_SENT_SETTING: {
         const timestamp = Number.parseInt(value, 10);
         if (Number.isFinite(timestamp) && timestamp > 0) {
-          this.awayLastSentAt.set(cacheKey, timestamp);
+          setAwayLastSentAtCache(cacheKey, timestamp);
         }
         break;
       }
@@ -384,7 +404,7 @@ class ConfigManager {
   }
 
   async setPrefix(scope: ConfigScope, prefix: string): Promise<void> {
-    this.getScopedSettings(scope).prefix = prefix;
+    this.updateScopedSettings(scope, (settings) => ({ ...settings, prefix }));
     await setConfigValue(scopedSettingKey(scope, PREFIX_SETTING), prefix);
   }
 
@@ -396,7 +416,10 @@ class ConfigManager {
     scope: ConfigScope,
     provider: SearchProvider,
   ): Promise<void> {
-    this.getScopedSettings(scope).searchProvider = provider;
+    this.updateScopedSettings(scope, (settings) => ({
+      ...settings,
+      searchProvider: provider,
+    }));
     await setConfigValue(scopedSettingKey(scope, SEARCH_PROVIDER_SETTING), provider);
   }
 
@@ -424,7 +447,10 @@ class ConfigManager {
     scope: ConfigScope,
     preset: AiModelPresetId,
   ): Promise<void> {
-    this.getScopedSettings(scope).modelPreset = preset;
+    this.updateScopedSettings(scope, (settings) => ({
+      ...settings,
+      modelPreset: preset,
+    }));
     await setConfigValue(scopedSettingKey(scope, AI_MODEL_PRESET_SETTING), preset);
   }
 
@@ -443,7 +469,10 @@ class ConfigManager {
     scope: ConfigScope,
     enabled: boolean,
   ): Promise<void> {
-    this.getScopedSettings(scope).awayScopeEnabled = enabled;
+    this.updateScopedSettings(scope, (settings) => ({
+      ...settings,
+      awayScopeEnabled: enabled,
+    }));
     await setConfigValue(
       scopedSettingKey(scope, AWAY_SCOPE_ENABLED_SETTING),
       String(enabled),
@@ -455,25 +484,27 @@ class ConfigManager {
     delayMinutes: number,
     cooldownHours: number,
   ): Promise<void> {
-    const settings = this.getScopedSettings(scope);
-    settings.awayDelayMinutes = clampNumber(
-      delayMinutes,
-      AWAY_MESSAGE_MIN_DELAY_MINUTES,
-      AWAY_MESSAGE_MAX_DELAY_MINUTES,
-    );
-    settings.awayCooldownHours = clampNumber(
-      cooldownHours,
-      AWAY_MESSAGE_MIN_COOLDOWN_HOURS,
-      AWAY_MESSAGE_MAX_COOLDOWN_HOURS,
-    );
+    const nextSettings = this.updateScopedSettings(scope, (settings) => ({
+      ...settings,
+      awayDelayMinutes: clampNumber(
+        delayMinutes,
+        AWAY_MESSAGE_MIN_DELAY_MINUTES,
+        AWAY_MESSAGE_MAX_DELAY_MINUTES,
+      ),
+      awayCooldownHours: clampNumber(
+        cooldownHours,
+        AWAY_MESSAGE_MIN_COOLDOWN_HOURS,
+        AWAY_MESSAGE_MAX_COOLDOWN_HOURS,
+      ),
+    }));
     await Promise.all([
       setConfigValue(
         scopedSettingKey(scope, AWAY_DELAY_MINUTES_SETTING),
-        String(settings.awayDelayMinutes),
+        String(nextSettings.awayDelayMinutes),
       ),
       setConfigValue(
         scopedSettingKey(scope, AWAY_COOLDOWN_HOURS_SETTING),
-        String(settings.awayCooldownHours),
+        String(nextSettings.awayCooldownHours),
       ),
     ]);
   }
@@ -483,7 +514,7 @@ class ConfigManager {
     userId: string,
   ): Promise<boolean> {
     const cacheKey = scopedUserCacheKey(scope, userId);
-    const cached = this.awayUserEnabled.get(cacheKey);
+    const cached = getAwayUserEnabledCache(cacheKey);
     if (cached !== undefined) return cached;
 
     const value = await getConfigValue(
@@ -491,7 +522,7 @@ class ConfigManager {
       "false",
     );
     const enabled = parseBoolean(value, false);
-    this.awayUserEnabled.set(cacheKey, enabled);
+    setAwayUserEnabledCache(cacheKey, enabled);
     return enabled;
   }
 
@@ -500,7 +531,7 @@ class ConfigManager {
     userId: string,
     enabled: boolean,
   ): Promise<void> {
-    this.awayUserEnabled.set(scopedUserCacheKey(scope, userId), enabled);
+    setAwayUserEnabledCache(scopedUserCacheKey(scope, userId), enabled);
     await setConfigValue(
       scopedUserSettingKey(scope, userId, AWAY_USER_ENABLED_SETTING),
       String(enabled),
@@ -512,7 +543,7 @@ class ConfigManager {
     userId: string,
   ): Promise<number | null> {
     const cacheKey = scopedUserCacheKey(scope, userId);
-    const cached = this.awayLastSentAt.get(cacheKey);
+    const cached = getAwayLastSentAtCache(cacheKey);
     if (cached !== undefined) return cached;
 
     const value = await getConfigValue(
@@ -521,7 +552,7 @@ class ConfigManager {
     );
     const timestamp = Number.parseInt(value, 10);
     if (Number.isFinite(timestamp) && timestamp > 0) {
-      this.awayLastSentAt.set(cacheKey, timestamp);
+      setAwayLastSentAtCache(cacheKey, timestamp);
       return timestamp;
     }
 
@@ -533,7 +564,7 @@ class ConfigManager {
     userId: string,
     timestamp: number,
   ): Promise<void> {
-    this.awayLastSentAt.set(scopedUserCacheKey(scope, userId), timestamp);
+    setAwayLastSentAtCache(scopedUserCacheKey(scope, userId), timestamp);
     await setConfigValue(
       scopedUserSettingKey(scope, userId, AWAY_USER_LAST_SENT_SETTING),
       String(timestamp),

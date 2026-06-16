@@ -35,7 +35,7 @@ import {
   handleModelSelect,
   isModelSelect,
 } from "./slash-commands";
-import { ChatSession, type SessionStatusSnapshot } from "./utils/chat-session";
+import { ChatSession } from "./utils/chat-session";
 import {
   fetchReplyChain,
   fetchChatHistory,
@@ -57,6 +57,16 @@ import {
   CHAT_TURN_TIMEOUT_MS,
   DISCORD_OPERATION_TIMEOUT_MS,
 } from "./constants";
+import {
+  deleteActiveChatTurn,
+  getActiveChatTurn,
+  getActivePresenceSession,
+  getPresenceResetTimer,
+  setActiveChatTurn,
+  setActivePresenceSession,
+  setPresenceResetTimer,
+  type SessionStatusSnapshot,
+} from "./stores";
 
 interface ResponseGate {
   isMentioned: boolean;
@@ -69,12 +79,6 @@ interface PresenceActivity {
   type: ActivityType;
 }
 
-interface ActiveChatTurn {
-  controller: AbortController;
-  messageId: string;
-  referencedMessageId: string | null;
-}
-
 const EDIT_REGENERATION_PREFIX =
   "[The user edited this earlier Discord message after Ruyi already replied. Treat the edited message below as authoritative. Regenerate the answer for the edited version, but do not mention the edit unless it is necessary for clarity. Previous visible bot replies may reflect the pre-edit message.]";
 
@@ -82,13 +86,6 @@ const SIDE_EFFECT_EDIT_NOTICE =
   "I noticed this request was edited after I had already answered. I have updated my context, but I will not repeat tool or external actions automatically from an edit. Please send a new message if you want me to redo the action.";
 
 class RuyiBot {
-  private activePresenceSession: symbol | null = null;
-  private readonly activeChatTurns = new Map<string, ActiveChatTurn>();
-  private presenceResetTimer: {
-    session: symbol;
-    timer: ReturnType<typeof setTimeout>;
-  } | null = null;
-
   readonly client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -167,22 +164,23 @@ class RuyiBot {
   }
 
   private clearPresenceResetTimer(presenceSession?: symbol): void {
-    if (!this.presenceResetTimer) return;
+    const presenceResetTimer = getPresenceResetTimer();
+    if (!presenceResetTimer) return;
     if (
       presenceSession &&
-      this.presenceResetTimer.session !== presenceSession
+      presenceResetTimer.session !== presenceSession
     ) {
       return;
     }
 
-    clearTimeout(this.presenceResetTimer.timer);
-    this.presenceResetTimer = null;
+    clearTimeout(presenceResetTimer.timer);
+    setPresenceResetTimer(null);
   }
 
   private resetPresenceSession(presenceSession: symbol): void {
-    if (this.activePresenceSession !== presenceSession) return;
+    if (getActivePresenceSession() !== presenceSession) return;
 
-    this.activePresenceSession = null;
+    setActivePresenceSession(null);
     this.setDefaultPresence();
   }
 
@@ -195,7 +193,7 @@ class RuyiBot {
     const timeoutMs =
       CHAT_TURN_TIMEOUT_MS + DISCORD_OPERATION_TIMEOUT_MS + 5000;
     const timer = setTimeout(() => {
-      if (this.activePresenceSession !== presenceSession) return;
+      if (getActivePresenceSession() !== presenceSession) return;
 
       botLogger.warn(
         { ...context, timeoutMs },
@@ -203,7 +201,7 @@ class RuyiBot {
       );
       this.resetPresenceSession(presenceSession);
     }, timeoutMs);
-    this.presenceResetTimer = { session: presenceSession, timer };
+    setPresenceResetTimer({ session: presenceSession, timer });
   }
 
   // ---- Reply gating --------------------------------------------------------
@@ -464,7 +462,7 @@ class RuyiBot {
   }
 
   private abortActiveChatTurn(channelId: string, nextMessageId: string): void {
-    const activeTurn = this.activeChatTurns.get(channelId);
+    const activeTurn = getActiveChatTurn(channelId);
     if (!activeTurn || activeTurn.controller.signal.aborted) return;
 
     activeTurn.controller.abort(this.createChatTurnSupersededError());
@@ -478,7 +476,7 @@ class RuyiBot {
     channelId: string,
     messageIds: string[],
   ): void {
-    const activeTurn = this.activeChatTurns.get(channelId);
+    const activeTurn = getActiveChatTurn(channelId);
     if (!activeTurn || activeTurn.controller.signal.aborted) return;
 
     const deletedIds = new Set(messageIds);
@@ -631,10 +629,10 @@ class RuyiBot {
     let timeout: ReturnType<typeof setTimeout> | null = null;
     const signal = abortController.signal;
     const presenceSession = Symbol(`edit:${message.id}`);
-    this.activePresenceSession = presenceSession;
+    setActivePresenceSession(presenceSession);
     this.schedulePresenceReset(presenceSession, context);
     const session = new ChatSession(message.channel, (state) => {
-      if (this.activePresenceSession !== presenceSession) return;
+      if (getActivePresenceSession() !== presenceSession) return;
       this.setSessionPresence(message.author.displayName, state);
     });
     session.onThinking();
@@ -819,7 +817,7 @@ class RuyiBot {
     }
 
     const abortController = new AbortController();
-    this.activeChatTurns.set(message.channel.id, {
+    setActiveChatTurn(message.channel.id, {
       controller: abortController,
       messageId: message.id,
       referencedMessageId: null,
@@ -843,10 +841,9 @@ class RuyiBot {
       );
     } finally {
       if (
-        this.activeChatTurns.get(message.channel.id)?.controller ===
-        abortController
+        getActiveChatTurn(message.channel.id)?.controller === abortController
       ) {
-        this.activeChatTurns.delete(message.channel.id);
+        deleteActiveChatTurn(message.channel.id);
       }
     }
   }
@@ -871,19 +868,19 @@ class RuyiBot {
     const displayName = message.author.displayName;
     const presenceSession = Symbol(message.id);
     const abortController = new AbortController();
-    this.activeChatTurns.set(message.channel.id, {
+    setActiveChatTurn(message.channel.id, {
       controller: abortController,
       messageId: message.id,
       referencedMessageId: referencedMessage?.id ?? null,
     });
-    this.activePresenceSession = presenceSession;
+    setActivePresenceSession(presenceSession);
     this.schedulePresenceReset(presenceSession, {
       user: message.author.username,
       channelId: message.channel.id,
       messageId: message.id,
     });
     const session = new ChatSession(message.channel, (state) => {
-      if (this.activePresenceSession !== presenceSession) return;
+      if (getActivePresenceSession() !== presenceSession) return;
       this.setSessionPresence(displayName, state);
     });
     session.onThinking();
@@ -943,10 +940,9 @@ class RuyiBot {
         messageId: message.id,
       });
       if (
-        this.activeChatTurns.get(message.channel.id)?.controller ===
-        abortController
+        getActiveChatTurn(message.channel.id)?.controller === abortController
       ) {
-        this.activeChatTurns.delete(message.channel.id);
+        deleteActiveChatTurn(message.channel.id);
       }
     }
   }

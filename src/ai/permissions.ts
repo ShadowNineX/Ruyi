@@ -10,16 +10,19 @@ import {
   type InteractionCollector,
   type Message,
   MessageFlags,
-  type SendableChannels,
 } from "discord.js";
 import { aiLogger } from "../logger";
 import { PERMISSION_TIMEOUT_MS } from "../constants";
-
-interface PermissionContext {
-  channel: SendableChannels;
-  turnId: string;
-  userId: string;
-}
+import {
+  addPermissionPromptMessage,
+  clearPermissionContext,
+  getPermissionContext,
+  setPermissionContext,
+  takePermissionPromptMessages,
+  type PermissionContext,
+  type PermissionPromptController,
+  type PermissionPromptPayload,
+} from "../stores";
 
 export type PermissionDecision =
   | "approve_once"
@@ -384,6 +387,7 @@ interface ApprovalPromptArgs {
   approvalItem: RunToolApprovalItem;
   channelId: string;
   promptMessage: Message;
+  promptController: PermissionPromptController | null;
   sessionId: string;
   timeoutMs: number;
   toolName: string;
@@ -453,6 +457,7 @@ async function settleApprovalFromInteraction(
       embeds: [resultEmbed],
       components: [],
     });
+    args.promptController?.releasePrompt();
     state.settled = true;
     state.collector.stop(result.approved ? "approved" : "denied");
 
@@ -471,6 +476,7 @@ async function settleApprovalFromInteraction(
     state.resolve(result);
   } catch (error) {
     state.settled = true;
+    args.promptController?.releasePrompt();
     state.collector.stop("update_failed");
     aiLogger.error(
       {
@@ -505,6 +511,7 @@ function handleApprovalEnd(
 ): void {
   if (state.settled) return;
   state.settled = true;
+  args.promptController?.releasePrompt();
 
   const timeoutEmbed = createPermissionEmbed(
     `Permission Expired: ${getPermissionDisplayName(args.approvalItem)}`,
@@ -543,6 +550,16 @@ function handleApprovalEnd(
   state.resolve(DENY_ONCE_RESULT);
 }
 
+async function sendPermissionPrompt(
+  context: PermissionContext,
+  payload: PermissionPromptPayload,
+): Promise<Message> {
+  const promptMessage = await context.promptController.showPrompt(payload);
+  if (promptMessage) return promptMessage;
+
+  return context.channel.send(payload);
+}
+
 function waitForApproval(args: ApprovalPromptArgs): Promise<PermissionResult> {
   return new Promise<PermissionResult>((resolve) => {
     const collector = args.promptMessage.createMessageComponentCollector({
@@ -565,28 +582,21 @@ function waitForApproval(args: ApprovalPromptArgs): Promise<PermissionResult> {
 }
 
 class PermissionManager {
-  private readonly contexts = new Map<string, PermissionContext>();
-  private readonly promptMessages = new Map<string, Set<Message>>();
-
   setContext(channelId: string, context: PermissionContext): void {
-    this.contexts.set(channelId, context);
+    setPermissionContext(channelId, context);
   }
 
   clearContext(channelId: string): void {
-    this.contexts.delete(channelId);
+    clearPermissionContext(channelId);
   }
 
   private trackPromptMessage(turnId: string, message: Message): void {
-    const messages = this.promptMessages.get(turnId) ?? new Set<Message>();
-    messages.add(message);
-    this.promptMessages.set(turnId, messages);
+    addPermissionPromptMessage(turnId, message);
   }
 
   async deletePromptMessages(turnId: string): Promise<void> {
-    const messages = this.promptMessages.get(turnId);
-    if (!messages || messages.size === 0) return;
-
-    this.promptMessages.delete(turnId);
+    const messages = takePermissionPromptMessages(turnId);
+    if (messages.size === 0) return;
 
     const deleteResults = await Promise.allSettled(
       [...messages].map((message) => message.delete()),
@@ -630,7 +640,7 @@ class PermissionManager {
     sessionId: string,
     timeoutMs = PERMISSION_TIMEOUT_MS,
   ): Promise<PermissionResult> {
-    const context = this.contexts.get(channelId);
+    const context = getPermissionContext(channelId);
     const toolName = getApprovalToolName(approvalItem);
 
     if (!context) {
@@ -641,7 +651,7 @@ class PermissionManager {
       return DENY_ONCE_RESULT;
     }
 
-    const { channel, turnId, userId } = context;
+    const { turnId, userId } = context;
 
     try {
       const expiresAtMs = Date.now() + timeoutMs;
@@ -673,7 +683,7 @@ class PermissionManager {
           .setStyle(ButtonStyle.Danger),
       );
 
-      const promptMessage = await channel.send({
+      const promptMessage = await sendPermissionPrompt(context, {
         embeds: [embed],
         components: [row],
       });
@@ -688,6 +698,7 @@ class PermissionManager {
         approvalItem,
         channelId,
         promptMessage,
+        promptController: context.promptController,
         sessionId,
         timeoutMs,
         toolName,

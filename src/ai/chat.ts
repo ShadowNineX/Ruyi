@@ -295,6 +295,7 @@ class ChatService {
     if (channel.isSendable()) {
       permissionManager.setContext(channelId, {
         channel,
+        promptController: session.getPermissionPromptController(),
         turnId: messageId,
         userId,
       });

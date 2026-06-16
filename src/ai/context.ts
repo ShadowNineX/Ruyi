@@ -17,6 +17,14 @@ import {
   RECENT_USER_MEMORY_LIMIT,
   USER_MEMORY_CAP,
 } from "../constants";
+import {
+  getLastExtractionAt,
+  getLastInteractionAt,
+  incrementUserMessageCount,
+  resetUserMessageCount,
+  setLastExtractionAt,
+  setLastInteractionAt,
+} from "../stores";
 
 export interface ChatMessage {
   author: string;
@@ -33,10 +41,6 @@ interface ConversationMessageUpdateResult {
 }
 
 class ConversationContext {
-  private readonly lastInteractionCache = new Map<string, number>();
-  private readonly userMessageCounters = new Map<string, number>();
-  private readonly lastExtractionAt = new Map<string, number>();
-
   private userKey(channelId: string, userId: string): string {
     return `${channelId}::${userId}`;
   }
@@ -68,7 +72,7 @@ class ConversationContext {
         },
       );
       if (existingResult.matchedCount > 0) {
-        this.lastInteractionCache.set(channelId, Date.now());
+        setLastInteractionAt(channelId, Date.now());
         return;
       }
 
@@ -95,7 +99,7 @@ class ConversationContext {
         },
         { upsert: true },
       );
-      this.lastInteractionCache.set(channelId, Date.now());
+      setLastInteractionAt(channelId, Date.now());
     } catch (error) {
       aiLogger.error({ error }, "Failed to save message to memory");
     }
@@ -144,7 +148,7 @@ class ConversationContext {
           $inc: { "messages.$.editCount": 1 },
         },
       );
-      this.lastInteractionCache.set(channelId, Date.now());
+      setLastInteractionAt(channelId, Date.now());
 
       return {
         found: true,
@@ -182,7 +186,7 @@ class ConversationContext {
   }
 
   isOngoingConversation(channelId: string): boolean {
-    const lastTime = this.lastInteractionCache.get(channelId);
+    const lastTime = getLastInteractionAt(channelId);
     if (!lastTime) return false;
     return Date.now() - lastTime < ONGOING_CONVERSATION_WINDOW_MS;
   }
@@ -192,12 +196,11 @@ class ConversationContext {
     userId: string,
   ): { shouldExtract: boolean } {
     const key = this.userKey(channelId, userId);
-    const next = (this.userMessageCounters.get(key) ?? 0) + 1;
-    this.userMessageCounters.set(key, next);
+    const next = incrementUserMessageCount(key);
 
     if (next < AUTO_EXTRACT_THRESHOLD) return { shouldExtract: false };
 
-    const last = this.lastExtractionAt.get(key) ?? 0;
+    const last = getLastExtractionAt(key);
     if (Date.now() - last < AUTO_EXTRACT_COOLDOWN_MS) {
       return { shouldExtract: false };
     }
@@ -207,8 +210,8 @@ class ConversationContext {
 
   markExtracted(channelId: string, userId: string): void {
     const key = this.userKey(channelId, userId);
-    this.userMessageCounters.set(key, 0);
-    this.lastExtractionAt.set(key, Date.now());
+    resetUserMessageCount(key);
+    setLastExtractionAt(key, Date.now());
   }
 
   async loadLastInteractions(): Promise<void> {
@@ -219,10 +222,7 @@ class ConversationContext {
       );
       for (const conv of conversations) {
         if (conv.lastInteraction) {
-          this.lastInteractionCache.set(
-            conv.channelId,
-            conv.lastInteraction.getTime(),
-          );
+          setLastInteractionAt(conv.channelId, conv.lastInteraction.getTime());
         }
       }
       aiLogger.info(
