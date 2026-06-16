@@ -6,12 +6,16 @@ import {
   EAuthTokenPlatformType,
   LoginSession,
 } from "steam-session";
+import type { ApiRequest, ApiResponse, ITransport } from "steam-session";
 
 const TOKEN_WAIT_TIMEOUT_MS = 90_000;
 const START_LOGIN_TIMEOUT_MS = 60_000;
 const START_LOGIN_STATUS_INTERVAL_MS = 10_000;
+const STEAM_WEB_API_BASE_URL = "https://api.steampowered.com";
 const MASKED_INPUT_FALLBACK_WARNING =
   "Password input is not hidden because this terminal is not interactive.";
+
+const GET_REQUESTS = new Set(["IAuthenticationService/GetPasswordRSAPublicKey/v1"]);
 
 type LoginMode = "qr" | "password";
 
@@ -28,6 +32,52 @@ type StartSessionResponse = StartCredentialsResponse | StartQrResponse;
 interface AuthenticationWaiter {
   promise: Promise<void>;
   cancel(): void;
+}
+
+class SteamWebApiTransport implements ITransport {
+  async sendRequest(request: ApiRequest): Promise<ApiResponse> {
+    const apiPath = `I${request.apiInterface}Service/${request.apiMethod}/v${request.apiVersion}`;
+    const url = new URL(`${STEAM_WEB_API_BASE_URL}/${apiPath}/`);
+    const isGetRequest = GET_REQUESTS.has(apiPath);
+    const headers = new Headers(request.headers);
+    let body: FormData | undefined;
+
+    if (request.accessToken) {
+      url.searchParams.set("access_token", request.accessToken);
+    }
+
+    if (request.requestData && request.requestData.length > 0) {
+      const encodedRequest = Buffer.from(request.requestData).toString("base64");
+      if (isGetRequest) {
+        url.searchParams.set("input_protobuf_encoded", encodedRequest);
+      } else {
+        body = new FormData();
+        body.set("input_protobuf_encoded", encodedRequest);
+      }
+    }
+
+    const response = await fetch(url, {
+      method: isGetRequest ? "GET" : "POST",
+      headers,
+      body,
+    });
+
+    const resultHeader = response.headers.get("x-eresult");
+    const errorMessage = response.headers.get("x-error_message") ?? undefined;
+    if (!response.ok) {
+      throw new Error(`Steam Web API returned HTTP ${response.status}`);
+    }
+
+    return {
+      result: resultHeader ? Number(resultHeader) : undefined,
+      errorMessage,
+      responseData: Buffer.from(await response.arrayBuffer()),
+    };
+  }
+
+  close(): void {
+    // No persistent resources are held by fetch.
+  }
 }
 
 function getArgValue(name: string): string | null {
@@ -332,6 +382,7 @@ async function main(): Promise<void> {
 
   const session = new LoginSession(EAuthTokenPlatformType.SteamClient, {
     machineFriendlyName: "Ruyi refresh token helper",
+    transport: new SteamWebApiTransport(),
   });
   session.loginTimeout = TOKEN_WAIT_TIMEOUT_MS;
 
