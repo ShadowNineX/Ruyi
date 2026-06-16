@@ -21,7 +21,7 @@ const REMINDER_COLORS = {
   error: 0xcc3333,
 } as const;
 
-const DURATION_UNITS = ["minutes", "hours", "days", "weeks"] as const;
+const DURATION_UNITS = ["seconds", "minutes", "hours", "days", "weeks"] as const;
 type DurationUnit = (typeof DURATION_UNITS)[number];
 
 export const remindCommand = new SlashCommandBuilder()
@@ -40,6 +40,7 @@ export const remindCommand = new SlashCommandBuilder()
       .setDescription("Time unit")
       .setRequired(true)
       .addChoices(
+        { name: "seconds", value: "seconds" },
         { name: "minutes", value: "minutes" },
         { name: "hours", value: "hours" },
         { name: "days", value: "days" },
@@ -104,6 +105,9 @@ function getReminderKind(value: string | null): ReminderKind {
 function addDuration(amount: number, unit: DurationUnit): Date {
   const dueAt = new Date();
   switch (unit) {
+    case "seconds":
+      dueAt.setSeconds(dueAt.getSeconds() + amount);
+      break;
     case "minutes":
       dueAt.setMinutes(dueAt.getMinutes() + amount);
       break;
@@ -183,7 +187,7 @@ export async function handleTimersCommand(
     const description =
       reminders.length === 0
         ? "You have no active reminders or timers in this server/private chat."
-        : reminders.map(formatReminderLine).join("\n");
+        : reminders.map((reminder) => formatReminderLine(reminder)).join("\n");
 
     await replyWithEmbed(
       interaction,

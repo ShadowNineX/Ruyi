@@ -1,23 +1,32 @@
 import { createStore } from "@tanstack/store";
 
 interface ReminderStoreState {
-  interval: ReturnType<typeof setInterval> | null;
+  timeout: ReturnType<typeof setTimeout> | null;
+  nextDueAt: Date | null;
   running: boolean;
 }
 
 const reminderStore = createStore<ReminderStoreState>({
-  interval: null,
+  timeout: null,
+  nextDueAt: null,
   running: false,
 });
 
-export function getReminderInterval(): ReturnType<typeof setInterval> | null {
-  return reminderStore.state.interval;
+export function getReminderSchedulerTimeout(): ReturnType<
+  typeof setTimeout
+> | null {
+  return reminderStore.state.timeout;
 }
 
-export function setReminderInterval(
-  interval: ReturnType<typeof setInterval> | null,
+export function getReminderSchedulerNextDueAt(): Date | null {
+  return reminderStore.state.nextDueAt;
+}
+
+export function setReminderSchedulerTimeout(
+  timeout: ReturnType<typeof setTimeout> | null,
+  nextDueAt: Date | null,
 ): void {
-  reminderStore.setState((state) => ({ ...state, interval }));
+  reminderStore.setState((state) => ({ ...state, timeout, nextDueAt }));
 }
 
 export function isReminderServiceRunning(): boolean {

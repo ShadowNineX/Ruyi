@@ -2,7 +2,7 @@ import { Agent } from "@openai/agents";
 import type { Client, SendableChannels, TextBasedChannel } from "discord.js";
 import { userConfigScope, type ConfigScope } from "../config";
 import {
-  REMINDER_CHECK_INTERVAL_MS,
+  REMINDER_DELIVERY_RETRY_DELAY_MS,
   REMINDER_DUE_BATCH_SIZE,
   REMINDER_LIST_LIMIT,
   REMINDER_LIST_TEXT_MAX_LENGTH,
@@ -10,6 +10,8 @@ import {
   REMINDER_MESSAGE_MAX_LENGTH,
   REMINDER_MAX_DELIVERY_ATTEMPTS,
   REMINDER_PROCESSING_STALE_MS,
+  REMINDER_SCHEDULER_ERROR_RETRY_MS,
+  REMINDER_SCHEDULER_MAX_SLEEP_MS,
   REMINDER_TEXT_MAX_LENGTH,
 } from "../constants";
 import { Reminder, type IReminder, type ReminderKind } from "../db/models";
@@ -19,9 +21,10 @@ import { conversationContext } from "../ai/context";
 import { systemPrompt } from "../ai/prompt";
 import { fetchRecentChatMessages, splitMessage } from "../utils/messages";
 import {
-  getReminderInterval,
+  getReminderSchedulerNextDueAt,
+  getReminderSchedulerTimeout,
   isReminderServiceRunning,
-  setReminderInterval,
+  setReminderSchedulerTimeout,
   setReminderServiceRunning,
 } from "../stores";
 
@@ -118,13 +121,33 @@ function sanitizeGeneratedReminderMessage(content: string): string {
   return `${cleaned.slice(0, REMINDER_MESSAGE_MAX_LENGTH - 3).trimEnd()}...`;
 }
 
+function getSchedulerDelay(wakeAt: Date): number {
+  const delay = Math.max(0, wakeAt.getTime() - Date.now());
+  return Math.min(delay, REMINDER_SCHEDULER_MAX_SLEEP_MS);
+}
+
+function getEarlierDate(first: Date | null, second: Date | null): Date | null {
+  if (!first) return second;
+  if (!second) return first;
+  return first.getTime() <= second.getTime() ? first : second;
+}
+
+function getProcessingRecoveryWakeAt(
+  reminder: Pick<IReminder, "processingStartedAt">,
+): Date {
+  const processingStartedAt = reminder.processingStartedAt ?? new Date();
+  return new Date(processingStartedAt.getTime() + REMINDER_PROCESSING_STALE_MS);
+}
+
 class ReminderService {
+  private client: Client | null = null;
+
   async createReminder(input: CreateReminderInput): Promise<IReminder> {
     assertFutureDueAt(input.dueAt);
     const text = truncateReminderText(input.text);
     if (!text) throw new TypeError("Reminder text cannot be empty");
 
-    return Reminder.create({
+    const reminder = await Reminder.create({
       kind: input.kind,
       text,
       dueAt: input.dueAt,
@@ -140,6 +163,86 @@ class ReminderService {
       processingStartedAt: null,
       lastDeliveryError: null,
     });
+
+    this.scheduleCreatedReminder(reminder);
+    return reminder;
+  }
+
+  private scheduleCreatedReminder(reminder: IReminder): void {
+    if (!this.client) return;
+
+    const nextDueAt = getReminderSchedulerNextDueAt();
+    if (nextDueAt && nextDueAt.getTime() <= reminder.dueAt.getTime()) return;
+
+    this.scheduleWakeAt(reminder.dueAt, "reminder-created");
+  }
+
+  private clearScheduledWake(): void {
+    const timeout = getReminderSchedulerTimeout();
+    if (timeout) clearTimeout(timeout);
+    setReminderSchedulerTimeout(null, null);
+  }
+
+  private scheduleWakeAt(wakeAt: Date, reason: string): void {
+    this.clearScheduledWake();
+
+    const delayMs = getSchedulerDelay(wakeAt);
+    const timeout = setTimeout(() => {
+      setReminderSchedulerTimeout(null, null);
+      const activeClient = this.client;
+      if (!activeClient) return;
+      void this.runDueCheck(activeClient);
+    }, delayMs);
+
+    setReminderSchedulerTimeout(timeout, wakeAt);
+    botLogger.debug(
+      {
+        wakeAt: wakeAt.toISOString(),
+        delayMs,
+        reason,
+      },
+      "Scheduled reminder service wake",
+    );
+  }
+
+  private async findNextWakeAt(): Promise<Date | null> {
+    const nextScheduled = await Reminder.findOne({
+      status: ACTIVE_REMINDER_STATUS,
+    })
+      .sort({ dueAt: 1 })
+      .select("dueAt");
+    const nextProcessing = await Reminder.findOne({ status: "processing" })
+      .sort({ processingStartedAt: 1 })
+      .select("processingStartedAt");
+
+    return getEarlierDate(
+      nextScheduled?.dueAt ?? null,
+      nextProcessing ? getProcessingRecoveryWakeAt(nextProcessing) : null,
+    );
+  }
+
+  private async scheduleNextWake(reason: string): Promise<void> {
+    try {
+      const nextWakeAt = await this.findNextWakeAt();
+      if (!nextWakeAt) {
+        this.clearScheduledWake();
+        botLogger.debug({ reason }, "Reminder queue is idle");
+        return;
+      }
+
+      this.scheduleWakeAt(nextWakeAt, reason);
+    } catch (error) {
+      const retryAt = new Date(Date.now() + REMINDER_SCHEDULER_ERROR_RETRY_MS);
+      this.scheduleWakeAt(retryAt, "scheduler-error-retry");
+      botLogger.error(
+        {
+          reason,
+          retryAt: retryAt.toISOString(),
+          error: getReminderErrorMessage(error),
+        },
+        "Failed to schedule next reminder wake",
+      );
+    }
   }
 
   async listActiveReminders(
@@ -167,6 +270,10 @@ class ReminderService {
         status: ACTIVE_REMINDER_STATUS,
       },
     );
+
+    if (reminder && this.client) {
+      await this.scheduleNextWake("reminder-cancelled");
+    }
 
     return { cancelled: Boolean(reminder), reminder };
   }
@@ -322,6 +429,7 @@ class ReminderService {
       { _id: reminder._id },
       {
         $set: {
+          dueAt: new Date(Date.now() + REMINDER_DELIVERY_RETRY_DELAY_MS),
           status: ACTIVE_REMINDER_STATUS,
           processingStartedAt: null,
           lastDeliveryError: getReminderErrorMessage(error),
@@ -386,33 +494,29 @@ class ReminderService {
       );
     } finally {
       setReminderServiceRunning(false);
+      if (this.client) {
+        await this.scheduleNextWake("due-check-complete");
+      }
     }
   }
 
   start(client: Client): void {
-    if (getReminderInterval()) {
+    if (this.client) {
       botLogger.warn("Reminder service already running");
       return;
     }
 
-    botLogger.info(
-      { intervalMs: REMINDER_CHECK_INTERVAL_MS },
-      "Starting reminder service",
-    );
+    this.client = client;
+    botLogger.info("Starting reminder service");
     void this.runDueCheck(client);
-    setReminderInterval(
-      setInterval(() => {
-        void this.runDueCheck(client);
-      }, REMINDER_CHECK_INTERVAL_MS),
-    );
   }
 
   stop(): void {
-    const interval = getReminderInterval();
-    if (!interval) return;
+    if (!this.client) return;
 
-    clearInterval(interval);
-    setReminderInterval(null);
+    this.client = null;
+    this.clearScheduledWake();
+    setReminderServiceRunning(false);
     botLogger.info("Reminder service stopped");
   }
 
