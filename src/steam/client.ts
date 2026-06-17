@@ -1,11 +1,13 @@
 import SteamUser from "steam-user";
 import SteamCommunity from "steamcommunity";
+import SteamID from "steamid";
 import type CSteamUser from "steamcommunity/classes/CSteamUser";
 import { env } from "../env";
 import { botLogger } from "../logger";
 import { steamIntegrationEnabled } from "../utils/user-identity";
 
 const DEFAULT_COMMENT_FETCH_COUNT = 20;
+const STEAM_ID64_PATTERN = /^\d{17}$/;
 
 interface SteamCommentOptions {
   start?: number;
@@ -45,6 +47,13 @@ function getSteamLogOnOptions(): { refreshToken: string; steamID: string } {
     throw new TypeError("Steam login is not fully configured");
   }
   return { refreshToken, steamID };
+}
+
+function toSteamUserLookup(profileId: string): SteamID | string {
+  const normalized = profileId.trim();
+  return STEAM_ID64_PATTERN.test(normalized)
+    ? new SteamID(normalized)
+    : normalized;
 }
 
 class SteamCommunityClient {
@@ -176,8 +185,9 @@ class SteamCommunityClient {
   }
 
   private async getProfile(profileId: string): Promise<SteamProfileWithComments> {
+    const lookup = toSteamUserLookup(profileId);
     return new Promise((resolve, reject) => {
-      this.community.getSteamUser(profileId, (error, profile) => {
+      this.community.getSteamUser(lookup, (error, profile) => {
         if (error) {
           reject(error);
           return;
