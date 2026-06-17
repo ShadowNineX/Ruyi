@@ -2,6 +2,7 @@ import mongoose, { Types } from "mongoose";
 import { dbLogger } from "../logger";
 import { env } from "../env";
 import { getConfigValue, setConfigValue } from "./models";
+import { isValidSmitheryConnectionId } from "../utils/smithery-connection-id";
 
 type MongoObjectId = Types.ObjectId;
 
@@ -30,6 +31,11 @@ interface LegacyMemoryDocument {
   pinned?: boolean;
   createdAt?: Date;
   updatedAt?: Date;
+}
+
+interface SmitheryConnectionMigrationDocument {
+  _id: MongoObjectId;
+  connectionId?: string;
 }
 
 interface IndexDroppableCollection {
@@ -297,6 +303,26 @@ async function resetSteamCommentTrackingToCheckpoint(): Promise<void> {
   }
 }
 
+async function removeInvalidSmitheryConnectionIds(): Promise<void> {
+  if (!(await collectionExists("smitheryconnections"))) return;
+
+  const collection = getDb().collection<SmitheryConnectionMigrationDocument>(
+    "smitheryconnections",
+  );
+  const connections = await collection.find({}).toArray();
+  const invalidIds = connections
+    .filter((connection) => !isValidSmitheryConnectionId(connection.connectionId))
+    .map((connection) => connection._id);
+
+  if (invalidIds.length === 0) return;
+
+  await collection.deleteMany({ _id: { $in: invalidIds } });
+  dbLogger.info(
+    { removed: invalidIds.length },
+    "Removed invalid Smithery connection IDs",
+  );
+}
+
 const migrations: DatabaseMigration[] = [
   {
     id: "2026-06-16-platform-history-split",
@@ -319,6 +345,10 @@ const migrations: DatabaseMigration[] = [
   {
     id: "2026-06-16-steam-comment-checkpoint-mode",
     run: resetSteamCommentTrackingToCheckpoint,
+  },
+  {
+    id: "2026-06-17-smithery-connection-id-format",
+    run: removeInvalidSmitheryConnectionIds,
   },
 ];
 

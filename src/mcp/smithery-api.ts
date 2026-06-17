@@ -5,6 +5,7 @@ import type { Connection } from "@smithery/api/resources/connections/connections
 import type { Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
 import { env } from "../env";
 import { mcpLogger } from "../logger";
+import { getSmitheryConnectionId } from "../utils/smithery-connection-id";
 import {
   getAllSmitheryConnections,
   getSmitheryConnection,
@@ -81,13 +82,6 @@ function normalizeStatus(
     default:
       return "unknown";
   }
-}
-
-function getConnectionId(
-  scope: SmitheryConnectionScope,
-  serverId: SmitheryServerId,
-): string {
-  return `${serverId}-${scope.kind}-${scope.id}`;
 }
 
 function getConnectionMetadata(
@@ -225,13 +219,16 @@ export async function createOrUpdateSmitheryConnection(
   const server = SMITHERY_SERVERS[serverId];
   const client = getSmitheryClient();
 
-  const connection = await client.connections.set(getConnectionId(scope, serverId), {
-    namespace,
-    transport: "http",
-    mcpUrl: server.mcpUrl,
-    name: server.name,
-    metadata: getConnectionMetadata(scope, serverId),
-  });
+  const connection = await client.connections.set(
+    getSmitheryConnectionId(scope, serverId),
+    {
+      namespace,
+      transport: "http",
+      mcpUrl: server.mcpUrl,
+      name: server.name,
+      metadata: getConnectionMetadata(scope, serverId),
+    },
+  );
 
   const snapshot = toSnapshot(connection);
   await saveSnapshot(scope, serverId, snapshot);
@@ -245,7 +242,7 @@ export async function refreshSmitheryConnection(
   const { namespace } = requireSmitheryConfig();
   const client = getSmitheryClient();
   const connection = await client.connections.get(
-    getConnectionId(scope, serverId),
+    getSmitheryConnectionId(scope, serverId),
     { namespace },
   );
   const snapshot = toSnapshot(connection);
@@ -288,7 +285,7 @@ export async function deleteSmitheryConnection(
 
   try {
     const result = await client.connections.delete(
-      getConnectionId(scope, serverId),
+      getSmitheryConnectionId(scope, serverId),
       { namespace },
     );
     return result.success;
