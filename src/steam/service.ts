@@ -1,4 +1,3 @@
-import type SteamCommunity from "steamcommunity";
 import { chatService, conversationContext, sessionManager } from "../ai";
 import { steamProfileConfigScope } from "../config";
 import {
@@ -13,7 +12,10 @@ import {
   steamIntegrationEnabled,
 } from "../utils/user-identity";
 import { env } from "../env";
-import { steamCommunityClient } from "./client";
+import {
+  steamCommunityClient,
+  type SteamProfileComment,
+} from "./client";
 import { normalizeSteamProfileComment } from "./comment-format";
 import {
   findDeletedSteamCommentIds,
@@ -25,54 +27,30 @@ const STEAM_COMMENT_CHECK_OVERLAP_MS = 2 * 60_000;
 const STEAM_COMMENT_FETCH_COUNT = 100;
 const SEEN_COMMENT_CAP = 500;
 
-type SteamUserComment = SteamCommunity.UserComment;
 type CommentCheckReason = "startup" | "notification" | "queued";
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function getCommentId(comment: SteamUserComment): string | null {
-  const id = comment.id;
-  if (typeof id === "string" || typeof id === "number") {
-    const normalized = String(id).trim();
-    return normalized || null;
-  }
-  return null;
-}
-
-function getCommentText(comment: SteamUserComment): string {
-  return typeof comment.text === "string" ? comment.text.trim() : "";
-}
-
-function getCommentAuthorName(comment: SteamUserComment): string {
-  return typeof comment.author.name === "string"
-    ? comment.author.name
-    : "Steam user";
-}
-
-function getCommentAuthorSteamId(comment: SteamUserComment): string {
-  return comment.author.steamID.getSteamID64();
-}
-
 function sortCommentsOldestFirst(
-  comments: SteamUserComment[],
-): SteamUserComment[] {
+  comments: SteamProfileComment[],
+): SteamProfileComment[] {
   return [...comments].sort(
     (left, right) => left.date.getTime() - right.date.getTime(),
   );
 }
 
 function toSteamCommentWindow(
-  comments: SteamUserComment[],
+  comments: SteamProfileComment[],
   totalCount: number,
 ): SteamCommentWindow {
   return {
     totalCount,
-    comments: comments.flatMap((comment) => {
-      const id = getCommentId(comment);
-      return id ? [{ id, date: comment.date }] : [];
-    }),
+    comments: comments.map((comment) => ({
+      id: comment.id,
+      date: comment.date,
+    })),
   };
 }
 
@@ -84,25 +62,21 @@ function mergeSeenCommentIds(
   return [...merged].slice(-SEEN_COMMENT_CAP);
 }
 
-function buildSteamCommentPrompt(comment: SteamUserComment): string {
-  const authorName = getCommentAuthorName(comment);
-  const text = getCommentText(comment);
-  return `Steam profile comment from ${authorName}:\n${text}`;
+function buildSteamCommentPrompt(comment: SteamProfileComment): string {
+  return `Steam profile comment from ${comment.authorName}:\n${comment.text}`;
 }
 
 function commentWasAlreadyHandled(
-  comment: SteamUserComment,
+  comment: SteamProfileComment,
   seenIds: Set<string>,
   lastCheckedAt: Date,
 ): boolean {
-  const commentId = getCommentId(comment);
   const cutoff =
     seenIds.size > 0
       ? lastCheckedAt.getTime() - STEAM_COMMENT_CHECK_OVERLAP_MS
       : lastCheckedAt.getTime();
   return (
-    !commentId ||
-    seenIds.has(commentId) ||
+    seenIds.has(comment.id) ||
     comment.date.getTime() <= cutoff
   );
 }
@@ -191,10 +165,7 @@ class SteamProfileCommentService {
       STEAM_COMMENT_FETCH_COUNT,
     );
     const { comments, totalCount } = page;
-    const commentIds = comments.flatMap((comment) => {
-      const commentId = getCommentId(comment);
-      return commentId ? [commentId] : [];
-    });
+    const commentIds = comments.map((comment) => comment.id);
     const deletedIds = await this.syncDeletedProfileComments(
       profileId,
       toSteamCommentWindow(comments, totalCount),
@@ -219,13 +190,12 @@ class SteamProfileCommentService {
       if (commentWasAlreadyHandled(comment, seenIds, state.lastCheckedAt)) {
         return false;
       }
-      return getCommentAuthorSteamId(comment) !== profileId;
+      return comment.authorSteamId !== profileId;
     });
 
     const processedIds: string[] = [];
     for (const comment of newComments) {
-      const commentId = getCommentId(comment);
-      if (!commentId) continue;
+      const commentId = comment.id;
       try {
         await this.replyToComment(profileId, comment, commentId);
       } finally {
@@ -321,11 +291,10 @@ class SteamProfileCommentService {
 
   private async replyToComment(
     profileId: string,
-    comment: SteamUserComment,
+    comment: SteamProfileComment,
     commentId: string,
   ): Promise<void> {
-    const authorSteamId = getCommentAuthorSteamId(comment);
-    const authorName = getCommentAuthorName(comment);
+    const { authorSteamId, authorName } = comment;
     const identity = buildSteamUserIdentity(authorSteamId, authorName);
     const session = new HeadlessChatSession();
     const userMessage = buildSteamCommentPrompt(comment);

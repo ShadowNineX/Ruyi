@@ -1,3 +1,5 @@
+import { dateToTime } from "../utils/date";
+
 export interface VisibleSteamComment {
   id: string;
   date: Date;
@@ -18,8 +20,12 @@ function isSyntheticCommentId(commentId: string): boolean {
 }
 
 function oldestVisibleCommentTime(comments: VisibleSteamComment[]): number | null {
-  if (comments.length === 0) return null;
-  return Math.min(...comments.map((comment) => comment.date.getTime()));
+  const times = comments.flatMap((comment) => {
+    const time = dateToTime(comment.date);
+    return time === null ? [] : [time];
+  });
+  if (times.length === 0) return null;
+  return Math.min(...times);
 }
 
 export function findDeletedSteamCommentIds(
@@ -39,7 +45,8 @@ export function findDeletedSteamCommentIds(
       if (visibleIds.has(comment.commentId)) return false;
       if (fetchedWholeProfile) return true;
       if (oldestVisibleTime === null) return false;
-      return comment.timestamp.getTime() >= oldestVisibleTime;
+      const archivedTime = dateToTime(comment.timestamp);
+      return archivedTime === null ? false : archivedTime >= oldestVisibleTime;
     })
     .map((comment) => comment.commentId);
 }

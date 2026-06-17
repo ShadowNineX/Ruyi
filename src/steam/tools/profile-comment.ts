@@ -135,14 +135,11 @@ export const steamProfileCommentsTool = tool({
         target,
         profileId: targetProfileId,
         comments: comments.map((comment) => ({
-          id: String(comment.id),
-          authorName:
-            typeof comment.author.name === "string"
-              ? comment.author.name
-              : "Steam user",
-          authorSteamId: comment.author.steamID.getSteamID64(),
+          id: comment.id,
+          authorName: comment.authorName,
+          authorSteamId: comment.authorSteamId,
           date: comment.date.toISOString(),
-          text: typeof comment.text === "string" ? comment.text : "",
+          text: comment.text,
         })),
       };
     } catch (error) {

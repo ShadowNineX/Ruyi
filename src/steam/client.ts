@@ -5,6 +5,7 @@ import type CSteamUser from "steamcommunity/classes/CSteamUser";
 import { env } from "../env";
 import { botLogger } from "../logger";
 import { steamIntegrationEnabled } from "../utils/user-identity";
+import { isValidDate } from "../utils/date";
 
 const DEFAULT_COMMENT_FETCH_COUNT = 20;
 const STEAM_ID64_PATTERN = /^\d{17}$/;
@@ -14,12 +15,23 @@ interface SteamCommentOptions {
   count?: number;
 }
 
+export interface SteamProfileComment {
+  id: string;
+  authorSteamId: string;
+  authorName: string;
+  authorAvatar?: string;
+  authorState?: string;
+  date: Date;
+  text: string;
+  html: string;
+}
+
 interface SteamProfileCommentPage {
-  comments: SteamUserComment[];
+  comments: SteamProfileComment[];
   totalCount: number;
 }
 
-type SteamUserComment = SteamCommunity.UserComment;
+type RawSteamUserComment = SteamCommunity.UserComment;
 type SteamCommentNotificationListener = (
   count: number,
   myItems: number,
@@ -35,7 +47,7 @@ type SteamProfileWithComments = Omit<CSteamUser, "comment" | "getComments"> & {
     options: SteamCommentOptions,
     callback: (
       error: SteamCommunity.CallbackError,
-      comments: SteamUserComment[],
+      comments: RawSteamUserComment[],
       totalCount: number,
     ) => void,
   ): void;
@@ -59,6 +71,68 @@ function toSteamUserLookup(profileId: string): SteamID | string {
   return STEAM_ID64_PATTERN.test(normalized)
     ? new SteamID(normalized)
     : normalized;
+}
+
+function normalizeCommentId(id: unknown): string | null {
+  if (typeof id !== "string" && typeof id !== "number") return null;
+  const normalized = String(id).trim();
+  return normalized || null;
+}
+
+function normalizeCommentDate(
+  comment: RawSteamUserComment,
+  fetchedAt: Date,
+  index: number,
+): Date {
+  if (isValidDate(comment.date)) return comment.date;
+
+  botLogger.debug(
+    {
+      commentId: normalizeCommentId(comment.id),
+      index,
+    },
+    "Steam comment had no valid timestamp; using fetch-order timestamp",
+  );
+  return new Date(fetchedAt.getTime() - index);
+}
+
+function normalizeSteamProfileComment(
+  comment: RawSteamUserComment,
+  fetchedAt: Date,
+  index: number,
+): SteamProfileComment | null {
+  const id = normalizeCommentId(comment.id);
+  if (!id) return null;
+
+  return {
+    id,
+    authorSteamId: comment.author.steamID.getSteamID64(),
+    authorName:
+      typeof comment.author.name === "string"
+        ? comment.author.name
+        : "Steam user",
+    authorAvatar:
+      typeof comment.author.avatar === "string"
+        ? comment.author.avatar
+        : undefined,
+    authorState:
+      typeof comment.author.state === "string"
+        ? comment.author.state
+        : undefined,
+    date: normalizeCommentDate(comment, fetchedAt, index),
+    text: typeof comment.text === "string" ? comment.text.trim() : "",
+    html: typeof comment.html === "string" ? comment.html : "",
+  };
+}
+
+function normalizeSteamProfileComments(
+  comments: RawSteamUserComment[],
+): SteamProfileComment[] {
+  const fetchedAt = new Date();
+  return comments.flatMap((comment, index) => {
+    const normalized = normalizeSteamProfileComment(comment, fetchedAt, index);
+    return normalized ? [normalized] : [];
+  });
 }
 
 class SteamCommunityClient {
@@ -162,7 +236,7 @@ class SteamCommunityClient {
   async getProfileComments(
     profileId: string,
     count = DEFAULT_COMMENT_FETCH_COUNT,
-  ): Promise<SteamUserComment[]> {
+  ): Promise<SteamProfileComment[]> {
     const page = await this.getProfileCommentPage(profileId, count);
     return page.comments;
   }
@@ -179,7 +253,10 @@ class SteamCommunityClient {
           reject(error);
           return;
         }
-        resolve({ comments, totalCount });
+        resolve({
+          comments: normalizeSteamProfileComments(comments),
+          totalCount,
+        });
       });
     });
   }

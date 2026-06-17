@@ -62,4 +62,26 @@ describe("Steam comment deletion sync", () => {
       ),
     ).toEqual([]);
   });
+
+  test("ignores invalid dates in partial fetched windows", () => {
+    expect(
+      findDeletedSteamCommentIds(
+        [
+          {
+            commentId: "archived-invalid-date",
+            timestamp: new Date("invalid"),
+          },
+        ],
+        {
+          totalCount: 50,
+          comments: [
+            {
+              id: "visible-invalid-date",
+              date: new Date("invalid"),
+            },
+          ],
+        },
+      ),
+    ).toEqual([]);
+  });
 });
