@@ -68,10 +68,12 @@ export const steamProfileCommentTool = tool({
       return {
         success: true,
         target,
-        profileId: targetProfileId,
         commentId,
-        comment,
+        commentLength: comment.length,
         truncated,
+        final_answer_required: true,
+        final_answer_guidance:
+          "Confirm that the Steam profile comment was posted. Do not quote, restate, or summarize the comment text unless the user explicitly asks for a copy.",
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

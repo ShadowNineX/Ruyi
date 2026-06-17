@@ -1,7 +1,11 @@
 import type SteamCommunity from "steamcommunity";
-import { chatService, conversationContext } from "../ai";
+import { chatService, conversationContext, sessionManager } from "../ai";
 import { steamProfileConfigScope } from "../config";
-import { SteamCommentState } from "../db/models";
+import {
+  SteamAgentSession,
+  SteamCommentState,
+  SteamConversation,
+} from "../db/models";
 import { botLogger } from "../logger";
 import { runWithToolContext } from "../utils/types";
 import {
@@ -11,15 +15,18 @@ import {
 import { env } from "../env";
 import { steamCommunityClient } from "./client";
 import { normalizeSteamProfileComment } from "./comment-format";
+import {
+  findDeletedSteamCommentIds,
+  type SteamCommentWindow,
+} from "./comment-sync";
 import { HeadlessChatSession } from "./headless-session";
 
-const STEAM_COMMENT_RECONCILE_INTERVAL_MS = 15 * 60_000;
 const STEAM_COMMENT_CHECK_OVERLAP_MS = 2 * 60_000;
-const STEAM_COMMENT_FETCH_COUNT = 20;
+const STEAM_COMMENT_FETCH_COUNT = 100;
 const SEEN_COMMENT_CAP = 500;
 
 type SteamUserComment = SteamCommunity.UserComment;
-type CommentCheckReason = "startup" | "notification" | "fallback" | "queued";
+type CommentCheckReason = "startup" | "notification" | "queued";
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -56,6 +63,19 @@ function sortCommentsOldestFirst(
   );
 }
 
+function toSteamCommentWindow(
+  comments: SteamUserComment[],
+  totalCount: number,
+): SteamCommentWindow {
+  return {
+    totalCount,
+    comments: comments.flatMap((comment) => {
+      const id = getCommentId(comment);
+      return id ? [{ id, date: comment.date }] : [];
+    }),
+  };
+}
+
 function mergeSeenCommentIds(
   currentIds: string[],
   nextIds: string[],
@@ -88,7 +108,6 @@ function commentWasAlreadyHandled(
 }
 
 class SteamProfileCommentService {
-  private reconcileTimer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribeCommentNotifications: (() => void) | null = null;
   private running = false;
   private processing = false;
@@ -111,15 +130,11 @@ class SteamProfileCommentService {
         { error: getErrorMessage(error) },
         "Steam profile comment service failed during startup",
       );
-    } finally {
-      this.scheduleFallbackCheck();
     }
   }
 
   stop(): void {
     this.running = false;
-    if (this.reconcileTimer) clearTimeout(this.reconcileTimer);
-    this.reconcileTimer = null;
     this.unsubscribeCommentNotifications?.();
     this.unsubscribeCommentNotifications = null;
     this.pendingCheck = false;
@@ -138,22 +153,6 @@ class SteamProfileCommentService {
         if (myItems <= 0) return;
         void this.checkComments("notification");
       });
-  }
-
-  private scheduleFallbackCheck(): void {
-    if (!this.running) return;
-    this.reconcileTimer = setTimeout(
-      () => void this.fallbackCheckAndReschedule(),
-      STEAM_COMMENT_RECONCILE_INTERVAL_MS,
-    );
-  }
-
-  private async fallbackCheckAndReschedule(): Promise<void> {
-    try {
-      await this.checkComments("fallback");
-    } finally {
-      this.scheduleFallbackCheck();
-    }
   }
 
   private async checkComments(reason: CommentCheckReason): Promise<void> {
@@ -187,14 +186,19 @@ class SteamProfileCommentService {
     profileId: string,
     reason: CommentCheckReason,
   ): Promise<void> {
-    const comments = await steamCommunityClient.getProfileComments(
+    const page = await steamCommunityClient.getProfileCommentPage(
       profileId,
       STEAM_COMMENT_FETCH_COUNT,
     );
+    const { comments, totalCount } = page;
     const commentIds = comments.flatMap((comment) => {
       const commentId = getCommentId(comment);
       return commentId ? [commentId] : [];
     });
+    const deletedIds = await this.syncDeletedProfileComments(
+      profileId,
+      toSteamCommentWindow(comments, totalCount),
+    );
 
     const state = await SteamCommentState.findOne({ profileId });
     if (!state) {
@@ -247,10 +251,72 @@ class SteamProfileCommentService {
         profileId,
         reason,
         checked: comments.length,
+        totalCount,
         replied: processedIds.length,
+        deleted: deletedIds.length,
       },
       "Steam profile comments checked",
     );
+  }
+
+  private async syncDeletedProfileComments(
+    profileId: string,
+    visibleWindow: SteamCommentWindow,
+  ): Promise<string[]> {
+    const conversation = await SteamConversation.findOne(
+      { profileId },
+      { messages: 1 },
+    );
+    if (!conversation || conversation.messages.length === 0) return [];
+
+    const deletedIds = findDeletedSteamCommentIds(
+      conversation.messages.map((message) => ({
+        commentId: message.commentId,
+        timestamp: message.timestamp,
+      })),
+      visibleWindow,
+    );
+    if (deletedIds.length === 0) return [];
+
+    const activeSessionMatchesDeletedComment = await SteamAgentSession.exists({
+      profileId,
+      isActive: true,
+      provider: "openai-agents",
+      processedCommentIds: { $in: deletedIds },
+    });
+
+    await Promise.all([
+      SteamConversation.updateOne(
+        { profileId },
+        {
+          $pull: { messages: { commentId: { $in: deletedIds } } },
+          $set: { lastInteraction: new Date() },
+        },
+      ),
+      SteamCommentState.updateOne(
+        { profileId },
+        { $pull: { seenCommentIds: { $in: deletedIds } } },
+      ),
+      SteamAgentSession.updateOne(
+        { profileId },
+        { $pull: { processedCommentIds: { $in: deletedIds } } },
+      ),
+    ]);
+
+    if (activeSessionMatchesDeletedComment) {
+      await sessionManager.invalidate(profileId, "steam");
+    }
+
+    botLogger.info(
+      {
+        profileId,
+        deletedCommentIds: deletedIds,
+        invalidatedSession: Boolean(activeSessionMatchesDeletedComment),
+      },
+      "Removed deleted Steam comments from local context",
+    );
+
+    return deletedIds;
   }
 
   private async replyToComment(
@@ -286,6 +352,7 @@ class SteamProfileCommentService {
           userId: authorSteamId,
           session,
           messageId: commentId,
+          messageTimestamp: comment.date,
           chatHistory: [],
           persistUserMessage: true,
         }),

@@ -64,6 +64,7 @@ interface ChatOptions {
   surfaceLabel?: string;
   signal?: AbortSignal;
   persistUserMessage?: boolean;
+  messageTimestamp?: Date;
 }
 
 interface TextStreamResult {
@@ -297,6 +298,7 @@ class ChatService {
             content: userMessage,
             isBot: false,
             commentId: messageId,
+            timestamp: options.messageTimestamp,
           });
         }
 

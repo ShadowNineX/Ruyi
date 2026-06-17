@@ -14,6 +14,11 @@ interface SteamCommentOptions {
   count?: number;
 }
 
+interface SteamProfileCommentPage {
+  comments: SteamUserComment[];
+  totalCount: number;
+}
+
 type SteamUserComment = SteamCommunity.UserComment;
 type SteamCommentNotificationListener = (
   count: number,
@@ -63,11 +68,17 @@ class SteamCommunityClient {
   private ready = false;
   private lifecycleListenersAttached = false;
 
+  private setOnlinePresence(reason: string): void {
+    this.user.setPersona(SteamUser.EPersonaState.Online);
+    botLogger.info({ reason }, "Steam account presence set to online");
+  }
+
   private attachLifecycleListeners(): void {
     if (this.lifecycleListenersAttached) return;
 
     this.user.on("loggedOn", () => {
       botLogger.info("Steam account logged on");
+      this.setOnlinePresence("loggedOn");
     });
     this.user.on("refreshToken", () => {
       botLogger.warn(
@@ -110,6 +121,7 @@ class SteamCommunityClient {
       const onWebSession = (_sessionId: string, cookies: string[]): void => {
         this.community.setCookies(cookies);
         this.ready = true;
+        this.setOnlinePresence("webSession");
         this.user.off("error", fail);
         botLogger.info("Steam Community web session established");
         resolve();
@@ -138,7 +150,9 @@ class SteamCommunityClient {
     this.user.logOff();
   }
 
-  onCommentNotification(listener: SteamCommentNotificationListener): () => void {
+  onCommentNotification(
+    listener: SteamCommentNotificationListener,
+  ): () => void {
     this.user.on("newComments", listener);
     return () => {
       this.user.off("newComments", listener);
@@ -149,20 +163,31 @@ class SteamCommunityClient {
     profileId: string,
     count = DEFAULT_COMMENT_FETCH_COUNT,
   ): Promise<SteamUserComment[]> {
+    const page = await this.getProfileCommentPage(profileId, count);
+    return page.comments;
+  }
+
+  async getProfileCommentPage(
+    profileId: string,
+    count = DEFAULT_COMMENT_FETCH_COUNT,
+  ): Promise<SteamProfileCommentPage> {
     await this.ensureReady();
     const profile = await this.getProfile(profileId);
     return new Promise((resolve, reject) => {
-      profile.getComments({ count }, (error, comments) => {
+      profile.getComments({ count }, (error, comments, totalCount) => {
         if (error) {
           reject(error);
           return;
         }
-        resolve(comments);
+        resolve({ comments, totalCount });
       });
     });
   }
 
-  async postProfileComment(profileId: string, message: string): Promise<string | null> {
+  async postProfileComment(
+    profileId: string,
+    message: string,
+  ): Promise<string | null> {
     await this.ensureReady();
     const profile = await this.getProfile(profileId);
     return new Promise<string | null>((resolve, reject) => {
@@ -184,7 +209,9 @@ class SteamCommunityClient {
     await this.start();
   }
 
-  private async getProfile(profileId: string): Promise<SteamProfileWithComments> {
+  private async getProfile(
+    profileId: string,
+  ): Promise<SteamProfileWithComments> {
     const lookup = toSteamUserLookup(profileId);
     return new Promise((resolve, reject) => {
       this.community.getSteamUser(lookup, (error, profile) => {
