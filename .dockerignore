@@ -2,7 +2,6 @@
 .env.*
 !.env.example
 
-.git
 .github
 .agents
 .codex

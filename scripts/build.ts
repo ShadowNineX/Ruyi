@@ -23,25 +23,9 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(precision)} ${units[unitIndex]}`;
 }
 
-function getEnvCommit(): string | null {
-  const commit = Bun.env.RUYI_GIT_COMMIT ?? Bun.env.GIT_COMMIT;
-  return commit?.trim() || null;
-}
-
 async function getGitCommit(): Promise<string> {
-  const envCommit = getEnvCommit();
-  if (envCommit) { return envCommit; }
-
-  try {
-    const commit = await $`git rev-parse HEAD`.text();
-    return commit.trim() || 'unknown';
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.info(
-      `Git commit unavailable; set RUYI_GIT_COMMIT or GIT_COMMIT to bundle it. ${message}`,
-    );
-    return 'unknown';
-  }
+  const commit = await $`git rev-parse HEAD`.text();
+  return commit.trim();
 }
 
 const gitCommit = await getGitCommit();
