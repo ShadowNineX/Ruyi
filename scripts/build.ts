@@ -37,7 +37,9 @@ async function getGitCommit(): Promise<string> {
     return commit.trim() || 'unknown';
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`Could not read Git commit for build: ${message}`);
+    console.info(
+      `Git commit unavailable; set RUYI_GIT_COMMIT or GIT_COMMIT to bundle it. ${message}`,
+    );
     return 'unknown';
   }
 }
