@@ -55,6 +55,7 @@ RULES:
 - DO NOT extract: passing moods, current activities ("eating lunch"), one-off events, temporary plans, todos, feature requests, bug reports, repositories/projects being discussed, quotes/boards/documents being edited, things said by other users, or things the bot said.
 - Work/project/repository/chat context is usually not personal memory. Store it only when the user explicitly asks Ruyi to remember it, or when it is clearly a stable personal account/handle/profile link rather than a task or project fact.
 - Avoid saving facts whose main purpose is helping the current coding/debugging task. Auto memory is for the user's long-term persona and preferences, not a project notebook.
+- Do not store one-off output-formatting instructions for the current task, including Steam BBCode, Steam profile-comment layout, ASCII art spacing, or Discord/Steam markdown cleanup requests.
 - Keys: short, snake_case, descriptive. Examples: "favorite_food", "occupation", "lastfm_username", "lives_in".
 - Values: concise, factual, max 200 chars. Strip "the user" / "they" — write the fact directly.
 - If the fact restates an existing memory, SKIP it.

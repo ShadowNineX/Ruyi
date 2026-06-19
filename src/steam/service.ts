@@ -335,8 +335,12 @@ class SteamProfileCommentService {
       return;
     }
 
-    const { comment: steamReply, truncated } =
-      normalizeSteamProfileComment(reply);
+    const {
+      comment: steamReply,
+      truncated,
+      removedUnsupportedFormatting,
+      convertedAlignmentSpaces,
+    } = normalizeSteamProfileComment(reply);
     if (!steamReply) {
       botLogger.warn(
         { profileId, commentId, authorSteamId },
@@ -359,7 +363,15 @@ class SteamProfileCommentService {
         replyCommentId ?? `ruyi:${commentId}:${Math.floor(Date.now() / 1000)}`,
     });
     botLogger.info(
-      { profileId, commentId, replyCommentId, authorSteamId, truncated },
+      {
+        profileId,
+        commentId,
+        replyCommentId,
+        authorSteamId,
+        truncated,
+        removedUnsupportedFormatting,
+        convertedAlignmentSpaces,
+      },
       "Replied to Steam profile comment",
     );
   }

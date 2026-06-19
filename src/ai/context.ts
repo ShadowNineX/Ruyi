@@ -32,6 +32,7 @@ import {
   STEAM_PROFILE_COMMENT_MAX_LENGTH,
   USER_MEMORY_CAP,
 } from "../constants";
+import { STEAM_PROFILE_COMMENT_SAFE_BBCODE_GUIDE } from "../steam/comment-format";
 import {
   getLastExtractionAt,
   getLastInteractionAt,
@@ -575,7 +576,7 @@ class ConversationContext {
       (surface === "discord" ? "Discord conversation" : "Steam profile comments");
     const surfaceConstraints =
       surface === "steam"
-        ? `Steam profile comment constraints: keep the final reply under ${STEAM_PROFILE_COMMENT_MAX_LENGTH} characters. Use Steam BBCode/plain text, not Discord Markdown.`
+        ? `Steam profile comment constraints: keep the final reply under ${STEAM_PROFILE_COMMENT_MAX_LENGTH} characters. Use safe Steam BBCode when helpful; safe tags are ${STEAM_PROFILE_COMMENT_SAFE_BBCODE_GUIDE}. Do not use Discord Markdown or unsupported Steam tags.`
         : null;
 
     const contextLines = [

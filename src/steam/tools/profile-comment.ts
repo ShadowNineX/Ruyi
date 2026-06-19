@@ -8,7 +8,10 @@ import {
 } from "../../utils/user-identity";
 import { STEAM_PROFILE_COMMENT_MAX_LENGTH } from "../../constants";
 import { toolContextManager } from "../../utils/types";
-import { normalizeSteamProfileComment } from "../comment-format";
+import {
+  normalizeSteamProfileComment,
+  STEAM_PROFILE_COMMENT_SAFE_BBCODE_GUIDE,
+} from "../comment-format";
 
 async function steamProfileCommentNeedsApproval(): Promise<boolean> {
   return toolContextManager.get().surface === "discord";
@@ -27,7 +30,7 @@ export const steamProfileCommentTool = tool({
       .min(1)
       .max(STEAM_PROFILE_COMMENT_MAX_LENGTH)
       .describe(
-        "The exact Steam BBCode/plain-text comment to post on Steam. Use Steam tags like [b]bold[/b], not Discord Markdown.",
+        `The exact Steam profile comment to post. Use safe Steam BBCode when it improves readability: ${STEAM_PROFILE_COMMENT_SAFE_BBCODE_GUIDE}. Never use Discord Markdown or unsupported Steam tags.`,
       ),
   }),
   needsApproval: steamProfileCommentNeedsApproval,
@@ -47,7 +50,12 @@ export const steamProfileCommentTool = tool({
       };
     }
 
-    const { comment, truncated } = normalizeSteamProfileComment(message);
+    const {
+      comment,
+      truncated,
+      removedUnsupportedFormatting,
+      convertedAlignmentSpaces,
+    } = normalizeSteamProfileComment(message);
     if (!comment) return { error: "Steam profile comment cannot be empty." };
 
     try {
@@ -62,6 +70,8 @@ export const steamProfileCommentTool = tool({
           commentId,
           length: comment.length,
           truncated,
+          removedUnsupportedFormatting,
+          convertedAlignmentSpaces,
         },
         "Posted Steam profile comment",
       );
@@ -71,6 +81,10 @@ export const steamProfileCommentTool = tool({
         commentId,
         commentLength: comment.length,
         truncated,
+        formattingAdjusted:
+          removedUnsupportedFormatting || convertedAlignmentSpaces,
+        removedUnsupportedFormatting,
+        convertedAlignmentSpaces,
         final_answer_required: true,
         final_answer_guidance:
           "Confirm that the Steam profile comment was posted. Do not quote, restate, or summarize the comment text unless the user explicitly asks for a copy.",
