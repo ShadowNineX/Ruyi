@@ -224,6 +224,10 @@ class SteamCommunityClient {
     this.user.logOff();
   }
 
+  isReady(): boolean {
+    return this.ready;
+  }
+
   onCommentNotification(
     listener: SteamCommentNotificationListener,
   ): () => void {

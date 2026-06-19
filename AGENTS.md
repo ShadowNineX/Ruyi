@@ -7,7 +7,7 @@ Ruyi is a Nine Sols themed AI companion with Discord and Steam profile-comment t
 - Install: `bun install`
 - Dev (watch): `bun run dev` (alias for `bun run --watch src/main.ts`)
 - Type-check: `bun run typecheck` (or `bunx tsc --noEmit`)
-- Build: `bun run build` emits `dist/main.js` via `bun build`
+- Build: `bun run build` emits `dist/main.js` via [scripts/build.ts](scripts/build.ts) and bundles the current Git commit/build time for `/info`.
 - Start: `bun run start` runs the compiled `dist/main.js` artifact
 - Required env: `DISCORD_TOKEN`, `OPENAI_API_KEY`. Optional: `MONGO_URI`, `LOG_LEVEL`, `LASTFM_API_KEY`, `OPENAI_ADMIN_KEY` (`/credits` organization costs), `GITHUB_PERSONAL_ACCESS_TOKEN` (official GitHub MCP server), `GITHUB_MCP_URL` (defaults to GitHub's hosted MCP endpoint), `TAVILY_API_KEY`, `SCRAPECREATORS_API_KEY` (Pinterest read tools), `SMITHERY_API_KEY`, `SMITHERY_NAMESPACE`, `DEBUG_PROMPTS`. Steam profile-comment chat is optional but all-or-nothing: set all of `STEAM_REFRESH_TOKEN`, `STEAM_BOT_STEAM_ID64`, `STEAM_OWNER_STEAM_ID64`, and `OWNER_DISCORD_USER_ID`, or omit all four.
 - All env access goes through [src/env.ts](src/env.ts) (zod-validated, fail-fast at startup). Do **not** read `Bun.env` directly.
@@ -61,7 +61,7 @@ Ruyi is a Nine Sols themed AI companion with Discord and Steam profile-comment t
 ## Commands
 
 - Message commands use a Mongo-cached scoped prefix from [src/config.ts](src/config.ts). Currently only `!ping` in [src/discord/commands/](src/discord/commands/).
-- Slash commands registered at startup from [src/discord/slash-commands/](src/discord/slash-commands/): `/prefix`, `/model`, `/search-provider`, `/credits`, `/away`, `/smithery`, `/memories`, `/reminders`, `/scrapecreators`. Add new ones to the `slashCommands` array and the `handleSlashCommand` switch in [src/discord/slash-commands/index.ts](src/discord/slash-commands/index.ts).
+- Slash commands registered at startup from [src/discord/slash-commands/](src/discord/slash-commands/): `/info`, `/prefix`, `/model`, `/search-provider`, `/credits`, `/away`, `/smithery`, `/memories`, `/remind`, `/timers`, `/cancel-reminder`, `/scrapecreators`. Add new ones to the `slashCommands` array and the `handleSlashCommand` switch in [src/discord/slash-commands/index.ts](src/discord/slash-commands/index.ts).
 - OpenAI chat/vision model selection is stored in MongoDB as a server/private-chat scoped AI model preset and edited from Discord with `/model`; do not add model IDs back to `.env`.
 
 ## Logging & error handling

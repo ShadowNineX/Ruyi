@@ -1,4 +1,5 @@
 import type { ChatInputCommandInteraction } from "discord.js";
+import { infoCommand, handleInfoCommand } from "./info";
 import { prefixCommand, handlePrefixCommand } from "./prefix";
 import { smitheryCommand, handleSmitheryCommand } from "./smithery";
 import { memoriesCommand, handleMemoriesCommand } from "./memories";
@@ -24,6 +25,7 @@ import {
 } from "./reminders";
 
 export const slashCommands = [
+  infoCommand,
   prefixCommand,
   modelCommand,
   searchProviderCommand,
@@ -56,6 +58,9 @@ export async function handleSlashCommand(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
   switch (interaction.commandName) {
+    case "info":
+      await handleInfoCommand(interaction);
+      break;
     case "prefix":
       await handlePrefixCommand(interaction);
       break;
