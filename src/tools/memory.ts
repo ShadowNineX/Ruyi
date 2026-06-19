@@ -384,45 +384,57 @@ export const memoryRecallTool = tool({
   parameters: z.object({}),
   execute: async () => {
     const user = getContextUserIdentity();
-    toolLogger.info(
-      { personId: user?.personId, surface: user?.surface, username: user?.username },
-      'Recalling memories',
-    );
+    try {
+      toolLogger.info(
+        { personId: user?.personId, surface: user?.surface, username: user?.username },
+        'Recalling memories',
+      );
 
-    const maxTotalLength = 2000;
-    const allLines: string[] = [];
-    const owner = resolveMemoryOwner(user);
-    if (typeof owner === 'string') {
-      return { error: owner };
+      const maxTotalLength = 2000;
+      const allLines: string[] = [];
+      const owner = resolveMemoryOwner(user);
+      if (typeof owner === 'string') {
+        return { error: owner };
+      }
+
+      const userMemories = await Memory.find(owner.filter).sort({
+        pinned: -1,
+        updatedAt: -1,
+      });
+      const { lines } = collectMemoryLines(
+        userMemories,
+        `=== Memories for ${owner.label} ===`,
+        0,
+        maxTotalLength,
+      );
+      allLines.push(...lines);
+
+      if (allLines.length === 0) {
+        return { hasMemories: false, message: 'No memories stored yet.' };
+      }
+
+      const result = { hasMemories: true, summary: allLines.join('\n') };
+      toolLogger.info(
+        {
+          personId: user?.personId,
+          surface: user?.surface,
+          username: user?.username,
+          lineCount: allLines.length,
+        },
+        'Memory recall complete',
+      );
+      return result;
+    } catch (error) {
+      const details = formatError(error);
+      toolLogger.error(
+        { personId: user?.personId, surface: user?.surface, error: details },
+        'Memory recall failed',
+      );
+      return {
+        error: 'Failed to recall memories.',
+        details,
+      };
     }
-
-    const userMemories = await Memory.find(owner.filter).sort({
-      pinned: -1,
-      updatedAt: -1,
-    });
-    const { lines } = collectMemoryLines(
-      userMemories,
-      `=== Memories for ${owner.label} ===`,
-      0,
-      maxTotalLength,
-    );
-    allLines.push(...lines);
-
-    if (allLines.length === 0) {
-      return { hasMemories: false, message: 'No memories stored yet.' };
-    }
-
-    const result = { hasMemories: true, summary: allLines.join('\n') };
-    toolLogger.info(
-      {
-        personId: user?.personId,
-        surface: user?.surface,
-        username: user?.username,
-        lineCount: allLines.length,
-      },
-      'Memory recall complete',
-    );
-    return result;
   },
 });
 

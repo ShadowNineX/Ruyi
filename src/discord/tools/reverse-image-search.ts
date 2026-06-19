@@ -202,13 +202,11 @@ function selectMessageImage(
 }
 
 function getUrlFileName(imageUrl: string): string | null {
-  try {
-    const url = new URL(imageUrl);
-    const lastSegment = url.pathname.split('/').findLast(Boolean);
-    return lastSegment ? decodeURIComponent(lastSegment) : null;
-  } catch {
-    return null;
-  }
+  if (!URL.canParse(imageUrl)) { return null; }
+
+  const url = new URL(imageUrl);
+  const lastSegment = url.pathname.split('/').findLast(Boolean);
+  return lastSegment ? decodeURIComponent(lastSegment) : null;
 }
 
 function getSourceFileName(source: string): string | null {

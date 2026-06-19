@@ -4,7 +4,6 @@ import {
 } from '../constants';
 import {
   clearExternalDataCacheNamespace,
-  deleteCachedExternalData,
   getExternalDataCacheSize,
   getOrCreateCachedExternalData,
 } from './data-cache-store';
@@ -22,10 +21,6 @@ export function getSteamProfileDataCacheSize(): number {
 
 export function clearSteamProfileDataCache(): void {
   clearExternalDataCacheNamespace(STEAM_PROFILE_CACHE_NAMESPACE);
-}
-
-export function deleteCachedSteamProfileData(key: string): void {
-  deleteCachedExternalData(STEAM_PROFILE_CACHE_NAMESPACE, key);
 }
 
 export function getOrCreateCachedSteamProfileData<T>(

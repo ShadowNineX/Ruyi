@@ -39,11 +39,15 @@ interface EmbedField {
 }
 
 const MAX_FIELDS_PER_EMBED = 25;
+const MAX_EMBEDS_PER_TOOL_CALL = 10;
+const MAX_FIELDS_PER_TOOL_CALL = MAX_FIELDS_PER_EMBED * MAX_EMBEDS_PER_TOOL_CALL;
+const MAX_TITLE = 256;
 const MAX_FIELD_NAME = 256;
 const MAX_FIELD_VALUE = 1024;
 const MAX_DESCRIPTION = 4096;
 const MAX_FOOTER = 2048;
 const MAX_EMBED_TOTAL = 6000;
+const MAX_URL_LENGTH = 2048;
 
 function truncateEmbedText(value: string, maxLength: number): string {
   if (value.length <= maxLength) { return value; }
@@ -240,25 +244,40 @@ export const embedTool = tool({
   description:
     'Send a beautifully formatted Discord embed message. Use this for tables, lists, structured data, audit logs, search results, or any content that benefits from rich formatting.',
   parameters: z.object({
-    title: z.string().nullable().describe('The embed title.'),
+    title: z
+      .string()
+      .max(MAX_TITLE)
+      .nullable()
+      .describe('The embed title.'),
     description: z
       .string()
+      .max(MAX_DESCRIPTION)
       .nullable()
       .describe('Main embed description. Supports Discord markdown.'),
-    color: z.string().nullable().describe('Embed color as hex or color name.'),
+    color: z
+      .string()
+      .max(32)
+      .nullable()
+      .describe('Embed color as hex or color name.'),
     fields: z
       .array(
         z.object({
-          name: z.string(),
-          value: z.string(),
+          name: z.string().max(MAX_FIELD_NAME),
+          value: z.string().max(MAX_FIELD_VALUE),
           inline: z.boolean().optional(),
         }),
       )
+      .max(MAX_FIELDS_PER_TOOL_CALL)
       .nullable()
       .describe('Array of field objects for structured data.'),
-    footer: z.string().nullable().describe('Small text at the bottom.'),
+    footer: z
+      .string()
+      .max(MAX_FOOTER)
+      .nullable()
+      .describe('Small text at the bottom.'),
     thumbnail: z
       .string()
+      .max(MAX_URL_LENGTH)
       .nullable()
       .describe('URL of a small image in top-right corner.'),
   }),

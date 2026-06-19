@@ -23,7 +23,15 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(precision)} ${units[unitIndex]}`;
 }
 
+function getEnvCommit(): string | null {
+  const commit = Bun.env.RUYI_GIT_COMMIT ?? Bun.env.GIT_COMMIT;
+  return commit?.trim() || null;
+}
+
 async function getGitCommit(): Promise<string> {
+  const envCommit = getEnvCommit();
+  if (envCommit) { return envCommit; }
+
   try {
     const commit = await $`git rev-parse HEAD`.text();
     return commit.trim() || 'unknown';

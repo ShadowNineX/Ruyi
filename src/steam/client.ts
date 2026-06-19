@@ -46,7 +46,7 @@ interface SteamProfileCommentPage {
   totalCount: number;
 }
 
-export interface SteamPersonaSummary {
+interface SteamPersonaSummary {
   personaState?: number;
   personaStateFlags?: number;
   gamePlayedAppId?: number;
@@ -55,7 +55,7 @@ export interface SteamPersonaSummary {
   lastSeenOnline?: number;
 }
 
-export interface SteamProfileSummary {
+interface SteamProfileSummary {
   steamId64: string;
   profileUrl: string;
   vanityUrl: string | null;
@@ -80,7 +80,7 @@ export interface SteamProfileSummary {
   limitations: string[];
 }
 
-export interface SteamOwnedGameSummary {
+interface SteamOwnedGameSummary {
   appId: number;
   name: string;
   playtimeForeverMinutes: number;
@@ -93,7 +93,7 @@ export interface SteamOwnedGameSummary {
   hasCommunityVisibleStats: boolean;
 }
 
-export interface SteamOwnedGamesSummary {
+interface SteamOwnedGamesSummary {
   appCount: number;
   returnedCount: number;
   sort: SteamOwnedGamesSort;
@@ -102,7 +102,7 @@ export interface SteamOwnedGamesSummary {
   limitations: string[];
 }
 
-export interface SteamProfileItemSummary {
+interface SteamProfileItemSummary {
   communityItemId: number | null;
   appId: number | null;
   name: string | null;
@@ -116,7 +116,7 @@ export interface SteamProfileItemSummary {
   movieMp4: string | null;
 }
 
-export interface SteamEquippedProfileItemsSummary {
+interface SteamEquippedProfileItemsSummary {
   profileBackground: SteamProfileItemSummary | null;
   miniProfileBackground: SteamProfileItemSummary | null;
   avatarFrame: SteamProfileItemSummary | null;
@@ -125,13 +125,13 @@ export interface SteamEquippedProfileItemsSummary {
   limitations: string[];
 }
 
-export interface SteamInventoryContextSummary {
+interface SteamInventoryContextSummary {
   id: string;
   name: string;
   assetCount: number | null;
 }
 
-export interface SteamInventoryAppSummary {
+interface SteamInventoryAppSummary {
   appId: number;
   name: string;
   iconUrl: string | null;
@@ -140,7 +140,7 @@ export interface SteamInventoryAppSummary {
   contexts: SteamInventoryContextSummary[];
 }
 
-export interface SteamInventoryItemSummary {
+interface SteamInventoryItemSummary {
   id: string;
   appId: number | null;
   contextId: string | null;
@@ -161,7 +161,7 @@ export interface SteamInventoryItemSummary {
   }>;
 }
 
-export interface SteamInventoryItemsSummary {
+interface SteamInventoryItemsSummary {
   appId: number;
   contextId: string;
   returnedCount: number;
@@ -281,18 +281,15 @@ function toSteamUserLookup(profileId: string): SteamID | string {
 export function normalizeSteamProfileLookup(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) { return trimmed; }
+  if (!URL.canParse(trimmed)) { return trimmed; }
 
-  try {
-    const url = new URL(trimmed);
-    const hostname = url.hostname.toLowerCase();
-    if (!hostname.endsWith('steamcommunity.com')) { return trimmed; }
+  const url = new URL(trimmed);
+  const hostname = url.hostname.toLowerCase();
+  if (!hostname.endsWith('steamcommunity.com')) { return trimmed; }
 
-    const [kind, identifier] = url.pathname.split('/').filter(Boolean);
-    if ((kind === 'profiles' || kind === 'id') && identifier) {
-      return decodeURIComponent(identifier);
-    }
-  } catch {
-    // Plain SteamID64 or vanity ID, not a URL.
+  const [kind, identifier] = url.pathname.split('/').filter(Boolean);
+  if ((kind === 'profiles' || kind === 'id') && identifier) {
+    return decodeURIComponent(identifier);
   }
 
   return trimmed;

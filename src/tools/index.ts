@@ -96,10 +96,11 @@ const baseToolRegistry: readonly ToolRegistration[] = [
   },
   {
     tool: generateImageTool,
+    externalService: true,
     producesDiscordOutput: true,
     surfaces: ['discord'],
   },
-  { tool: describeImageTool },
+  { tool: describeImageTool, externalService: true },
   { tool: memoryStoreTool },
   { tool: memoryRecallTool },
   { tool: searchMemoryTool },
@@ -110,7 +111,7 @@ const baseToolRegistry: readonly ToolRegistration[] = [
     surfaces: ['discord', 'steam'],
   },
   { tool: auditLogTool, surfaces: ['discord'] },
-  { tool: lastfmTool },
+  { tool: lastfmTool, externalService: true },
   { tool: smitheryListToolsTool, externalService: true, surfaces: ['discord'] },
   { tool: smitheryCallTool, externalService: true, surfaces: ['discord'] },
   {

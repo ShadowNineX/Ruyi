@@ -2,13 +2,6 @@ import type { SteamProfileComment } from '../../src/steam/client';
 import type { ToolContext } from '../../src/utils/types';
 import { beforeAll, describe, expect, mock, test } from 'bun:test';
 
-Bun.env.DISCORD_TOKEN ??= 'test-discord-token';
-Bun.env.OPENAI_API_KEY ??= 'sk-test-openai-key';
-Bun.env.STEAM_REFRESH_TOKEN ??= 'test-refresh-token';
-Bun.env.STEAM_BOT_STEAM_ID64 ??= '76561198000000002';
-Bun.env.STEAM_OWNER_STEAM_ID64 ??= '76561198000000001';
-Bun.env.OWNER_DISCORD_USER_ID ??= '123456789012345678';
-
 function requireTestEnv(name: 'STEAM_BOT_STEAM_ID64' | 'STEAM_OWNER_STEAM_ID64'): string {
   const value = Bun.env[name];
   if (!value) { throw new Error(`${name} is required for Steam tests`); }
@@ -40,18 +33,23 @@ function resetSteamProfileCalls(): void {
   mockSteamProfileCalls.profile = 0;
 }
 
+function expectDeletedProfileComment(
+  profileId: string,
+  commentId: string,
+): void {
+  expect(mockDeletedProfileComments).toEqual([{ profileId, commentId }]);
+}
+
 mock.module('../../src/steam/client', () => ({
   normalizeSteamProfileLookup: (value: string) => {
     const trimmed = value.trim();
-    try {
-      const url = new URL(trimmed);
-      const [kind, identifier] = url.pathname.split('/').filter(Boolean);
-      return kind === 'profiles' || kind === 'id'
-        ? decodeURIComponent(identifier ?? trimmed)
-        : trimmed;
-    } catch {
-      return trimmed;
-    }
+    if (!URL.canParse(trimmed)) { return trimmed; }
+
+    const url = new URL(trimmed);
+    const [kind, identifier] = url.pathname.split('/').filter(Boolean);
+    return kind === 'profiles' || kind === 'id'
+      ? decodeURIComponent(identifier ?? trimmed)
+      : trimmed;
   },
   steamCommunityClient: {
     getEquippedProfileItems: async () => {
@@ -306,6 +304,20 @@ describe('steam_profile_comment approval', () => {
 
     expect(needsApproval).toBe(false);
   });
+
+  test('auto-approves bot-profile comment deletion in Steam-origin turns', async () => {
+    const needsApproval = await runWithToolContext(
+      baseContext('steam'),
+      () =>
+        steamProfileCommentTool.needsApproval(
+          null,
+          { action: 'delete', target: 'bot', comment_id: 'comment-1' },
+          'call-3',
+        ),
+    );
+
+    expect(needsApproval).toBe(false);
+  });
 });
 
 describe('steam_profile_comment deletion', () => {
@@ -330,12 +342,10 @@ describe('steam_profile_comment deletion', () => {
 
     expect(result.success).toBe(true);
     expect(result.action).toBe('delete');
-    expect(mockDeletedProfileComments).toEqual([
-      {
-        profileId: TEST_STEAM_BOT_STEAM_ID64,
-        commentId: 'visitor-comment',
-      },
-    ]);
+    expectDeletedProfileComment(
+      TEST_STEAM_BOT_STEAM_ID64,
+      'visitor-comment',
+    );
   });
 
   test('uses the current Steam comment id when deleting from the bot profile', async () => {
@@ -359,12 +369,7 @@ describe('steam_profile_comment deletion', () => {
     expect(result.success).toBe(true);
     expect(result.action).toBe('delete');
     expect(result.commentId).toBe('comment-1');
-    expect(mockDeletedProfileComments).toEqual([
-      {
-        profileId: TEST_STEAM_BOT_STEAM_ID64,
-        commentId: 'comment-1',
-      },
-    ]);
+    expectDeletedProfileComment(TEST_STEAM_BOT_STEAM_ID64, 'comment-1');
   });
 
   test('refuses deleting user comments from owner profile', async () => {
@@ -404,12 +409,10 @@ describe('steam_profile_comment deletion', () => {
 
     expect(result.success).toBe(true);
     expect(result.action).toBe('delete');
-    expect(mockDeletedProfileComments).toEqual([
-      {
-        profileId: TEST_STEAM_OWNER_STEAM_ID64,
-        commentId: 'ruyi-owner-comment',
-      },
-    ]);
+    expectDeletedProfileComment(
+      TEST_STEAM_OWNER_STEAM_ID64,
+      'ruyi-owner-comment',
+    );
   });
 });
 

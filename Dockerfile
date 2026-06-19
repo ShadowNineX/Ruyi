@@ -7,7 +7,11 @@ RUN bun install --frozen-lockfile
 FROM deps AS build
 WORKDIR /app
 
+ARG GIT_COMMIT
+ARG RUYI_GIT_COMMIT
+
 COPY tsconfig.json ./
+COPY scripts ./scripts
 COPY src ./src
 
 RUN bun run typecheck

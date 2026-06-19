@@ -79,45 +79,48 @@ export const describeImageTool = tool({
   timeoutMs: 60_000,
   timeoutBehavior: 'error_as_result',
   execute: async ({ image_url, question, detail }) => {
-    const normalizedUrl = normalizeImageUrl(image_url);
-    const previousFailure
-      = toolContextManager.getImageDescriptionFailure(normalizedUrl);
-    if (previousFailure) {
-      return {
-        error: 'Image URL already failed inspection this turn',
-        details: previousFailure,
-        retryable: false,
-        final_answer_required:
-          toolContextManager.imageDescriptionFailureLimitExceeded(),
-        instruction:
-          'Do not call describe_image again for this URL in this turn. Use a different image URL only if one is already available; otherwise continue with other evidence, or tell the user the image URL could not be inspected directly.',
-      };
-    }
-
-    if (toolContextManager.imageDescriptionFailureLimitExceeded()) {
-      return {
-        error: 'Image inspection download failure limit exhausted',
-        retryable: false,
-        final_answer_required: true,
-        instruction:
-          'Too many image URLs failed inspection this turn. Stop calling describe_image and answer using the evidence already gathered.',
-      };
-    }
-
-    const budgetDecision = toolContextManager.consumeToolCall('describe_image');
-    if (!budgetDecision.allowed) {
-      return toolContextManager.budgetDeniedResult(budgetDecision);
-    }
-
+    let normalizedUrl: string | null = null;
+    let budgetConsumed = false;
     const model = getVisionModel();
-    const reverseImageWorkflow
-      = toolContextManager.isReverseImageWorkflowActive();
-    const effectiveDetail = reverseImageWorkflow ? 'low' : (detail ?? 'auto');
-    const maxOutputTokens = reverseImageWorkflow
-      ? REVERSE_IMAGE_MAX_OUTPUT_TOKENS
-      : DEFAULT_MAX_OUTPUT_TOKENS;
-
+    let reverseImageWorkflow = false;
+    let effectiveDetail: 'auto' | 'low' | 'high' = detail ?? 'auto';
     try {
+      normalizedUrl = normalizeImageUrl(image_url);
+      const previousFailure
+        = toolContextManager.getImageDescriptionFailure(normalizedUrl);
+      if (previousFailure) {
+        return {
+          error: 'Image URL already failed inspection this turn',
+          details: previousFailure,
+          retryable: false,
+          final_answer_required:
+            toolContextManager.imageDescriptionFailureLimitExceeded(),
+          instruction:
+            'Do not call describe_image again for this URL in this turn. Use a different image URL only if one is already available; otherwise continue with other evidence, or tell the user the image URL could not be inspected directly.',
+        };
+      }
+
+      if (toolContextManager.imageDescriptionFailureLimitExceeded()) {
+        return {
+          error: 'Image inspection download failure limit exhausted',
+          retryable: false,
+          final_answer_required: true,
+          instruction:
+            'Too many image URLs failed inspection this turn. Stop calling describe_image and answer using the evidence already gathered.',
+        };
+      }
+
+      const budgetDecision = toolContextManager.consumeToolCall('describe_image');
+      if (!budgetDecision.allowed) {
+        return toolContextManager.budgetDeniedResult(budgetDecision);
+      }
+      budgetConsumed = true;
+
+      reverseImageWorkflow = toolContextManager.isReverseImageWorkflowActive();
+      effectiveDetail = reverseImageWorkflow ? 'low' : (detail ?? 'auto');
+      const maxOutputTokens = reverseImageWorkflow
+        ? REVERSE_IMAGE_MAX_OUTPUT_TOKENS
+        : DEFAULT_MAX_OUTPUT_TOKENS;
       const prompt = buildVisionPrompt(question);
 
       toolLogger.info(
@@ -161,14 +164,23 @@ export const describeImageTool = tool({
       };
     } catch (error) {
       const errorMessage = formatError(error);
+      if (!normalizedUrl) {
+        return {
+          error: 'Image URL could not be inspected',
+          details: errorMessage,
+          retryable: false,
+        };
+      }
+
       const isDownloadFailure = isImageDownloadFailure(errorMessage);
       const failureCount = toolContextManager.rememberImageDescriptionFailure(
         normalizedUrl,
         errorMessage,
       );
-      if (isDownloadFailure) {
+      if (isDownloadFailure && budgetConsumed) {
         toolContextManager.refundToolCall('describe_image');
       }
+      const budgetRefunded = isDownloadFailure && budgetConsumed;
 
       toolLogger.error(
         {
@@ -176,7 +188,7 @@ export const describeImageTool = tool({
           model,
           detail: effectiveDetail,
           imageUrlLength: normalizedUrl.length,
-          budgetRefunded: isDownloadFailure,
+          budgetRefunded,
           failureCount,
         },
         'Image description failed',
@@ -185,7 +197,7 @@ export const describeImageTool = tool({
         error: 'Failed to inspect image',
         details: errorMessage,
         retryable: false,
-        budget_refunded: isDownloadFailure,
+        budget_refunded: budgetRefunded,
         final_answer_required:
           toolContextManager.imageDescriptionFailureLimitExceeded()
           || (reverseImageWorkflow && !isDownloadFailure),

@@ -98,7 +98,7 @@ export function clearExternalDataCache(): void {
   }));
 }
 
-export function deleteCachedExternalData(
+function deleteCachedExternalData(
   namespace: string,
   key: string,
 ): void {

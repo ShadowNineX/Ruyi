@@ -176,7 +176,9 @@ function getJwtExpiry(token: string): Date | null {
 
     const exp = (payload as { exp?: unknown }).exp;
     return typeof exp === 'number' ? new Date(exp * 1000) : null;
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    printStatus(`Could not parse refresh token expiry: ${message}`);
     return null;
   }
 }
