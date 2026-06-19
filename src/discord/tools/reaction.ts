@@ -39,7 +39,7 @@ export const reactionTool = tool({
       .string()
       .nullable()
       .describe(
-        'The target message. Use "replied" to react to the message the user replied to. Use null to react to the user\'s current message. Use a message ID to react to any other message (use search_messages to find IDs).',
+        'The target message. Use "replied" to react to the message the user replied to. Use null to react to the user\'s current message. Use a message ID to react to any other message (use discord_message_lookup to find IDs).',
       ),
   }),
   execute: async ({ action, emoji, message_id }) => {

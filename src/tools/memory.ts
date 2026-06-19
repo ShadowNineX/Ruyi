@@ -1,9 +1,11 @@
 import { tool } from "@openai/agents";
 import { z } from "zod";
 import {
+  ChannelType,
   PermissionFlagsBits,
   type Guild,
   type TextBasedChannel,
+  type TextChannel,
 } from "discord.js";
 import { toolLogger } from "../logger";
 import { DiscordConversation, Memory } from "../db/models";
@@ -19,6 +21,17 @@ import {
   truncateMemoryValue,
 } from "../utils/memory-normalization";
 import { USER_MEMORY_CAP } from "../constants";
+import {
+  rankMessageMatches,
+  summarizeMessageSearchMatches,
+  type MessageMatchType,
+  type RankedMessageMatch,
+  type SearchableMessage,
+} from "../utils/message-search";
+import {
+  searchSteamProfileComments,
+  type SteamCommentSearchMatch,
+} from "../steam/comment-search";
 
 type MemorySearchFilter = Record<string, unknown>;
 
@@ -461,11 +474,21 @@ export const searchMemoryTool = tool({
 });
 
 interface ConversationMatch {
-  channelId: string;
+  source: "discord" | "steam";
+  id: string;
+  channelId?: string;
+  profileId?: string;
   author: string;
   content: string;
-  isBot: boolean;
+  isBot?: boolean;
   timestamp: Date;
+  matchType: MessageMatchType;
+  matchScore: number;
+  fuseScore: number | null;
+  matchedTerms: string[];
+  missingTerms: string[];
+  contextBefore: ConversationContextMessage[];
+  contextAfter: ConversationContextMessage[];
 }
 
 const CONVERSATION_SEARCH_PERMISSIONS = [
@@ -473,17 +496,42 @@ const CONVERSATION_SEARCH_PERMISSIONS = [
   PermissionFlagsBits.ReadMessageHistory,
 ] as const;
 
-function messageMatchesCriteria(
-  content: string,
-  msgAuthor: string,
-  queryRegex: RegExp,
+interface ConversationContextMessage {
+  author: string;
+  content: string;
+  isBot?: boolean;
+  timestamp: Date;
+}
+
+interface ConversationSearchDocument extends SearchableMessage {
+  channelId: string;
+  isBot: boolean;
+  timestamp: Date;
+  contextBefore: ConversationContextMessage[];
+  contextAfter: ConversationContextMessage[];
+}
+
+interface ConversationSearchSummary {
+  exactPhraseFound: boolean;
+  bestMatchType: MessageMatchType | null;
+  fuzzyMatchCount: number;
+  partialMatchCount: number;
+}
+
+interface ConversationSearchResult {
+  matches: ConversationMatch[];
+  summary: ConversationSearchSummary;
+  scanned: number;
+}
+
+function authorMatchesFilter(
+  author: string,
   authorFilter: string | null,
 ): boolean {
-  const contentMatches = queryRegex.test(content);
-  const authorMatches =
+  return (
     !authorFilter ||
-    msgAuthor.toLowerCase().includes(authorFilter.toLowerCase());
-  return contentMatches && authorMatches;
+    author.toLowerCase().includes(authorFilter.toLowerCase().trim())
+  );
 }
 
 function truncateContent(content: string, maxLen = 200): string {
@@ -492,44 +540,144 @@ function truncateContent(content: string, maxLen = 200): string {
     : content;
 }
 
-function extractMatchingMessages(
+function buildConversationContextMessage(
+  message: ConversationContextMessage,
+): ConversationContextMessage {
+  return {
+    author: message.author,
+    content: truncateContent(message.content),
+    isBot: message.isBot,
+    timestamp: message.timestamp,
+  };
+}
+
+function buildConversationContextWindow(
+  messages: ConversationContextMessage[],
+  index: number,
+): Pick<ConversationSearchDocument, "contextBefore" | "contextAfter"> {
+  return {
+    contextBefore: messages
+      .slice(Math.max(0, index - 2), index)
+      .map(buildConversationContextMessage),
+    contextAfter: messages
+      .slice(index + 1, index + 3)
+      .map(buildConversationContextMessage),
+  };
+}
+
+function buildConversationSearchDocuments(
   conversations: Array<{
     channelId: string;
     messages: Array<{
+      messageId: string;
       author: string;
       content: string;
       isBot: boolean;
       timestamp: Date;
     }>;
   }>,
-  queryRegex: RegExp,
   authorFilter: string | null,
-): ConversationMatch[] {
-  const matches: ConversationMatch[] = [];
+): ConversationSearchDocument[] {
+  const documents: ConversationSearchDocument[] = [];
 
-  for (const conv of conversations) {
-    for (const msg of conv.messages) {
-      if (msg.isBot) continue;
+  for (const conversation of conversations) {
+    conversation.messages.forEach((message, index) => {
       if (
-        messageMatchesCriteria(
-          msg.content,
-          msg.author,
-          queryRegex,
-          authorFilter,
-        )
+        message.isBot ||
+        !authorMatchesFilter(message.author, authorFilter)
       ) {
-        matches.push({
-          channelId: conv.channelId,
-          author: msg.author,
-          content: truncateContent(msg.content),
-          isBot: msg.isBot,
-          timestamp: msg.timestamp,
-        });
+        return;
       }
-    }
+
+      documents.push({
+        id: message.messageId,
+        channelId: conversation.channelId,
+        author: message.author,
+        content: message.content,
+        isBot: message.isBot,
+        timestamp: message.timestamp,
+        ...buildConversationContextWindow(conversation.messages, index),
+      });
+    });
   }
 
-  return matches;
+  return documents;
+}
+
+function buildConversationMatch(
+  match: RankedMessageMatch<ConversationSearchDocument>,
+): ConversationMatch {
+  return {
+    source: "discord",
+    id: match.item.id,
+    channelId: match.item.channelId,
+    author: match.item.author,
+    content: truncateContent(match.item.content),
+    isBot: match.item.isBot,
+    timestamp: match.item.timestamp,
+    matchType: match.matchType,
+    matchScore: Number(match.score.toFixed(3)),
+    fuseScore:
+      match.fuseScore === null ? null : Number(match.fuseScore.toFixed(3)),
+    matchedTerms: match.matchedTerms,
+    missingTerms: match.missingTerms,
+    contextBefore: match.item.contextBefore,
+    contextAfter: match.item.contextAfter,
+  };
+}
+
+function buildSteamConversationContextMessage(
+  match: SteamCommentSearchMatch["contextBefore"][number],
+): ConversationContextMessage {
+  return {
+    author: match.author,
+    content: truncateContent(match.content),
+    timestamp: match.timestamp,
+  };
+}
+
+function buildSteamConversationMatch(
+  match: SteamCommentSearchMatch,
+): ConversationMatch {
+  return {
+    source: "steam",
+    id: match.id,
+    profileId: match.profileId,
+    author: match.author,
+    content: truncateContent(match.content),
+    timestamp: match.timestamp,
+    matchType: match.matchType,
+    matchScore: match.matchScore,
+    fuseScore: match.fuseScore,
+    matchedTerms: match.matchedTerms,
+    missingTerms: match.missingTerms,
+    contextBefore: match.contextBefore.map(buildSteamConversationContextMessage),
+    contextAfter: match.contextAfter.map(buildSteamConversationContextMessage),
+  };
+}
+
+function extractMatchingMessages(
+  conversations: Array<{
+    channelId: string;
+    messages: Array<{
+      messageId: string;
+      author: string;
+      content: string;
+      isBot: boolean;
+      timestamp: Date;
+    }>;
+  }>,
+  query: string,
+  authorFilter: string | null,
+  limit: number,
+): ConversationSearchResult {
+  const documents = buildConversationSearchDocuments(conversations, authorFilter);
+  const rankedMatches = rankMessageMatches(documents, query, limit);
+  return {
+    matches: rankedMatches.map(buildConversationMatch),
+    summary: summarizeMessageSearchMatches(rankedMatches),
+    scanned: documents.length,
+  };
 }
 
 function getConversationSearchPermissionError(
@@ -596,78 +744,239 @@ async function resolveGuildConversationChannel(
   }
 }
 
+async function resolveAllGuildConversationChannels(
+  guild: Guild | null,
+): Promise<string[] | string> {
+  if (!guild) {
+    return "Cannot search all archived channels outside of a server";
+  }
+
+  const channels = await guild.channels.fetch();
+  const readableChannels = channels
+    .filter(
+      (channel): channel is TextChannel =>
+        channel?.type === ChannelType.GuildText,
+    )
+    .filter(
+      (channel) =>
+        getConversationSearchPermissionError(channel, channel.name) === null,
+    )
+    .map((channel) => channel.id);
+
+  return readableChannels.length > 0
+    ? readableChannels
+    : "No readable server text channels were available for archived search.";
+}
+
 async function resolveConversationSearchChannelIds(
   requestedChannelId: string | null,
+  searchAllChannels: boolean | null,
 ): Promise<string[] | string> {
   const { channel, guild } = toolContextManager.get();
+  if (requestedChannelId) {
+    const currentChannel = resolveCurrentConversationChannel(
+      requestedChannelId,
+      channel,
+    );
+    return (
+      currentChannel ??
+      resolveGuildConversationChannel(requestedChannelId, guild)
+    );
+  }
+
+  if (searchAllChannels) {
+    return resolveAllGuildConversationChannels(guild);
+  }
+
   const currentChannel = resolveCurrentConversationChannel(
-    requestedChannelId,
+    null,
     channel,
   );
   if (currentChannel) return currentChannel;
-  if (!requestedChannelId) {
-    return "Conversation search needs active Discord channel context";
+  return "Conversation search needs active Discord channel context";
+}
+
+function describeDiscordConversationSearchScope(
+  channelId: string | null,
+  searchAllChannels: boolean | null,
+): string {
+  if (searchAllChannels) {
+    return "readable archived text channels in the current server";
   }
-  return resolveGuildConversationChannel(requestedChannelId, guild);
+  if (channelId) {
+    return "verified archived channel in the current server";
+  }
+  return "current archived channel";
+}
+
+async function searchDiscordConversation(
+  query: string,
+  author: string | null,
+  channelId: string | null,
+  searchAllChannels: boolean | null,
+  maxLimit: number,
+) {
+  const channelIds = await resolveConversationSearchChannelIds(
+    channelId,
+    searchAllChannels,
+  );
+  if (typeof channelIds === "string") {
+    return { error: channelIds };
+  }
+
+  const conversations = await DiscordConversation.find({
+    channelId: { $in: channelIds },
+  }).lean();
+  const search = extractMatchingMessages(
+    conversations,
+    query,
+    author,
+    maxLimit,
+  );
+
+  if (search.matches.length === 0) {
+    return {
+      found: false,
+      message: `No Discord conversation history found matching "${query}"`,
+      search_summary: {
+        searched_channel_count: channelIds.length,
+        scanned_message_count: search.scanned,
+        result_limit: maxLimit,
+        source: "discord",
+        limitation:
+          "Archived Discord search only covers messages Ruyi stored for readable scoped channels. Deleted or never-archived older Discord messages may be unavailable.",
+      },
+    };
+  }
+
+  return {
+    found: true,
+    count: search.matches.length,
+    messages: search.matches,
+    search_summary: {
+      exact_phrase_found: search.summary.exactPhraseFound,
+      best_match_type: search.summary.bestMatchType,
+      fuzzy_match_count: search.summary.fuzzyMatchCount,
+      partial_match_count: search.summary.partialMatchCount,
+      searched_channel_count: channelIds.length,
+      scanned_message_count: search.scanned,
+      result_limit: maxLimit,
+      source: "discord",
+      scope: describeDiscordConversationSearchScope(
+        channelId,
+        searchAllChannels,
+      ),
+      limitation:
+        "Archived Discord search only covers messages Ruyi stored for readable scoped channels. Deleted or never-archived older Discord messages may be unavailable.",
+    },
+  };
+}
+
+async function searchSteamConversation(
+  query: string,
+  author: string | null,
+  maxLimit: number,
+) {
+  const profileId = toolContextManager.get().steam?.profileId;
+  if (!profileId) {
+    return {
+      error: "Steam conversation search needs active Steam profile context",
+    };
+  }
+
+  const search = await searchSteamProfileComments(
+    profileId,
+    query,
+    author,
+    maxLimit,
+  );
+  const messages = search.matches.map(buildSteamConversationMatch);
+
+  if (messages.length === 0) {
+    return {
+      found: false,
+      message: `No Steam profile comments found matching "${query}"`,
+      search_summary: {
+        searched_comment_count: search.searchedCommentCount,
+        result_limit: maxLimit,
+        source: "steam",
+        limitation:
+          "Steam conversation search only covers recent comments fetched from the active Steam profile. Deleted, private, or older comments may be unavailable.",
+      },
+    };
+  }
+
+  return {
+    found: true,
+    count: messages.length,
+    messages,
+    search_summary: {
+      exact_phrase_found: search.summary.exactPhraseFound,
+      best_match_type: search.summary.bestMatchType,
+      fuzzy_match_count: search.summary.fuzzyMatchCount,
+      partial_match_count: search.summary.partialMatchCount,
+      searched_comment_count: search.searchedCommentCount,
+      result_limit: maxLimit,
+      source: "steam",
+      scope: "recent profile comments on the active Steam profile",
+      limitation:
+        "Steam conversation search only covers recent comments fetched from the active Steam profile. Deleted, private, or older comments may be unavailable.",
+    },
+  };
 }
 
 export const searchConversationTool = tool({
   name: "search_conversation",
   description:
-    "Search stored conversation history in the current channel, or a verified channel in the current server. Use this to recall what was discussed previously.",
+    "Surface-aware fuzzy search for the current conversation. In Discord, searches stored Discord history for the current or verified server channel. In Steam, searches recent comments on the active Steam profile. The source is chosen by code and never crosses surfaces.",
   parameters: z.object({
     query: z
       .string()
-      .describe("Search query to find in conversation messages."),
+      .describe("Exact phrase or fuzzy query to find in conversation messages."),
     author: z.string().nullable().describe("Filter by message author."),
     channel_id: z
       .string()
       .nullable()
       .describe(
-        "Optional specific channel ID. If omitted, searches the current channel only.",
+        "Discord-only optional specific channel ID. If omitted, Discord searches the current channel only. Ignored for Steam.",
+      ),
+    search_all_channels: z
+      .boolean()
+      .nullable()
+      .describe(
+        "Discord-only. If true, searches archived history for readable text channels in the current server. Not available in DMs. Ignored for Steam.",
       ),
     limit: z
       .number()
       .nullable()
       .describe("Maximum results to return (default 20, max 50)."),
   }),
-  execute: async ({ query, author, channel_id, limit }) => {
+  execute: async ({ query, author, channel_id, search_all_channels, limit }) => {
     toolLogger.info(
-      { query, author, channel_id, limit },
+      {
+        queryLength: query.length,
+        hasAuthorFilter: Boolean(author),
+        channel_id,
+        search_all_channels,
+        limit,
+      },
       "Searching conversations",
     );
 
     try {
       const maxLimit = Math.min(Math.max(Math.round(limit ?? 20), 1), 50);
-      const regex = new RegExp(escapeRegExp(query), "i");
-      const channelIds = await resolveConversationSearchChannelIds(channel_id);
-      if (typeof channelIds === "string") {
-        return { error: channelIds };
+      const ctx = toolContextManager.get();
+      if (ctx.surface === "steam") {
+        return searchSteamConversation(query, author, maxLimit);
       }
 
-      const conversations = await DiscordConversation.find({
-        channelId: { $in: channelIds },
-      }).lean();
-      const matchingMessages = extractMatchingMessages(
-        conversations,
-        regex,
+      return searchDiscordConversation(
+        query,
         author,
+        channel_id,
+        search_all_channels,
+        maxLimit,
       );
-
-      matchingMessages.sort(
-        (a, b) =>
-          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-      );
-      const results = matchingMessages.slice(0, maxLimit);
-
-      if (results.length === 0) {
-        return {
-          found: false,
-          message: `No conversation history found matching "${query}"`,
-        };
-      }
-
-      return { found: true, count: results.length, messages: results };
     } catch (error) {
       const errorMessage = formatError(error);
       toolLogger.error({ error: errorMessage }, "Conversation search failed");

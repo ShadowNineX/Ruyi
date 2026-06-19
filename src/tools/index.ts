@@ -101,7 +101,7 @@ const baseToolRegistry: readonly ToolRegistration[] = [
   { tool: memoryStoreTool },
   { tool: memoryRecallTool },
   { tool: searchMemoryTool },
-  { tool: searchConversationTool, surfaces: ["discord"] },
+  { tool: searchConversationTool, surfaces: ["discord", "steam"] },
   { tool: auditLogTool, surfaces: ["discord"] },
   { tool: lastfmTool },
   { tool: smitheryListToolsTool, externalService: true, surfaces: ["discord"] },
@@ -111,7 +111,11 @@ const baseToolRegistry: readonly ToolRegistration[] = [
     externalService: true,
     surfaces: ["discord", "steam"],
   },
-  { tool: steamProfileCommentsTool, externalService: true },
+  {
+    tool: steamProfileCommentsTool,
+    externalService: true,
+    surfaces: ["discord"],
+  },
 ];
 
 function buildToolRegistry(): readonly ToolRegistration[] {

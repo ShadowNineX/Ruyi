@@ -1,4 +1,9 @@
-import { chatService, conversationContext, sessionManager } from "../ai";
+import {
+  chatService,
+  conversationContext,
+  sessionManager,
+  type ChatMessage,
+} from "../ai";
 import { steamProfileConfigScope } from "../config";
 import {
   SteamAgentSession,
@@ -25,6 +30,7 @@ import { HeadlessChatSession } from "./headless-session";
 
 const STEAM_COMMENT_CHECK_OVERLAP_MS = 2 * 60_000;
 const STEAM_COMMENT_FETCH_COUNT = 100;
+const STEAM_CHAT_HISTORY_LIMIT = 25;
 const SEEN_COMMENT_CAP = 500;
 
 type CommentCheckReason = "startup" | "notification" | "queued";
@@ -64,6 +70,37 @@ function mergeSeenCommentIds(
 
 function buildSteamCommentPrompt(comment: SteamProfileComment): string {
   return `Steam profile comment from ${comment.authorName}:\n${comment.text}`;
+}
+
+function steamCommentToChatMessage(
+  profileId: string,
+  comment: SteamProfileComment,
+): ChatMessage {
+  const isBot = comment.authorSteamId === profileId;
+  return {
+    author: isBot ? "Ruyi" : comment.authorName,
+    content: comment.text,
+    isBot,
+  };
+}
+
+export function buildSteamChatHistory(
+  profileId: string,
+  comments: SteamProfileComment[],
+  currentCommentId: string,
+): ChatMessage[] {
+  const sortedComments = sortCommentsOldestFirst(comments);
+  const currentIndex = sortedComments.findIndex(
+    (comment) => comment.id === currentCommentId,
+  );
+  const previousComments =
+    currentIndex >= 0
+      ? sortedComments.slice(0, currentIndex)
+      : sortedComments.filter((comment) => comment.id !== currentCommentId);
+
+  return previousComments
+    .slice(-STEAM_CHAT_HISTORY_LIMIT)
+    .map((comment) => steamCommentToChatMessage(profileId, comment));
 }
 
 function commentWasAlreadyHandled(
@@ -197,7 +234,7 @@ class SteamProfileCommentService {
     for (const comment of newComments) {
       const commentId = comment.id;
       try {
-        await this.replyToComment(profileId, comment, commentId);
+        await this.replyToComment(profileId, comment, commentId, comments);
       } finally {
         processedIds.push(commentId);
       }
@@ -293,6 +330,7 @@ class SteamProfileCommentService {
     profileId: string,
     comment: SteamProfileComment,
     commentId: string,
+    visibleComments: SteamProfileComment[],
   ): Promise<void> {
     const { authorSteamId, authorName } = comment;
     const identity = buildSteamUserIdentity(authorSteamId, authorName);
@@ -322,7 +360,11 @@ class SteamProfileCommentService {
           session,
           messageId: commentId,
           messageTimestamp: comment.date,
-          chatHistory: [],
+          chatHistory: buildSteamChatHistory(
+            profileId,
+            visibleComments,
+            commentId,
+          ),
           persistUserMessage: true,
         }),
     );

@@ -22,7 +22,7 @@ function requesterCanManagePins(targetMessage: Message): boolean {
 export const pinTool = tool({
   name: "manage_pin",
   description:
-    "Pin or unpin messages in the current channel. Use search_messages first to find the message ID if the user references a specific message.",
+    "Pin or unpin messages in the current channel. Use discord_message_lookup first to find the message ID if the user references a specific message.",
   parameters: z.object({
     action: z
       .enum(["pin", "unpin"])
@@ -31,7 +31,7 @@ export const pinTool = tool({
       .string()
       .nullable()
       .describe(
-        'The message ID to pin/unpin. Use "replied" for the message the user replied to, null for the user\'s current message, or an actual message ID from search_messages.',
+        'The message ID to pin/unpin. Use "replied" for the message the user replied to, null for the user\'s current message, or an actual message ID from discord_message_lookup.',
       ),
   }),
   needsApproval: true,

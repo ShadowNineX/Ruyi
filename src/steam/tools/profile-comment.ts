@@ -9,6 +9,10 @@ import {
 import { STEAM_PROFILE_COMMENT_MAX_LENGTH } from "../../constants";
 import { toolContextManager } from "../../utils/types";
 import {
+  formatSteamCommentForTool,
+  searchSteamProfileComments,
+} from "../comment-search";
+import {
   normalizeSteamProfileComment,
   STEAM_PROFILE_COMMENT_SAFE_BBCODE_GUIDE,
 } from "../comment-format";
@@ -110,20 +114,38 @@ export const steamProfileCommentTool = tool({
 export const steamProfileCommentsTool = tool({
   name: "steam_profile_comments",
   description:
-    "Read recent Steam Community profile comments from a whitelisted profile. The target is code-whitelisted to either Ruyi's bot profile or the configured owner profile; never accepts arbitrary Steam IDs.",
+    "Discord-only bridge for reading or fuzzy-searching recent Steam Community profile comments from a whitelisted profile. Use search_conversation for the active Discord or Steam conversation itself. The target is code-whitelisted to either Ruyi's bot profile or the configured owner profile; never accepts arbitrary Steam IDs.",
   parameters: z.object({
     target: z
       .enum(["bot", "owner"])
       .describe("Which whitelisted Steam profile to inspect."),
+    query: z
+      .string()
+      .min(1)
+      .max(200)
+      .nullable()
+      .default(null)
+      .describe(
+        "Optional exact or fuzzy query for Steam profile comments. Omit to read newest comments.",
+      ),
+    author: z
+      .string()
+      .min(1)
+      .max(100)
+      .nullable()
+      .default(null)
+      .describe(
+        "Optional author name or SteamID filter for searched Steam profile comments.",
+      ),
     limit: z
       .number()
       .int()
       .min(1)
       .max(20)
       .default(10)
-      .describe("Maximum number of recent comments to return."),
+      .describe("Maximum number of recent comments or search matches to return."),
   }),
-  execute: async ({ target, limit }) => {
+  execute: async ({ target, query, author, limit }) => {
     if (!steamIntegrationEnabled()) {
       return {
         error:
@@ -140,6 +162,47 @@ export const steamProfileCommentsTool = tool({
     }
 
     try {
+      if (query) {
+        const search = await searchSteamProfileComments(
+          targetProfileId,
+          query,
+          author,
+          limit,
+        );
+        toolLogger.info(
+          {
+            target,
+            profileId: targetProfileId,
+            queryLength: query.length,
+            hasAuthorFilter: Boolean(author),
+            searchedCommentCount: search.searchedCommentCount,
+            matchCount: search.matches.length,
+          },
+          "Searched whitelisted Steam profile comments from Discord",
+        );
+
+        return {
+          success: true,
+          target,
+          profileId: targetProfileId,
+          query,
+          author,
+          comments: search.matches,
+          search_summary: {
+            exact_phrase_found: search.summary.exactPhraseFound,
+            best_match_type: search.summary.bestMatchType,
+            fuzzy_match_count: search.summary.fuzzyMatchCount,
+            partial_match_count: search.summary.partialMatchCount,
+            searched_comment_count: search.searchedCommentCount,
+            result_limit: limit,
+            source: "steam",
+            scope: `whitelisted ${target} Steam profile`,
+            limitation:
+              "Discord-side Steam profile comment search only covers recent comments fetched from the whitelisted Steam profile. Deleted, private, or older comments may be unavailable.",
+          },
+        };
+      }
+
       const comments = await steamCommunityClient.getProfileComments(
         targetProfileId,
         limit,
@@ -148,13 +211,7 @@ export const steamProfileCommentsTool = tool({
         success: true,
         target,
         profileId: targetProfileId,
-        comments: comments.map((comment) => ({
-          id: comment.id,
-          authorName: comment.authorName,
-          authorSteamId: comment.authorSteamId,
-          date: comment.date.toISOString(),
-          text: comment.text,
-        })),
+        comments: comments.map(formatSteamCommentForTool),
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

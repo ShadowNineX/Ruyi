@@ -16,10 +16,23 @@ import {
 } from "discord.js";
 import { messageSyncService } from "../services/message-sync";
 import { requesterHasChannelPermission } from "../utils/discord-permissions";
+import {
+  rankMessageMatches,
+  summarizeMessageSearchMatches,
+  type MessageMatchType,
+  type RankedMessageMatch,
+  type SearchableMessage,
+} from "../../utils/message-search";
 
 interface ReactionInfo {
   emoji: string;
   count: number;
+}
+
+interface MessageContextItem {
+  author: string;
+  content: string;
+  timestamp: number;
 }
 
 interface FoundMessage {
@@ -30,10 +43,21 @@ interface FoundMessage {
   url: string;
   channel?: string;
   reactions?: ReactionInfo[];
+  match_type?: MessageMatchType;
+  match_score?: number;
+  matched_terms?: string[];
+  missing_terms?: string[];
+  context_before?: MessageContextItem[];
+  context_after?: MessageContextItem[];
 }
 
 type BotMessageTarget = "last" | "replied";
 type MessageHistoryChannel = TextChannel | DMChannel;
+
+interface LiveMessageSearchDocument extends SearchableMessage {
+  message: Message;
+  channelName: string;
+}
 
 function hasMessageHistory(
   channel: TextBasedChannel | null,
@@ -55,7 +79,10 @@ function canReadMessageHistory(channel: MessageHistoryChannel): boolean {
 }
 
 function canManageMessages(channel: TextBasedChannel | null): boolean {
-  return requesterHasChannelPermission(channel, PermissionFlagsBits.ManageMessages);
+  return requesterHasChannelPermission(
+    channel,
+    PermissionFlagsBits.ManageMessages,
+  );
 }
 
 // Helper: Check if author matches filter
@@ -85,13 +112,54 @@ function filterMessages(
   return filtered;
 }
 
-function clampLimit(value: number | null, fallback: number, max: number): number {
+function clampLimit(
+  value: number | null,
+  fallback: number,
+  max: number,
+): number {
   return Math.min(Math.max(Math.round(value ?? fallback), 1), max);
 }
 
 function truncateContent(content: string, maxLength: number): string {
   if (content.length <= maxLength) return content;
   return content.slice(0, maxLength - 3) + "...";
+}
+
+function buildContextItem(message: Message): MessageContextItem {
+  return {
+    author: message.author.username,
+    content: truncateContent(message.content, 180),
+    timestamp: Math.floor(message.createdTimestamp / 1000),
+  };
+}
+
+function buildLiveMessageContext(
+  messages: Message[],
+  messageId: string,
+): Pick<FoundMessage, "context_before" | "context_after"> {
+  const index = messages.findIndex((message) => message.id === messageId);
+  if (index === -1) return {};
+
+  return {
+    context_before: messages
+      .slice(Math.max(0, index - 2), index)
+      .map(buildContextItem),
+    context_after: messages.slice(index + 1, index + 3).map(buildContextItem),
+  };
+}
+
+function buildLiveSearchDocument(
+  message: Message,
+  channelName: string,
+): LiveMessageSearchDocument {
+  return {
+    id: message.id,
+    author: message.author.username,
+    content: message.content,
+    timestamp: message.createdTimestamp,
+    message,
+    channelName,
+  };
 }
 
 // Helper: Get channels to search
@@ -144,6 +212,8 @@ function buildFoundMessage(
   msg: Message,
   showReactions: boolean,
   includeChannel: boolean,
+  match: RankedMessageMatch<LiveMessageSearchDocument> | null,
+  context: Pick<FoundMessage, "context_before" | "context_after">,
   channelName?: string,
 ): FoundMessage {
   const result: FoundMessage = {
@@ -152,10 +222,21 @@ function buildFoundMessage(
     content: truncateContent(msg.content, 200),
     timestamp: Math.floor(msg.createdTimestamp / 1000),
     url: msg.url,
+    ...context,
   };
 
   if (includeChannel && channelName) {
     result.channel = channelName;
+  }
+  if (match) {
+    result.match_type = match.matchType;
+    result.match_score = Number(match.score.toFixed(3));
+    if (match.matchedTerms.length > 0) {
+      result.matched_terms = match.matchedTerms;
+    }
+    if (match.missingTerms.length > 0) {
+      result.missing_terms = match.missingTerms;
+    }
   }
 
   if (showReactions && msg.reactions.cache.size > 0) {
@@ -177,36 +258,68 @@ async function searchChannel(
   showReactions: boolean,
   includeChannel: boolean,
   existingCount: number,
-): Promise<FoundMessage[]> {
+): Promise<{
+  messages: FoundMessage[];
+  searchedMessages: number;
+  summary: ReturnType<typeof summarizeMessageSearchMatches>;
+}> {
   const results: FoundMessage[] = [];
   const remaining = searchLimit - existingCount;
-  if (remaining <= 0) return results;
+  const emptySummary = summarizeMessageSearchMatches([]);
+  if (remaining <= 0) {
+    return { messages: results, searchedMessages: 0, summary: emptySummary };
+  }
 
   const fetchLimit =
-    query || author ? Math.min(searchLimit * 5, 100) : searchLimit;
+    query || author
+      ? Math.min(Math.max(searchLimit * 10, 50), 100)
+      : searchLimit;
   const messages = await channel.messages.fetch({ limit: fetchLimit });
-  const filtered = filterMessages([...messages.values()], author, query);
+  const fetchedMessages = [...messages.values()];
+  const authorFiltered = author
+    ? fetchedMessages.filter((message) => matchesAuthor(message, author))
+    : fetchedMessages;
 
   const displayChannel = "name" in channel ? channel.name : "Direct Message";
-  for (const msg of filtered.slice(0, remaining)) {
+  const documents = authorFiltered.map((message) =>
+    buildLiveSearchDocument(message, displayChannel),
+  );
+  const matches = rankMessageMatches(documents, query, remaining);
+  const chronologicalMessages = fetchedMessages.toSorted(
+    (a, b) => a.createdTimestamp - b.createdTimestamp,
+  );
+
+  for (const match of matches) {
+    const msg = match.item.message;
     results.push(
-      buildFoundMessage(msg, showReactions, includeChannel, displayChannel),
+      buildFoundMessage(
+        msg,
+        showReactions,
+        includeChannel,
+        match,
+        buildLiveMessageContext(chronologicalMessages, msg.id),
+        displayChannel,
+      ),
     );
   }
 
-  return results;
+  return {
+    messages: results,
+    searchedMessages: fetchedMessages.length,
+    summary: summarizeMessageSearchMatches(matches),
+  };
 }
 
 export const searchMessagesTool = tool({
-  name: "search_messages",
+  name: "discord_message_lookup",
   description:
-    "Search for messages in Discord. Can search current channel, a specific channel, or across the entire server. Returns message IDs, content, reactions, and URLs. Use the returned message ID with manage_reaction, edit_bot_message, or delete_messages.",
+    "Look up recent Discord messages for action targeting. Can inspect the current channel, a specific channel, or readable server text channels. Returns message IDs, content, reactions, and URLs. Use search_conversation for fuzzy conversation/history recall.",
   parameters: z.object({
     query: z
       .string()
       .nullable()
       .describe(
-        "Text to search for in message content. Leave null to get recent messages.",
+        "Text to match in recent message content. Leave null to get recent messages.",
       ),
     author: z
       .string()
@@ -215,11 +328,11 @@ export const searchMessagesTool = tool({
     channel_name: z
       .string()
       .nullable()
-      .describe("Name of a specific channel to search in."),
+      .describe("Name of a specific channel to inspect."),
     search_all_channels: z
       .boolean()
       .nullable()
-      .describe("If true, search across ALL text channels."),
+      .describe("If true, inspect readable server text channels."),
     limit: z
       .number()
       .nullable()
@@ -258,6 +371,8 @@ export const searchMessagesTool = tool({
 
       const allResults: FoundMessage[] = [];
       const includeChannel = Boolean(search_all_channels || channel_name);
+      let searchedMessageCount = 0;
+      const summaries: ReturnType<typeof summarizeMessageSearchMatches>[] = [];
 
       for (const channel of channelsResult) {
         const channelResults = await searchChannel(
@@ -269,24 +384,48 @@ export const searchMessagesTool = tool({
           includeChannel,
           allResults.length,
         );
-        allResults.push(...channelResults);
+        allResults.push(...channelResults.messages);
+        searchedMessageCount += channelResults.searchedMessages;
+        summaries.push(channelResults.summary);
         if (allResults.length >= searchLimit) break;
       }
 
       toolLogger.info(
         {
-          query,
+          queryLength: query?.length ?? 0,
           author,
           channel_name,
           search_all_channels,
           found: allResults.length,
+          searchedMessageCount,
         },
-        "Message search complete",
+        "Discord message lookup complete",
+      );
+      const exactPhraseFound = summaries.some(
+        (summary) => summary.exactPhraseFound,
+      );
+      const fuzzyMatchCount = summaries.reduce(
+        (total, summary) => total + summary.fuzzyMatchCount,
+        0,
+      );
+      const partialMatchCount = summaries.reduce(
+        (total, summary) => total + summary.partialMatchCount,
+        0,
       );
 
       return {
         messages: allResults,
         total: allResults.length,
+        search_summary: {
+          exact_phrase_found: exactPhraseFound,
+          fuzzy_match_count: fuzzyMatchCount,
+          partial_match_count: partialMatchCount,
+          searched_channel_count: channelsResult.length,
+          searched_message_count: searchedMessageCount,
+          result_limit: searchLimit,
+          limitation:
+            "Discord message lookup only inspects a bounded recent message window from readable channels. Use search_conversation for fuzzy history recall.",
+        },
         hint:
           allResults.length > 0
             ? "Use manage_reaction with the message ID to add/remove reactions, edit_bot_message to edit the bot's own messages, or delete_messages to remove them"
@@ -294,8 +433,14 @@ export const searchMessagesTool = tool({
       };
     } catch (error) {
       const errorMessage = formatError(error);
-      toolLogger.error({ error: errorMessage }, "Failed to search messages");
-      return { error: "Failed to search messages", details: errorMessage };
+      toolLogger.error(
+        { error: errorMessage },
+        "Failed to look up Discord messages",
+      );
+      return {
+        error: "Failed to look up Discord messages",
+        details: errorMessage,
+      };
     }
   },
 });
@@ -363,7 +508,7 @@ async function resolveBotMessageToEdit(
 export const editBotMessageTool = tool({
   name: "edit_bot_message",
   description:
-    'Edit one of the bot\'s own previous Discord messages. Use message_id="last" or null for the latest bot message in this channel, "replied" for the message the user replied to, or a message ID from search_messages. Cannot edit user messages.',
+    'Edit one of the bot\'s own previous Discord messages. Use message_id="last" or null for the latest bot message in this channel, "replied" for the message the user replied to, or a message ID from discord_message_lookup. Cannot edit user messages.',
   parameters: z.object({
     message_id: z
       .string()
