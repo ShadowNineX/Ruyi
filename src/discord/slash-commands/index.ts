@@ -52,6 +52,13 @@ export {
 
 export { handleModelSelect, isModelSelect } from "./model";
 
+export {
+  handleMemoriesButton,
+  handleMemoriesModal,
+  isMemoriesButton,
+  isMemoriesModal,
+} from "./memories";
+
 export { handleReminderAutocomplete };
 
 export async function handleSlashCommand(

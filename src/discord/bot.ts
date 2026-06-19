@@ -34,6 +34,10 @@ import {
   isSearchProviderSelect,
   handleModelSelect,
   isModelSelect,
+  handleMemoriesButton,
+  handleMemoriesModal,
+  isMemoriesButton,
+  isMemoriesModal,
   handleReminderAutocomplete,
 } from "./slash-commands";
 import { ChatSession } from "./utils/chat-session";
@@ -1031,6 +1035,16 @@ class RuyiBot {
       interaction.customId.startsWith("smithery_check:")
     ) {
       await handleSmitheryCheckButton(interaction);
+    } else if (
+      interaction.isButton() &&
+      isMemoriesButton(interaction.customId)
+    ) {
+      await handleMemoriesButton(interaction);
+    } else if (
+      interaction.isModalSubmit() &&
+      isMemoriesModal(interaction.customId)
+    ) {
+      await handleMemoriesModal(interaction);
     }
   };
 
