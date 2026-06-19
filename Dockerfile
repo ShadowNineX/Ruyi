@@ -1,26 +1,19 @@
-FROM oven/bun:1 AS deps
+FROM oven/bun:1 AS build
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates \
+  && apt-get install -y --no-install-recommends ca-certificates git \
   && rm -rf /var/lib/apt/lists/*
 
-COPY package.json bun.lock ./
+RUN git clone --depth=1 https://github.com/ShadowNineX/Ruyi.git .
 RUN bun install --frozen-lockfile
-
-FROM deps AS build
-WORKDIR /app
-
-COPY . ./
-
 RUN bun run typecheck
 RUN bun run build
 
 FROM oven/bun:1 AS runtime
 WORKDIR /app
-ENV NODE_ENV=production
 
-COPY package.json bun.lock ./
+COPY --from=build /app/package.json /app/bun.lock ./
 RUN bun install --frozen-lockfile --production --ignore-scripts
 
 COPY --from=build /app/dist ./dist
