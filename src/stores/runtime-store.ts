@@ -1,5 +1,5 @@
-import { createStore } from "@tanstack/store";
-import type { OpenAIProvider, Runner } from "@openai/agents";
+import type { OpenAIProvider, Runner } from '@openai/agents';
+import { createStore } from '@tanstack/store';
 
 interface AgentsRuntimeStoreState {
   provider: OpenAIProvider | null;
@@ -24,10 +24,6 @@ export function setAgentsRuntime(
   runner: Runner | null,
 ): void {
   agentsRuntimeStore.setState(() => ({ provider, runner }));
-}
-
-function setAgentsRunner(runner: Runner | null): void {
-  agentsRuntimeStore.setState((state) => ({ ...state, runner }));
 }
 
 export function resetAgentsRuntime(): void {

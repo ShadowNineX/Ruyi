@@ -1,40 +1,39 @@
-import { randomUUID } from "node:crypto";
-import type { RunToolApprovalItem } from "@openai/agents";
+import type { RunToolApprovalItem } from '@openai/agents';
+import type { ButtonInteraction, InteractionCollector, Message } from 'discord.js';
+import type { PermissionContext, PermissionPromptController, PermissionPromptPayload } from '../stores';
+import { randomUUID } from 'node:crypto';
 import {
   ActionRowBuilder,
   ButtonBuilder,
+
   ButtonStyle,
-  type ButtonInteraction,
   ComponentType,
   EmbedBuilder,
-  type InteractionCollector,
-  type Message,
+
   MessageFlags,
-} from "discord.js";
-import { aiLogger } from "../logger";
-import { PERMISSION_TIMEOUT_MS } from "../constants";
+} from 'discord.js';
+import { PERMISSION_TIMEOUT_MS } from '../constants';
+import { aiLogger } from '../logger';
 import {
   addPermissionPromptMessage,
   clearPermissionContext,
   getPermissionContext,
+
   setPermissionContext,
   takePermissionPromptMessages,
-  type PermissionContext,
-  type PermissionPromptController,
-  type PermissionPromptPayload,
-} from "../stores";
+} from '../stores';
 import {
   argumentEntriesToRecord,
   formatToolArgumentLines,
   parseNullableToolArguments,
   parseToolArguments,
-} from "../utils/tool-arguments";
+} from '../utils/tool-arguments';
 
-export type PermissionDecision =
-  | "approve_once"
-  | "approve_tool"
-  | "deny_once"
-  | "deny_tool";
+export type PermissionDecision
+  = | 'approve_once'
+    | 'approve_tool'
+    | 'deny_once'
+    | 'deny_tool';
 
 export interface PermissionResult {
   approved: boolean;
@@ -45,19 +44,19 @@ export interface PermissionResult {
 const DENY_ONCE_RESULT: PermissionResult = {
   approved: false,
   rememberTool: false,
-  decision: "deny_once",
+  decision: 'deny_once',
 };
 const DISCORD_UNKNOWN_MESSAGE_CODE = 10008;
 const SMITHERY_SERVICE_NAMES: Record<string, string> = {
-  youtube: "YouTube",
+  youtube: 'YouTube',
 };
 const EMBED_DESCRIPTION_LIMIT = 4096;
 const ARGUMENT_LINE_LIMIT = 8;
 
-type DiscordTimestampStyle = "R" | "T";
+type DiscordTimestampStyle = 'R' | 'T';
 
 function truncate(value: string, maxLength: number): string {
-  if (value.length <= maxLength) return value;
+  if (value.length <= maxLength) { return value; }
   return `${value.slice(0, maxLength - 3)}...`;
 }
 
@@ -71,35 +70,35 @@ function formatDiscordTimestamp(
 export function getApprovalToolName(
   approvalItem: RunToolApprovalItem,
 ): string {
-  return approvalItem.name ?? approvalItem.toolName ?? "unknown_tool";
+  return approvalItem.name ?? approvalItem.toolName ?? 'unknown_tool';
 }
 
 function getDecisionLabel(decision: PermissionDecision): string {
   switch (decision) {
-    case "approve_once":
-      return "allowed once";
-    case "approve_tool":
-      return "allowed this tool for this turn";
-    case "deny_once":
-      return "denied once";
-    case "deny_tool":
-      return "denied this tool for this turn";
+    case 'approve_once':
+      return 'allowed once';
+    case 'approve_tool':
+      return 'allowed this tool for this turn';
+    case 'deny_once':
+      return 'denied once';
+    case 'deny_tool':
+      return 'denied this tool for this turn';
   }
 }
 
 function resultFromDecision(decision: PermissionDecision): PermissionResult {
   return {
-    approved: decision.startsWith("approve"),
-    rememberTool: decision.endsWith("tool"),
+    approved: decision.startsWith('approve'),
+    rememberTool: decision.endsWith('tool'),
     decision,
   };
 }
 
 function decisionFromCustomId(customId: string): PermissionDecision | null {
-  if (customId.startsWith("perm_approve_tool_")) return "approve_tool";
-  if (customId.startsWith("perm_approve_once_")) return "approve_once";
-  if (customId.startsWith("perm_deny_tool_")) return "deny_tool";
-  if (customId.startsWith("perm_deny_once_")) return "deny_once";
+  if (customId.startsWith('perm_approve_tool_')) { return 'approve_tool'; }
+  if (customId.startsWith('perm_approve_once_')) { return 'approve_once'; }
+  if (customId.startsWith('perm_deny_tool_')) { return 'deny_tool'; }
+  if (customId.startsWith('perm_deny_once_')) { return 'deny_once'; }
   return null;
 }
 
@@ -114,7 +113,7 @@ function getStringField(
   key: string,
 ): string | null {
   const value = record[key];
-  return typeof value === "string" && value.trim() ? value : null;
+  return typeof value === 'string' && value.trim() ? value : null;
 }
 
 function hasToolArguments(args: Record<string, unknown>): boolean {
@@ -131,10 +130,10 @@ function getApprovalToolArguments(
   }
 
   const directArgs = parseToolArguments(approvalArgs.arguments);
-  if (hasToolArguments(directArgs)) return directArgs;
+  if (hasToolArguments(directArgs)) { return directArgs; }
 
   const argumentsJson = approvalArgs.arguments_json;
-  if (typeof argumentsJson !== "string") return fallback;
+  if (typeof argumentsJson !== 'string') { return fallback; }
 
   const parsedArgumentsJson = parseToolArguments(argumentsJson);
   return hasToolArguments(parsedArgumentsJson) ? parsedArgumentsJson : fallback;
@@ -148,17 +147,17 @@ function formatPermissionArgumentLines(args: Record<string, unknown>): string[] 
 }
 
 function formatRawArgumentLine(rawArguments: string | undefined): string | null {
-  if (!rawArguments?.trim()) return null;
+  if (!rawArguments?.trim()) { return null; }
 
-  return `- input: ${truncate(rawArguments.replace(/\s+/g, " "), 700)}`;
+  return `- input: ${truncate(rawArguments.replace(/\s+/g, ' '), 700)}`;
 }
 
 function appendArgumentLines(
   lines: string[],
   argumentLines: string[],
 ): void {
-  if (argumentLines.length === 0) return;
-  lines.push("", "Request details:", ...argumentLines);
+  if (argumentLines.length === 0) { return; }
+  lines.push('', 'Request details:', ...argumentLines);
 }
 
 function getGenericPermissionDescription(
@@ -177,18 +176,18 @@ function getGenericPermissionDescription(
     );
   } else {
     const rawArgumentLine = formatRawArgumentLine(approvalItem.arguments);
-    if (rawArgumentLine) appendArgumentLines(lines, [rawArgumentLine]);
+    if (rawArgumentLine) { appendArgumentLines(lines, [rawArgumentLine]); }
   }
 
-  return truncate(lines.join("\n"), 3900);
+  return truncate(lines.join('\n'), 3900);
 }
 
 function getSmitheryPermissionDescription(
   approvalArgs: Record<string, unknown>,
 ): string {
-  const serverId = getStringField(approvalArgs, "server_id") ?? "unknown";
+  const serverId = getStringField(approvalArgs, 'server_id') ?? 'unknown';
   const serviceName = SMITHERY_SERVICE_NAMES[serverId] ?? serverId;
-  const toolName = getStringField(approvalArgs, "tool_name") ?? "unknown";
+  const toolName = getStringField(approvalArgs, 'tool_name') ?? 'unknown';
   const mcpArgs = getApprovalToolArguments(approvalArgs, {});
   const lines = [
     `Service: **${serviceName}**`,
@@ -198,26 +197,26 @@ function getSmitheryPermissionDescription(
   const argumentLines = formatPermissionArgumentLines(mcpArgs);
   appendArgumentLines(lines, argumentLines);
 
-  return truncate(lines.join("\n"), 3900);
+  return truncate(lines.join('\n'), 3900);
 }
 
 function getPermissionDisplayName(approvalItem: RunToolApprovalItem): string {
   const toolName = getApprovalToolName(approvalItem);
-  if (toolName !== "smithery_call_tool") return toolName;
+  if (toolName !== 'smithery_call_tool') { return toolName; }
 
   const approvalArgs = parseApprovalArguments(approvalItem.arguments);
-  if (!approvalArgs) return toolName;
+  if (!approvalArgs) { return toolName; }
 
-  const serverId = getStringField(approvalArgs, "server_id") ?? "Smithery";
+  const serverId = getStringField(approvalArgs, 'server_id') ?? 'Smithery';
   const serviceName = SMITHERY_SERVICE_NAMES[serverId] ?? serverId;
-  const mcpToolName = getStringField(approvalArgs, "tool_name");
+  const mcpToolName = getStringField(approvalArgs, 'tool_name');
   return mcpToolName ? `${serviceName} ${mcpToolName}` : serviceName;
 }
 
 function getPermissionDescription(approvalItem: RunToolApprovalItem): string {
   const toolName = getApprovalToolName(approvalItem);
   const approvalArgs = parseApprovalArguments(approvalItem.arguments);
-  if (toolName === "smithery_call_tool" && approvalArgs) {
+  if (toolName === 'smithery_call_tool' && approvalArgs) {
     return getSmitheryPermissionDescription(approvalArgs);
   }
 
@@ -229,12 +228,12 @@ function getPermissionDescriptionWithExpiration(
   expiresAtMs: number | undefined,
 ): string {
   const description = getPermissionDescription(approvalItem);
-  if (!expiresAtMs) return description;
+  if (!expiresAtMs) { return description; }
 
   const expirationLine = `\n\nExpires ${formatDiscordTimestamp(
     expiresAtMs,
-    "R",
-  )} (${formatDiscordTimestamp(expiresAtMs, "T")})`;
+    'R',
+  )} (${formatDiscordTimestamp(expiresAtMs, 'T')})`;
   const descriptionLimit = EMBED_DESCRIPTION_LIMIT - expirationLine.length;
   return `${truncate(description, descriptionLimit)}${expirationLine}`;
 }
@@ -258,7 +257,7 @@ function createPermissionEmbed(
 
 function getErrorCode(error: unknown): number | null {
   const code = (error as { code?: unknown })?.code;
-  return typeof code === "number" ? code : null;
+  return typeof code === 'number' ? code : null;
 }
 
 interface ApprovalPromptArgs {
@@ -284,7 +283,7 @@ async function replyToUnauthorizedClick(
 ): Promise<void> {
   await interaction
     .reply({
-      content: "Only the user who requested this action can respond.",
+      content: 'Only the user who requested this action can respond.',
       flags: MessageFlags.Ephemeral,
     })
     .catch((replyError: unknown) => {
@@ -295,7 +294,7 @@ async function replyToUnauthorizedClick(
           sessionId: args.sessionId,
           tool: args.toolName,
         },
-        "Failed to reply to unauthorized approval click",
+        'Failed to reply to unauthorized approval click',
       );
     });
 }
@@ -314,7 +313,7 @@ async function settleApprovalFromInteraction(
         tool: args.toolName,
         customId: interaction.customId,
       },
-      "Unknown tool approval button clicked",
+      'Unknown tool approval button clicked',
     );
     return;
   }
@@ -326,7 +325,7 @@ async function settleApprovalFromInteraction(
       ? `Permission Granted: ${displayName}`
       : `Permission Denied: ${displayName}`,
     args.approvalItem,
-    result.approved ? 0x00aa55 : 0xcc3333,
+    result.approved ? 0x00AA55 : 0xCC3333,
     `${getDecisionLabel(decision)} by ${interaction.user.username}`,
   );
 
@@ -337,7 +336,7 @@ async function settleApprovalFromInteraction(
     });
     args.promptController?.releasePrompt();
     state.settled = true;
-    state.collector.stop(result.approved ? "approved" : "denied");
+    state.collector.stop(result.approved ? 'approved' : 'denied');
 
     aiLogger.info(
       {
@@ -348,14 +347,14 @@ async function settleApprovalFromInteraction(
         rememberTool: result.rememberTool,
         decision,
       },
-      "User responded to tool approval request",
+      'User responded to tool approval request',
     );
 
     state.resolve(result);
   } catch (error) {
     state.settled = true;
     args.promptController?.releasePrompt();
-    state.collector.stop("update_failed");
+    state.collector.stop('update_failed');
     aiLogger.error(
       {
         channelId: args.channelId,
@@ -363,7 +362,7 @@ async function settleApprovalFromInteraction(
         tool: args.toolName,
         error: (error as Error).message,
       },
-      "Failed to update tool approval prompt",
+      'Failed to update tool approval prompt',
     );
     state.resolve(DENY_ONCE_RESULT);
   }
@@ -387,15 +386,15 @@ function handleApprovalEnd(
   args: ApprovalPromptArgs,
   state: ApprovalCollectorState,
 ): void {
-  if (state.settled) return;
+  if (state.settled) { return; }
   state.settled = true;
   args.promptController?.releasePrompt();
 
   const timeoutEmbed = createPermissionEmbed(
     `Permission Expired: ${getPermissionDisplayName(args.approvalItem)}`,
     args.approvalItem,
-    0x95a5a6,
-    "Request timed out",
+    0x95A5A6,
+    'Request timed out',
   );
 
   void args.promptMessage
@@ -411,7 +410,7 @@ function handleApprovalEnd(
           sessionId: args.sessionId,
           tool: args.toolName,
         },
-        "Failed to edit timed-out tool approval prompt",
+        'Failed to edit timed-out tool approval prompt',
       );
     });
 
@@ -422,7 +421,7 @@ function handleApprovalEnd(
       tool: args.toolName,
       reason,
     },
-    "Tool approval request ended without approval",
+    'Tool approval request ended without approval',
   );
 
   state.resolve(DENY_ONCE_RESULT);
@@ -433,7 +432,7 @@ async function sendPermissionPrompt(
   payload: PermissionPromptPayload,
 ): Promise<Message> {
   const promptMessage = await context.promptController.showPrompt(payload);
-  if (promptMessage) return promptMessage;
+  if (promptMessage) { return promptMessage; }
 
   return context.channel.send(payload);
 }
@@ -450,10 +449,10 @@ function waitForApproval(args: ApprovalPromptArgs): Promise<PermissionResult> {
       collector,
     };
 
-    collector.on("collect", (interaction) => {
+    collector.on('collect', (interaction) => {
       handleApprovalCollect(interaction, args, state);
     });
-    collector.on("end", (_collected, reason) => {
+    collector.on('end', (_collected, reason) => {
       handleApprovalEnd(reason, args, state);
     });
   });
@@ -474,22 +473,22 @@ class PermissionManager {
 
   async deletePromptMessages(turnId: string): Promise<void> {
     const messages = takePermissionPromptMessages(turnId);
-    if (messages.size === 0) return;
+    if (messages.size === 0) { return; }
 
     const deleteResults = await Promise.allSettled(
-      [...messages].map((message) => message.delete()),
+      [...messages].map(message => message.delete()),
     );
     let deletedCount = 0;
 
     for (const result of deleteResults) {
-      if (result.status === "fulfilled") {
+      if (result.status === 'fulfilled') {
         deletedCount += 1;
         continue;
       }
 
       const error = result.reason as Error;
       const code = getErrorCode(error);
-      if (code === DISCORD_UNKNOWN_MESSAGE_CODE) continue;
+      if (code === DISCORD_UNKNOWN_MESSAGE_CODE) { continue; }
 
       aiLogger.debug(
         {
@@ -498,7 +497,7 @@ class PermissionManager {
           name: error.name,
           turnId,
         },
-        "Failed to delete permission prompt",
+        'Failed to delete permission prompt',
       );
     }
 
@@ -508,7 +507,7 @@ class PermissionManager {
         promptCount: messages.size,
         turnId,
       },
-      "Deleted permission prompts for completed chat turn",
+      'Deleted permission prompts for completed chat turn',
     );
   }
 
@@ -524,7 +523,7 @@ class PermissionManager {
     if (!context) {
       aiLogger.warn(
         { channelId, tool: toolName },
-        "No permission context found, denying tool approval request",
+        'No permission context found, denying tool approval request',
       );
       return DENY_ONCE_RESULT;
     }
@@ -536,8 +535,8 @@ class PermissionManager {
       const embed = createPermissionEmbed(
         `Permission Required: ${getPermissionDisplayName(approvalItem)}`,
         approvalItem,
-        0xffa500,
-        "Choose once for one call, or tool this turn for repeats",
+        0xFFA500,
+        'Choose once for one call, or tool this turn for repeats',
         expiresAtMs,
       );
 
@@ -545,19 +544,19 @@ class PermissionManager {
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(`perm_approve_tool_${buttonId}`)
-          .setLabel("Allow Tool This Turn")
+          .setLabel('Allow Tool This Turn')
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
           .setCustomId(`perm_approve_once_${buttonId}`)
-          .setLabel("Allow Once")
+          .setLabel('Allow Once')
           .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
           .setCustomId(`perm_deny_once_${buttonId}`)
-          .setLabel("Deny Once")
+          .setLabel('Deny Once')
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId(`perm_deny_tool_${buttonId}`)
-          .setLabel("Deny Tool This Turn")
+          .setLabel('Deny Tool This Turn')
           .setStyle(ButtonStyle.Danger),
       );
 
@@ -569,7 +568,7 @@ class PermissionManager {
 
       aiLogger.info(
         { channelId, sessionId, tool: toolName, userId },
-        "Tool approval prompt sent, waiting for user response",
+        'Tool approval prompt sent, waiting for user response',
       );
 
       return await waitForApproval({
@@ -593,7 +592,7 @@ class PermissionManager {
           stack: err.stack,
           name: err.name,
         },
-        "Failed to send tool approval prompt",
+        'Failed to send tool approval prompt',
       );
       return DENY_ONCE_RESULT;
     }

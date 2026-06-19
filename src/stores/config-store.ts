@@ -1,5 +1,5 @@
-import { createStore } from "@tanstack/store";
-import type { AiModelPresetId, SearchProvider } from "../config";
+import type { AiModelPresetId, SearchProvider } from '../config';
+import { createStore } from '@tanstack/store';
 
 export interface ScopedSettings {
   prefix: string;

@@ -1,22 +1,23 @@
-import { tool } from "@openai/agents";
-import { z } from "zod";
+import type { SmitheryConnectionScope } from '../../db/models';
+import { tool } from '@openai/agents';
+import { z } from 'zod';
 import {
   getAllSmitheryConnections,
   isSmitheryConnectionScope,
-  type SmitheryConnectionScope,
-} from "../../db/models";
-import { toolLogger } from "../../logger";
+
+} from '../../db/models';
+import { toolLogger } from '../../logger';
 import {
   callSmitheryConnectionTool,
   isSmitheryConfigured,
   listSmitheryConnectionTools,
-} from "../../mcp/smithery-api";
+} from '../../mcp/smithery-api';
 import {
   SMITHERY_SERVER_IDS,
   SMITHERY_SERVERS,
-} from "../../mcp/smithery-catalog";
-import { formatError } from "../../utils/types";
-import { getCurrentToolConfigScope } from "../../utils/tool-config-scope";
+} from '../../mcp/smithery-catalog';
+import { getCurrentToolConfigScope } from '../../utils/tool-config-scope';
+import { formatError } from '../../utils/types';
 
 const SmitheryServerIdSchema = z.enum(SMITHERY_SERVER_IDS);
 const ToolArgumentValueSchema = z.union([
@@ -26,15 +27,15 @@ const ToolArgumentValueSchema = z.union([
   z.null(),
 ]);
 const ToolArgumentEntrySchema = z.object({
-  name: z.string().min(1).describe("MCP argument name."),
+  name: z.string().min(1).describe('MCP argument name.'),
   value: ToolArgumentValueSchema.describe(
-    "String, number, boolean, or null argument value. Use this for ordinary values.",
+    'String, number, boolean, or null argument value. Use this for ordinary values.',
   ),
   json_value: z
     .string()
     .nullable()
     .describe(
-      "Optional JSON string for array or object values. Leave null for ordinary values.",
+      'Optional JSON string for array or object values. Leave null for ordinary values.',
     ),
 });
 
@@ -42,7 +43,7 @@ type ToolArgumentEntry = z.infer<typeof ToolArgumentEntrySchema>;
 
 function parseJsonValue(value: string): unknown {
   const trimmed = value.trim();
-  if (!trimmed) return null;
+  if (!trimmed) { return null; }
   return JSON.parse(trimmed) as unknown;
 }
 
@@ -51,8 +52,8 @@ function toolArgumentEntriesToRecord(
 ): Record<string, unknown> {
   const record: Record<string, unknown> = {};
   for (const entry of entries ?? []) {
-    record[entry.name] =
-      entry.json_value === null ? entry.value : parseJsonValue(entry.json_value);
+    record[entry.name]
+      = entry.json_value === null ? entry.value : parseJsonValue(entry.json_value);
   }
   return record;
 }
@@ -73,33 +74,33 @@ function formatToolSummary(
 
 function getCurrentSmitheryScope(): SmitheryConnectionScope | null {
   const scope = getCurrentToolConfigScope();
-  if (!scope || !isSmitheryConnectionScope(scope)) return null;
+  if (!scope || !isSmitheryConnectionScope(scope)) { return null; }
   return scope;
 }
 
 export const smitheryListToolsTool = tool({
-  name: "smithery_list_tools",
+  name: 'smithery_list_tools',
   description:
-    "List MCP tools available through Smithery Connect. Use this before calling a Smithery tool when you need the exact tool name or argument schema.",
+    'List MCP tools available through Smithery Connect. Use this before calling a Smithery tool when you need the exact tool name or argument schema.',
   parameters: z.object({
     server_id: SmitheryServerIdSchema.nullable().describe(
-      "Optional Smithery service to inspect. Use youtube for YouTube.",
+      'Optional Smithery service to inspect. Use youtube for YouTube.',
     ),
     include_input_schema: z
       .boolean()
       .nullable()
-      .describe("Whether to include each tool's MCP input schema."),
+      .describe('Whether to include each tool\'s MCP input schema.'),
   }),
   execute: async ({ server_id, include_input_schema }) => {
     const scope = getCurrentSmitheryScope();
     if (!scope) {
-      return { error: "Smithery tools need active Discord context." };
+      return { error: 'Smithery tools need active Discord context.' };
     }
 
     if (!isSmitheryConfigured()) {
       return {
         error:
-          "Smithery Connect is not configured. Set SMITHERY_API_KEY and SMITHERY_NAMESPACE.",
+          'Smithery Connect is not configured. Set SMITHERY_API_KEY and SMITHERY_NAMESPACE.',
       };
     }
 
@@ -107,8 +108,8 @@ export const smitheryListToolsTool = tool({
     const targetServerIds = server_id
       ? [server_id]
       : (await getAllSmitheryConnections(scope))
-          .filter((connection) => connection.status === "connected")
-          .map((connection) => connection.serverId);
+          .filter(connection => connection.status === 'connected')
+          .map(connection => connection.serverId);
 
     try {
       const services = await Promise.all(
@@ -118,7 +119,7 @@ export const smitheryListToolsTool = tool({
             serverId,
             name: SMITHERY_SERVERS[serverId].name,
             toolCount: tools.length,
-            tools: tools.map((toolSummary) =>
+            tools: tools.map(toolSummary =>
               formatToolSummary(toolSummary, includeInputSchema),
             ),
           };
@@ -133,7 +134,7 @@ export const smitheryListToolsTool = tool({
           serviceCount: services.length,
           includeInputSchema,
         },
-        "Listed Smithery MCP tools",
+        'Listed Smithery MCP tools',
       );
 
       return {
@@ -149,7 +150,7 @@ export const smitheryListToolsTool = tool({
           serverId: server_id,
           error: errorMessage,
         },
-        "Failed to list Smithery MCP tools",
+        'Failed to list Smithery MCP tools',
       );
       return { error: errorMessage };
     }
@@ -157,29 +158,29 @@ export const smitheryListToolsTool = tool({
 });
 
 export const smitheryCallTool = tool({
-  name: "smithery_call_tool",
+  name: 'smithery_call_tool',
   description:
-    "Call one MCP tool through Smithery Connect. Use smithery_list_tools first if you do not know the exact tool name or argument object.",
+    'Call one MCP tool through Smithery Connect. Use smithery_list_tools first if you do not know the exact tool name or argument object.',
   parameters: z.object({
     server_id: SmitheryServerIdSchema.describe(
-      "Smithery service to call: youtube.",
+      'Smithery service to call: youtube.',
     ),
     tool_name: z
       .string()
       .min(1)
-      .describe("Exact MCP tool name from smithery_list_tools, without a connection prefix."),
+      .describe('Exact MCP tool name from smithery_list_tools, without a connection prefix.'),
     tool_arguments: z
       .array(ToolArgumentEntrySchema)
       .nullable()
       .describe(
-        "MCP tool arguments as name/value entries. Use [] or null when no arguments are needed.",
+        'MCP tool arguments as name/value entries. Use [] or null when no arguments are needed.',
       ),
   }),
   needsApproval: true,
   execute: async ({ server_id, tool_name, tool_arguments }) => {
     const scope = getCurrentSmitheryScope();
     if (!scope) {
-      return { error: "Smithery tools need active Discord context." };
+      return { error: 'Smithery tools need active Discord context.' };
     }
 
     try {
@@ -199,7 +200,7 @@ export const smitheryCallTool = tool({
           connectionId: result.connectionId,
           toolName: tool_name,
         },
-        "Called Smithery MCP tool",
+        'Called Smithery MCP tool',
       );
 
       return {
@@ -219,7 +220,7 @@ export const smitheryCallTool = tool({
           toolName: tool_name,
           error: errorMessage,
         },
-        "Smithery MCP tool call failed",
+        'Smithery MCP tool call failed',
       );
       return { error: errorMessage };
     }

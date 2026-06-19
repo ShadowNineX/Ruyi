@@ -1,12 +1,9 @@
+import type { ModelSettings } from '@openai/agents';
+import type { ScopedSettings } from './stores';
 import {
   getDefaultModelSettings,
-  type ModelSettings,
-} from "@openai/agents";
-import {
-  getConfigValue,
-  getConfigValuesByPrefix,
-  setConfigValue,
-} from "./db/models";
+
+} from '@openai/agents';
 import {
   AWAY_MESSAGE_DEFAULT_COOLDOWN_HOURS,
   AWAY_MESSAGE_DEFAULT_DELAY_MINUTES,
@@ -14,47 +11,52 @@ import {
   AWAY_MESSAGE_MAX_DELAY_MINUTES,
   AWAY_MESSAGE_MIN_COOLDOWN_HOURS,
   AWAY_MESSAGE_MIN_DELAY_MINUTES,
-} from "./constants";
+} from './constants';
+import {
+  getConfigValue,
+  getConfigValuesByPrefix,
+  setConfigValue,
+} from './db/models';
 import {
   getAwayLastSentAtCache,
   getAwayUserEnabledCache,
   getScopedSettingsCache,
   resetConfigStore,
+
   setAwayLastSentAtCache,
   setAwayUserEnabledCache,
   updateScopedSettingsCache,
-  type ScopedSettings,
-} from "./stores";
+} from './stores';
 
-const DEFAULT_PREFIX = "!";
-const DEFAULT_SEARCH_PROVIDER = "openai";
-const DEFAULT_AI_MODEL_PRESET = "balanced";
+const DEFAULT_PREFIX = '!';
+const DEFAULT_SEARCH_PROVIDER = 'openai';
+const DEFAULT_AI_MODEL_PRESET = 'balanced';
 const DEFAULT_AWAY_SCOPE_ENABLED = true;
 
-const DISCORD_GUILD_CONFIG_PREFIX = "discord:guild:";
-const DISCORD_DM_CONFIG_PREFIX = "discord:dm:";
-const STEAM_PROFILE_CONFIG_PREFIX = "steam:profile:";
-const USER_SEGMENT = "user";
-const PREFIX_SETTING = "prefix";
-const SEARCH_PROVIDER_SETTING = "search:primary_provider";
-const AI_MODEL_PRESET_SETTING = "ai:model_preset";
-const AWAY_SCOPE_ENABLED_SETTING = "away:enabled";
-const AWAY_DELAY_MINUTES_SETTING = "away:delay_minutes";
-const AWAY_COOLDOWN_HOURS_SETTING = "away:cooldown_hours";
-const AWAY_USER_ENABLED_SETTING = "away:enabled";
-const AWAY_USER_LAST_SENT_SETTING = "away:last_sent_at";
+const DISCORD_GUILD_CONFIG_PREFIX = 'discord:guild:';
+const DISCORD_DM_CONFIG_PREFIX = 'discord:dm:';
+const STEAM_PROFILE_CONFIG_PREFIX = 'steam:profile:';
+const USER_SEGMENT = 'user';
+const PREFIX_SETTING = 'prefix';
+const SEARCH_PROVIDER_SETTING = 'search:primary_provider';
+const AI_MODEL_PRESET_SETTING = 'ai:model_preset';
+const AWAY_SCOPE_ENABLED_SETTING = 'away:enabled';
+const AWAY_DELAY_MINUTES_SETTING = 'away:delay_minutes';
+const AWAY_COOLDOWN_HOURS_SETTING = 'away:cooldown_hours';
+const AWAY_USER_ENABLED_SETTING = 'away:enabled';
+const AWAY_USER_LAST_SENT_SETTING = 'away:last_sent_at';
 
-export const SEARCH_PROVIDERS = ["openai", "tavily"] as const;
+export const SEARCH_PROVIDERS = ['openai', 'tavily'] as const;
 export type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
-type ConfigScopeKind = "discord:guild" | "discord:dm" | "steam:profile";
+type ConfigScopeKind = 'discord:guild' | 'discord:dm' | 'steam:profile';
 
 export interface ConfigScope {
   kind: ConfigScopeKind;
   id: string;
 }
 
-type ReasoningEffort = NonNullable<ModelSettings["reasoning"]>["effort"];
-type TextVerbosity = NonNullable<ModelSettings["text"]>["verbosity"];
+type ReasoningEffort = NonNullable<ModelSettings['reasoning']>['effort'];
+type TextVerbosity = NonNullable<ModelSettings['text']>['verbosity'];
 
 interface AiModelPresetDefinition {
   id: string;
@@ -79,53 +81,53 @@ interface ParsedScopeUserConfigKey {
 
 export const AI_MODEL_PRESETS = [
   {
-    id: "fast",
-    label: "Instant",
-    description: "Fastest replies with GPT-5.4 Mini.",
-    model: "gpt-5.4-mini",
-    visionModel: "gpt-5.4-mini",
-    reasoningEffort: "low",
-    textVerbosity: "low",
+    id: 'fast',
+    label: 'Instant',
+    description: 'Fastest replies with GPT-5.4 Mini.',
+    model: 'gpt-5.4-mini',
+    visionModel: 'gpt-5.4-mini',
+    reasoningEffort: 'low',
+    textVerbosity: 'low',
   },
   {
-    id: "medium",
-    label: "Medium",
-    description: "Efficient GPT-5.5 for everyday chat.",
-    model: "gpt-5.5",
-    visionModel: "gpt-5.5",
-    reasoningEffort: "low",
-    textVerbosity: "medium",
+    id: 'medium',
+    label: 'Medium',
+    description: 'Efficient GPT-5.5 for everyday chat.',
+    model: 'gpt-5.5',
+    visionModel: 'gpt-5.5',
+    reasoningEffort: 'low',
+    textVerbosity: 'medium',
   },
   {
-    id: "balanced",
-    label: "High",
-    description: "Recommended GPT-5.5 default for Ruyi.",
-    model: "gpt-5.5",
-    visionModel: "gpt-5.5",
-    reasoningEffort: "medium",
-    textVerbosity: "medium",
+    id: 'balanced',
+    label: 'High',
+    description: 'Recommended GPT-5.5 default for Ruyi.',
+    model: 'gpt-5.5',
+    visionModel: 'gpt-5.5',
+    reasoningEffort: 'medium',
+    textVerbosity: 'medium',
   },
   {
-    id: "smart",
-    label: "Extra High",
-    description: "Deeper GPT-5.5 reasoning for complex tasks.",
-    model: "gpt-5.5",
-    visionModel: "gpt-5.5",
-    reasoningEffort: "high",
-    textVerbosity: "medium",
+    id: 'smart',
+    label: 'Extra High',
+    description: 'Deeper GPT-5.5 reasoning for complex tasks.',
+    model: 'gpt-5.5',
+    visionModel: 'gpt-5.5',
+    reasoningEffort: 'high',
+    textVerbosity: 'medium',
   },
   {
-    id: "deep",
-    label: "Pro",
-    description: "Highest-intelligence GPT-5.5 Pro reasoning.",
-    model: "gpt-5.5-pro",
-    visionModel: "gpt-5.5",
-    reasoningEffort: "xhigh",
-    textVerbosity: "high",
+    id: 'deep',
+    label: 'Pro',
+    description: 'Highest-intelligence GPT-5.5 Pro reasoning.',
+    model: 'gpt-5.5-pro',
+    visionModel: 'gpt-5.5',
+    reasoningEffort: 'xhigh',
+    textVerbosity: 'high',
   },
 ] as const satisfies readonly AiModelPresetDefinition[];
 
-export type AiModelPresetId = (typeof AI_MODEL_PRESETS)[number]["id"];
+export type AiModelPresetId = (typeof AI_MODEL_PRESETS)[number]['id'];
 export type AiModelPreset = (typeof AI_MODEL_PRESETS)[number];
 
 interface AwayMessageSettings {
@@ -137,15 +139,15 @@ interface AwayMessageSettings {
 }
 
 export function guildConfigScope(guildId: string): ConfigScope {
-  return { kind: "discord:guild", id: guildId };
+  return { kind: 'discord:guild', id: guildId };
 }
 
 function dmConfigScope(userId: string): ConfigScope {
-  return { kind: "discord:dm", id: userId };
+  return { kind: 'discord:dm', id: userId };
 }
 
 export function steamProfileConfigScope(profileId: string): ConfigScope {
-  return { kind: "steam:profile", id: profileId };
+  return { kind: 'steam:profile', id: profileId };
 }
 
 export function userConfigScope(
@@ -161,12 +163,12 @@ export function configScopeKey(scope: ConfigScope): string {
 
 export function formatConfigScope(scope: ConfigScope): string {
   switch (scope.kind) {
-    case "discord:guild":
-      return "this server";
-    case "discord:dm":
-      return "this private chat";
-    case "steam:profile":
-      return "this Steam profile";
+    case 'discord:guild':
+      return 'this server';
+    case 'discord:dm':
+      return 'this private chat';
+    case 'steam:profile':
+      return 'this Steam profile';
   }
 }
 
@@ -188,8 +190,8 @@ function parseSearchProvider(value: string): SearchProvider {
 }
 
 function parseBoolean(value: string, defaultValue: boolean): boolean {
-  if (value === "true") return true;
-  if (value === "false") return false;
+  if (value === 'true') { return true; }
+  if (value === 'false') { return false; }
   return defaultValue;
 }
 
@@ -227,41 +229,41 @@ function scopedUserCacheKey(scope: ConfigScope, userId: string): string {
 
 function parseScopeConfigKey(key: string): ParsedScopeConfigKey | null {
   const scope = parseScopePrefix(key);
-  if (!scope) return null;
+  if (!scope) { return null; }
 
-  const parts = key.slice(`${scope.kind}:${scope.id}:`.length).split(":");
-  if (parts[0] === USER_SEGMENT) return null;
+  const parts = key.slice(`${scope.kind}:${scope.id}:`.length).split(':');
+  if (parts[0] === USER_SEGMENT) { return null; }
   return {
     scope,
-    setting: parts.join(":"),
+    setting: parts.join(':'),
   };
 }
 
 function parseScopeUserConfigKey(key: string): ParsedScopeUserConfigKey | null {
   const scope = parseScopePrefix(key);
-  if (!scope) return null;
+  if (!scope) { return null; }
 
-  const parts = key.slice(`${scope.kind}:${scope.id}:`.length).split(":");
+  const parts = key.slice(`${scope.kind}:${scope.id}:`.length).split(':');
   const userId = parts[1];
-  if (parts[0] !== USER_SEGMENT || !userId) return null;
+  if (parts[0] !== USER_SEGMENT || !userId) { return null; }
 
   return {
     scope,
     userId,
-    setting: parts.slice(2).join(":"),
+    setting: parts.slice(2).join(':'),
   };
 }
 
 function parseScopePrefix(key: string): ConfigScope | null {
   const prefixes = [
-    { kind: "discord:guild", prefix: DISCORD_GUILD_CONFIG_PREFIX },
-    { kind: "discord:dm", prefix: DISCORD_DM_CONFIG_PREFIX },
-    { kind: "steam:profile", prefix: STEAM_PROFILE_CONFIG_PREFIX },
+    { kind: 'discord:guild', prefix: DISCORD_GUILD_CONFIG_PREFIX },
+    { kind: 'discord:dm', prefix: DISCORD_DM_CONFIG_PREFIX },
+    { kind: 'steam:profile', prefix: STEAM_PROFILE_CONFIG_PREFIX },
   ] as const;
 
   for (const { kind, prefix } of prefixes) {
     if (key.startsWith(prefix)) {
-      const id = key.slice(prefix.length).split(":")[0];
+      const id = key.slice(prefix.length).split(':')[0];
       return id ? { kind, id } : null;
     }
   }
@@ -270,7 +272,7 @@ function parseScopePrefix(key: string): ConfigScope | null {
 }
 
 export function isAiModelPresetId(value: string): value is AiModelPresetId {
-  return AI_MODEL_PRESETS.some((preset) => preset.id === value);
+  return AI_MODEL_PRESETS.some(preset => preset.id === value);
 }
 
 function parseAiModelPreset(value: string): AiModelPresetId {
@@ -278,9 +280,9 @@ function parseAiModelPreset(value: string): AiModelPresetId {
 }
 
 function getAiModelPresetById(id: AiModelPresetId): AiModelPreset {
-  const preset = AI_MODEL_PRESETS.find((option) => option.id === id);
+  const preset = AI_MODEL_PRESETS.find(option => option.id === id);
   const defaultPreset = AI_MODEL_PRESETS.find(
-    (option) => option.id === DEFAULT_AI_MODEL_PRESET,
+    option => option.id === DEFAULT_AI_MODEL_PRESET,
   );
   return preset ?? defaultPreset ?? AI_MODEL_PRESETS[0];
 }
@@ -322,15 +324,14 @@ class ConfigManager {
   private getScopedSettings(
     scope: ConfigScope | null | undefined,
   ): ScopedSettings {
-    if (!scope) return defaultScopedSettings();
+    if (!scope) { return defaultScopedSettings(); }
 
     const key = configScopeKey(scope);
     const existing = getScopedSettingsCache(key);
-    if (existing) return existing;
+    if (existing) { return existing; }
 
-    return updateScopedSettingsCache(key, defaultScopedSettings(), (settings) =>
-      settings,
-    );
+    return updateScopedSettingsCache(key, defaultScopedSettings(), settings =>
+      settings);
   }
 
   private updateScopedSettings(
@@ -346,35 +347,35 @@ class ConfigManager {
 
   private loadScopedConfigEntry(key: string, value: string): void {
     const parsed = parseScopeConfigKey(key);
-    if (!parsed) return;
+    if (!parsed) { return; }
 
     switch (parsed.setting) {
       case PREFIX_SETTING:
-        this.updateScopedSettings(parsed.scope, (settings) => ({
+        this.updateScopedSettings(parsed.scope, settings => ({
           ...settings,
           prefix: value || DEFAULT_PREFIX,
         }));
         break;
       case SEARCH_PROVIDER_SETTING:
-        this.updateScopedSettings(parsed.scope, (settings) => ({
+        this.updateScopedSettings(parsed.scope, settings => ({
           ...settings,
           searchProvider: parseSearchProvider(value),
         }));
         break;
       case AI_MODEL_PRESET_SETTING:
-        this.updateScopedSettings(parsed.scope, (settings) => ({
+        this.updateScopedSettings(parsed.scope, settings => ({
           ...settings,
           modelPreset: parseAiModelPreset(value),
         }));
         break;
       case AWAY_SCOPE_ENABLED_SETTING:
-        this.updateScopedSettings(parsed.scope, (settings) => ({
+        this.updateScopedSettings(parsed.scope, settings => ({
           ...settings,
           awayScopeEnabled: parseBoolean(value, DEFAULT_AWAY_SCOPE_ENABLED),
         }));
         break;
       case AWAY_DELAY_MINUTES_SETTING:
-        this.updateScopedSettings(parsed.scope, (settings) => ({
+        this.updateScopedSettings(parsed.scope, settings => ({
           ...settings,
           awayDelayMinutes: parseIntegerSetting(
             value,
@@ -385,7 +386,7 @@ class ConfigManager {
         }));
         break;
       case AWAY_COOLDOWN_HOURS_SETTING:
-        this.updateScopedSettings(parsed.scope, (settings) => ({
+        this.updateScopedSettings(parsed.scope, settings => ({
           ...settings,
           awayCooldownHours: parseIntegerSetting(
             value,
@@ -400,7 +401,7 @@ class ConfigManager {
 
   private loadScopedUserConfigEntry(key: string, value: string): void {
     const parsed = parseScopeUserConfigKey(key);
-    if (!parsed) return;
+    if (!parsed) { return; }
 
     const cacheKey = scopedUserCacheKey(parsed.scope, parsed.userId);
     switch (parsed.setting) {
@@ -422,7 +423,7 @@ class ConfigManager {
   }
 
   async setPrefix(scope: ConfigScope, prefix: string): Promise<void> {
-    this.updateScopedSettings(scope, (settings) => ({ ...settings, prefix }));
+    this.updateScopedSettings(scope, settings => ({ ...settings, prefix }));
     await setConfigValue(scopedSettingKey(scope, PREFIX_SETTING), prefix);
   }
 
@@ -434,7 +435,7 @@ class ConfigManager {
     scope: ConfigScope,
     provider: SearchProvider,
   ): Promise<void> {
-    this.updateScopedSettings(scope, (settings) => ({
+    this.updateScopedSettings(scope, settings => ({
       ...settings,
       searchProvider: provider,
     }));
@@ -465,7 +466,7 @@ class ConfigManager {
     scope: ConfigScope,
     preset: AiModelPresetId,
   ): Promise<void> {
-    this.updateScopedSettings(scope, (settings) => ({
+    this.updateScopedSettings(scope, settings => ({
       ...settings,
       modelPreset: preset,
     }));
@@ -487,7 +488,7 @@ class ConfigManager {
     scope: ConfigScope,
     enabled: boolean,
   ): Promise<void> {
-    this.updateScopedSettings(scope, (settings) => ({
+    this.updateScopedSettings(scope, settings => ({
       ...settings,
       awayScopeEnabled: enabled,
     }));
@@ -502,7 +503,7 @@ class ConfigManager {
     delayMinutes: number,
     cooldownHours: number,
   ): Promise<void> {
-    const nextSettings = this.updateScopedSettings(scope, (settings) => ({
+    const nextSettings = this.updateScopedSettings(scope, settings => ({
       ...settings,
       awayDelayMinutes: clampNumber(
         delayMinutes,
@@ -533,11 +534,11 @@ class ConfigManager {
   ): Promise<boolean> {
     const cacheKey = scopedUserCacheKey(scope, userId);
     const cached = getAwayUserEnabledCache(cacheKey);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) { return cached; }
 
     const value = await getConfigValue(
       scopedUserSettingKey(scope, userId, AWAY_USER_ENABLED_SETTING),
-      "false",
+      'false',
     );
     const enabled = parseBoolean(value, false);
     setAwayUserEnabledCache(cacheKey, enabled);
@@ -562,11 +563,11 @@ class ConfigManager {
   ): Promise<number | null> {
     const cacheKey = scopedUserCacheKey(scope, userId);
     const cached = getAwayLastSentAtCache(cacheKey);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) { return cached; }
 
     const value = await getConfigValue(
       scopedUserSettingKey(scope, userId, AWAY_USER_LAST_SENT_SETTING),
-      "",
+      '',
     );
     const timestamp = Number.parseInt(value, 10);
     if (Number.isFinite(timestamp) && timestamp > 0) {

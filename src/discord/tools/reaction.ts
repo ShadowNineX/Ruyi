@@ -1,9 +1,10 @@
-import { tool } from "@openai/agents";
-import { z } from "zod";
-import { PermissionFlagsBits, type Message, type MessageReaction } from "discord.js";
-import { toolLogger } from "../../logger";
-import { toolContextManager, formatError } from "../../utils/types";
-import { requesterHasChannelPermission } from "../utils/discord-permissions";
+import type { Message, MessageReaction } from 'discord.js';
+import { tool } from '@openai/agents';
+import { PermissionFlagsBits } from 'discord.js';
+import { z } from 'zod';
+import { toolLogger } from '../../logger';
+import { formatError, toolContextManager } from '../../utils/types';
+import { requesterHasChannelPermission } from '../utils/discord-permissions';
 
 // Find a reaction by emoji (handles unicode and custom emojis)
 function findReaction(
@@ -15,25 +16,25 @@ function findReaction(
     const emojiName = r.emoji.name;
     const emojiId = r.emoji.id;
     return (
-      emojiStr === emoji ||
-      emojiName === emoji ||
-      (emojiId && emoji.includes(emojiId))
+      emojiStr === emoji
+      || emojiName === emoji
+      || (emojiId && emoji.includes(emojiId))
     );
   });
 }
 
 export const reactionTool = tool({
-  name: "manage_reaction",
+  name: 'manage_reaction',
   description:
-    "Add or remove emoji reactions on messages. Can target the current message, the message the user replied to, or any message by ID.",
+    'Add or remove emoji reactions on messages. Can target the current message, the message the user replied to, or any message by ID.',
   parameters: z.object({
     action: z
-      .enum(["add", "remove"])
-      .describe("Whether to add or remove the reaction."),
+      .enum(['add', 'remove'])
+      .describe('Whether to add or remove the reaction.'),
     emoji: z
       .string()
       .describe(
-        "The emoji to react with. Can be a unicode emoji (👍, ❤️, 🔥, 😊, 🎉, etc.) or a custom emoji in the format <:name:id> or <a:name:id> for animated.",
+        'The emoji to react with. Can be a unicode emoji (👍, ❤️, 🔥, 😊, 🎉, etc.) or a custom emoji in the format <:name:id> or <a:name:id> for animated.',
       ),
     message_id: z
       .string()
@@ -45,7 +46,7 @@ export const reactionTool = tool({
   execute: async ({ action, emoji, message_id }) => {
     const result = await toolContextManager.resolveTargetMessage(
       message_id,
-      "reaction",
+      'reaction',
     );
     if (!result.success) {
       return { error: result.error };
@@ -62,20 +63,20 @@ export const reactionTool = tool({
     ) {
       return {
         error:
-          "You need View Channel, Read Message History, and Add Reactions permission in this channel to ask Ruyi to manage reactions.",
+          'You need View Channel, Read Message History, and Add Reactions permission in this channel to ask Ruyi to manage reactions.',
       };
     }
 
     try {
-      if (action === "add") {
+      if (action === 'add') {
         await targetMessage.react(emoji);
         toolLogger.info(
           { emoji, messageId: targetMessage.id, action },
-          "Added reaction",
+          'Added reaction',
         );
         return {
           success: true,
-          action: "added",
+          action: 'added',
           emoji,
           messageId: targetMessage.id,
           messageUrl: targetMessage.url,
@@ -85,25 +86,25 @@ export const reactionTool = tool({
       // Remove the bot's own reaction
       const botUserId = ctx.message?.client.user?.id;
       if (!botUserId) {
-        return { error: "Could not determine bot user ID" };
+        return { error: 'Could not determine bot user ID' };
       }
 
       // Fetch fresh message to ensure we have latest reactions
       const channel = targetMessage.channel;
-      if (!("messages" in channel)) {
-        return { error: "Cannot access reactions in this channel type" };
+      if (!('messages' in channel)) {
+        return { error: 'Cannot access reactions in this channel type' };
       }
       const freshMessage = await channel.messages.fetch(targetMessage.id);
       const reaction = findReaction(freshMessage, emoji);
 
       if (!reaction) {
         const availableReactions = freshMessage.reactions.cache
-          .map((r) => r.emoji.toString())
-          .join(", ");
+          .map(r => r.emoji.toString())
+          .join(', ');
         return {
-          error: "Reaction not found on this message",
+          error: 'Reaction not found on this message',
           emoji,
-          availableReactions: availableReactions || "none",
+          availableReactions: availableReactions || 'none',
           messageId: targetMessage.id,
         };
       }
@@ -111,11 +112,11 @@ export const reactionTool = tool({
       await reaction.users.remove(botUserId);
       toolLogger.info(
         { emoji, messageId: targetMessage.id, action },
-        "Removed reaction",
+        'Removed reaction',
       );
       return {
         success: true,
-        action: "removed",
+        action: 'removed',
         emoji,
         messageId: targetMessage.id,
         messageUrl: targetMessage.url,
@@ -124,9 +125,9 @@ export const reactionTool = tool({
       const errorMessage = formatError(error);
       toolLogger.error(
         { error: errorMessage, emoji, action, message_id },
-        "Failed to manage reaction",
+        'Failed to manage reaction',
       );
-      return { error: "Failed to manage reaction", details: errorMessage };
+      return { error: 'Failed to manage reaction', details: errorMessage };
     }
   },
 });

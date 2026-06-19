@@ -1,22 +1,25 @@
-import { tool } from "@openai/agents";
-import { z } from "zod";
-import { conversationContext } from "../ai/context";
-import { toolLogger } from "../logger";
+import type {
+  resolveTimeZone,
+  TimeZoneResolution,
+} from '../utils/natural-time';
+import { tool } from '@openai/agents';
+import { z } from 'zod';
+import { conversationContext } from '../ai/context';
+import { toolLogger } from '../logger';
 import {
   expressionMentionsTimeTarget,
   parseNaturalTime,
-  resolveTimeZone,
   resolveTimeZoneFromExpression,
-  type TimeZoneResolution,
-} from "../utils/natural-time";
-import { formatError, toolContextManager } from "../utils/types";
+
+} from '../utils/natural-time';
+import { formatError, toolContextManager } from '../utils/types';
 
 function isDefaultZoneFromUnresolvedLocation(
-  source: ReturnType<typeof resolveTimeZone>["source"],
+  source: ReturnType<typeof resolveTimeZone>['source'],
   location: string | null | undefined,
   timeZone: string | null | undefined,
 ): boolean {
-  return source === "default" && Boolean(location?.trim()) && !timeZone?.trim();
+  return source === 'default' && Boolean(location?.trim()) && !timeZone?.trim();
 }
 
 async function fetchCurrentUserTimeZone(): Promise<{
@@ -24,7 +27,7 @@ async function fetchCurrentUserTimeZone(): Promise<{
   source: string;
 } | null> {
   const identity = toolContextManager.get().identity;
-  if (!identity) return null;
+  if (!identity) { return null; }
 
   return conversationContext.fetchUserTimeZone(identity);
 }
@@ -35,7 +38,7 @@ function shouldPreferUserLocalTarget(
   targetTimeZone: string | null | undefined,
   useUserTimezone: boolean,
 ): boolean {
-  if (!useUserTimezone) return false;
+  if (!useUserTimezone) { return false; }
   if (targetLocation && expressionMentionsTimeTarget(expression, targetLocation)) {
     return false;
   }
@@ -55,10 +58,10 @@ async function resolveToolTarget(
   targetLocation: string | null;
   targetTimeZone: string | null;
   targetContext:
-    | "expression_location"
-    | "user_local_memory"
-    | "provided_target"
-    | "default_reference";
+    | 'expression_location'
+    | 'user_local_memory'
+    | 'provided_target'
+    | 'default_reference';
   expressionResolution: TimeZoneResolution | null;
   userTimeZone: { timeZone: string; source: string } | null;
   needsUserTimeZone: boolean;
@@ -68,7 +71,7 @@ async function resolveToolTarget(
     return {
       targetLocation: expressionResolution.matchedLocation,
       targetTimeZone: expressionResolution.timeZone,
-      targetContext: "expression_location",
+      targetContext: 'expression_location',
       expressionResolution,
       userTimeZone: null,
       needsUserTimeZone: false,
@@ -87,7 +90,7 @@ async function resolveToolTarget(
     return {
       targetLocation: null,
       targetTimeZone: userTimeZone?.timeZone ?? null,
-      targetContext: userTimeZone ? "user_local_memory" : "default_reference",
+      targetContext: userTimeZone ? 'user_local_memory' : 'default_reference',
       expressionResolution,
       userTimeZone,
       needsUserTimeZone: !userTimeZone,
@@ -100,7 +103,7 @@ async function resolveToolTarget(
       return {
         targetLocation: null,
         targetTimeZone: userTimeZone.timeZone,
-        targetContext: "user_local_memory",
+        targetContext: 'user_local_memory',
         expressionResolution,
         userTimeZone,
         needsUserTimeZone: false,
@@ -112,7 +115,7 @@ async function resolveToolTarget(
     targetLocation: targetLocation ?? null,
     targetTimeZone: targetTimeZone ?? null,
     targetContext:
-      targetLocation || targetTimeZone ? "provided_target" : "default_reference",
+      targetLocation || targetTimeZone ? 'provided_target' : 'default_reference',
     expressionResolution,
     userTimeZone: null,
     needsUserTimeZone: false,
@@ -120,39 +123,39 @@ async function resolveToolTarget(
 }
 
 export const resolveTimeTool = tool({
-  name: "resolve_time",
+  name: 'resolve_time',
   description:
-    "Resolve natural-language time/date expressions, user-local time, preferred clock formats, and timezone conversions.",
+    'Resolve natural-language time/date expressions, user-local time, preferred clock formats, and timezone conversions.',
   parameters: z.object({
     expression: z
       .string()
       .nullable()
       .describe(
-        "Natural-language time expression to resolve, such as 'now', 'tonight', 'tomorrow 8pm', or 'next Friday'. Use null for the current time.",
+        'Natural-language time expression to resolve, such as \'now\', \'tonight\', \'tomorrow 8pm\', or \'next Friday\'. Use null for the current time.',
       ),
     target_location: z
       .string()
       .nullable()
       .describe(
-        "Optional place name like 'North Carolina', 'Sweden', 'Tokyo', or 'London'. Prefer this when the user names a place.",
+        'Optional place name like \'North Carolina\', \'Sweden\', \'Tokyo\', or \'London\'. Prefer this when the user names a place.',
       ),
     target_timezone: z
       .string()
       .nullable()
       .describe(
-        "Optional IANA timezone like 'America/New_York' or 'Europe/Stockholm'. Use this if known exactly.",
+        'Optional IANA timezone like \'America/New_York\' or \'Europe/Stockholm\'. Use this if known exactly.',
       ),
     use_user_timezone: z
       .boolean()
       .default(false)
       .describe(
-        "Set true when the user asks for their own local time/timezone. Code resolves the active user's stored timezone; do not pass user IDs.",
+        'Set true when the user asks for their own local time/timezone. Code resolves the active user\'s stored timezone; do not pass user IDs.',
       ),
     output_format: z
-      .enum(["natural", "24-hour", "12-hour"])
-      .default("natural")
+      .enum(['natural', '24-hour', '12-hour'])
+      .default('natural')
       .describe(
-        "Preferred time format for the answer. Use the user's explicit request first, then loaded memory preferences. Use 'natural' when neither exists.",
+        'Preferred time format for the answer. Use the user\'s explicit request first, then loaded memory preferences. Use \'natural\' when neither exists.',
       ),
   }),
   execute: async ({
@@ -170,7 +173,7 @@ export const resolveTimeTool = tool({
         use_user_timezone,
         output_format,
       },
-      "Resolving natural-language time",
+      'Resolving natural-language time',
     );
 
     try {
@@ -182,12 +185,12 @@ export const resolveTimeTool = tool({
       );
       if (target.needsUserTimeZone) {
         return {
-          error: "User local timezone is unknown",
+          error: 'User local timezone is unknown',
           needs_clarification: true,
           target_context: target.targetContext,
           requested_user_local_time: true,
           guidance:
-            "The user asked for their local time, but no user timezone memory was found. Ask briefly for their timezone/location, or use the context Discord timestamp only when a viewer-local current-time display is enough.",
+            'The user asked for their local time, but no user timezone memory was found. Ask briefly for their timezone/location, or use the context Discord timestamp only when a viewer-local current-time display is enough.',
         };
       }
 
@@ -205,16 +208,16 @@ export const resolveTimeTool = tool({
       ) {
         return {
           error:
-            "I could not map that location to a timezone. Ask for a city/state I know, or provide an IANA timezone like America/New_York.",
+            'I could not map that location to a timezone. Ask for a city/state I know, or provide an IANA timezone like America/New_York.',
           expression: parsed.expression,
           target_location: target.targetLocation,
         };
       }
 
       let preferredAnswerTime: string | null = null;
-      if (output_format === "24-hour") {
+      if (output_format === '24-hour') {
         preferredAnswerTime = parsed.localTime24h;
-      } else if (output_format === "12-hour") {
+      } else if (output_format === '12-hour') {
         preferredAnswerTime = parsed.localTime12h;
       }
 
@@ -240,7 +243,7 @@ export const resolveTimeTool = tool({
         ambiguity: parsed.ambiguity,
         assumptions: parsed.assumptions,
         guidance:
-          "For a remote place/timezone, mention the target-local time and day period. For user-local questions, use target_context=user_local_memory when present. If preferred_answer_time is null, choose between local_time_24h and local_time_12h from the user's loaded memories or the current request. Discord timestamps render in the viewer's own timezone, so do not rely on them alone for remote local time.",
+          'For a remote place/timezone, mention the target-local time and day period. For user-local questions, use target_context=user_local_memory when present. If preferred_answer_time is null, choose between local_time_24h and local_time_12h from the user\'s loaded memories or the current request. Discord timestamps render in the viewer\'s own timezone, so do not rely on them alone for remote local time.',
       };
     } catch (error) {
       const errorMessage = formatError(error);
@@ -253,7 +256,7 @@ export const resolveTimeTool = tool({
           output_format,
           error: errorMessage,
         },
-        "Natural-language time resolution failed",
+        'Natural-language time resolution failed',
       );
       return { error: errorMessage };
     }

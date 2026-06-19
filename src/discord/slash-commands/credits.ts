@@ -1,46 +1,48 @@
+import type { ChatInputCommandInteraction } from 'discord.js';
+import type { OpenAICostSummary } from '../../services/openai-billing';
 import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+
   EmbedBuilder,
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-} from "discord.js";
-import { botLogger } from "../../logger";
+} from 'discord.js';
+import { botLogger } from '../../logger';
 import {
   fetchOpenAIMonthToDateCosts,
   hasOpenAIBillingKey,
   OPENAI_BILLING_OVERVIEW_URL,
   OpenAIBillingError,
-  type OpenAICostSummary,
-} from "../../services/openai-billing";
+
+} from '../../services/openai-billing';
 
 const CREDITS_COLORS = {
-  neutral: 0x5865f2,
-  warning: 0xffaa00,
-  error: 0xcc3333,
+  neutral: 0x5865F2,
+  warning: 0xFFAA00,
+  error: 0xCC3333,
 } as const;
 
 export const creditsCommand = new SlashCommandBuilder()
-  .setName("credits")
-  .setDescription("View OpenAI billing spend and dashboard link")
+  .setName('credits')
+  .setDescription('View OpenAI billing spend and dashboard link')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
 
 function formatDate(unixSeconds: number): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC',
   }).format(new Date(unixSeconds * 1000));
 }
 
 function formatCost(value: number, currency: string): string {
   try {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
       currency,
     }).format(value);
   } catch {
@@ -49,17 +51,17 @@ function formatCost(value: number, currency: string): string {
 }
 
 function formatTotals(summary: OpenAICostSummary): string {
-  if (summary.totals.length === 0) return "$0.00 reported";
+  if (summary.totals.length === 0) { return '$0.00 reported'; }
 
   return summary.totals
-    .map((total) => formatCost(total.value, total.currency))
-    .join(", ");
+    .map(total => formatCost(total.value, total.currency))
+    .join(', ');
 }
 
 function buildBillingButton(): ActionRowBuilder<ButtonBuilder> {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setLabel("Open Billing Overview")
+      .setLabel('Open Billing Overview')
       .setStyle(ButtonStyle.Link)
       .setURL(OPENAI_BILLING_OVERVIEW_URL),
   );
@@ -67,25 +69,25 @@ function buildBillingButton(): ActionRowBuilder<ButtonBuilder> {
 
 function buildCreditsEmbed(summary: OpenAICostSummary): EmbedBuilder {
   return new EmbedBuilder()
-    .setTitle("OpenAI Credits")
+    .setTitle('OpenAI Credits')
     .setDescription(
-      "OpenAI exposes organization spend through the API. The dashboard link has the billing overview and remaining balance.",
+      'OpenAI exposes organization spend through the API. The dashboard link has the billing overview and remaining balance.',
     )
     .setColor(CREDITS_COLORS.neutral)
     .addFields(
       {
-        name: "Month-to-date spend",
+        name: 'Month-to-date spend',
         value: formatTotals(summary),
         inline: true,
       },
       {
-        name: "Window",
+        name: 'Window',
         value: `${formatDate(summary.startTime)} - ${formatDate(summary.endTime)} UTC`,
         inline: true,
       },
       {
-        name: "Balance",
-        value: "OpenAI does not expose the billing overview balance through the public API.",
+        name: 'Balance',
+        value: 'OpenAI does not expose the billing overview balance through the public API.',
       },
     )
     .setTimestamp();
@@ -93,29 +95,29 @@ function buildCreditsEmbed(summary: OpenAICostSummary): EmbedBuilder {
 
 function buildSetupEmbed(): EmbedBuilder {
   return new EmbedBuilder()
-    .setTitle("OpenAI Credits")
+    .setTitle('OpenAI Credits')
     .setDescription(
-      "`OPENAI_ADMIN_KEY` is not configured, so Ruyi cannot read organization costs yet.",
+      '`OPENAI_ADMIN_KEY` is not configured, so Ruyi cannot read organization costs yet.',
     )
     .setColor(CREDITS_COLORS.warning)
     .addFields({
-      name: "Needed",
+      name: 'Needed',
       value:
-        "Create an OpenAI organization admin key and add it as `OPENAI_ADMIN_KEY`.",
+        'Create an OpenAI organization admin key and add it as `OPENAI_ADMIN_KEY`.',
     })
     .setTimestamp();
 }
 
 function buildErrorEmbed(error: unknown): EmbedBuilder {
-  const status =
-    error instanceof OpenAIBillingError && error.status
+  const status
+    = error instanceof OpenAIBillingError && error.status
       ? ` (${error.status})`
-      : "";
-  const message =
-    error instanceof Error ? error.message : "Unknown billing error";
+      : '';
+  const message
+    = error instanceof Error ? error.message : 'Unknown billing error';
 
   return new EmbedBuilder()
-    .setTitle("OpenAI Credits Unavailable")
+    .setTitle('OpenAI Credits Unavailable')
     .setDescription(`${message}${status}`)
     .setColor(CREDITS_COLORS.error)
     .setTimestamp();
@@ -124,7 +126,7 @@ function buildErrorEmbed(error: unknown): EmbedBuilder {
 export async function handleCreditsCommand(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
-  botLogger.info({ user: interaction.user.username }, "/credits invoked");
+  botLogger.info({ user: interaction.user.username }, '/credits invoked');
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   if (!hasOpenAIBillingKey()) {
@@ -151,7 +153,7 @@ export async function handleCreditsCommand(
           error instanceof OpenAIBillingError ? error.status : undefined,
         user: interaction.user.username,
       },
-      "/credits failed",
+      '/credits failed',
     );
     await interaction.editReply({
       embeds: [buildErrorEmbed(error)],

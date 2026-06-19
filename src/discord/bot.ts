@@ -1,15 +1,16 @@
+import type { Interaction, Message, PartialMessage } from 'discord.js';
+import type { SessionStatusSnapshot } from '../stores';
+import type { ToolContext } from '../utils/types';
 import {
   ActivityType,
   Client,
   Events,
   GatewayIntentBits,
+
   Partials,
   REST,
   Routes,
-  type Interaction,
-  type Message,
-  type PartialMessage,
-} from "discord.js";
+} from 'discord.js';
 import {
   chatService,
   conversationContext,
@@ -17,63 +18,63 @@ import {
   permissionManager,
   replyClassifier,
   sessionManager,
-} from "../ai";
-import { runWithToolContext, type ToolContext } from "../utils/types";
-import { env } from "../env";
-import { userConfigScope } from "../config";
-import { selfRespondingToolNames } from "../tools";
-import { botLogger } from "../logger";
-import { handleCommands } from "./commands";
-import {
-  slashCommands,
-  handleSlashCommand,
-  handleSmitherySelect,
-  handleSmitheryUnlinkSelect,
-  handleSmitheryCheckButton,
-  handleSearchProviderSelect,
-  isSearchProviderSelect,
-  handleModelSelect,
-  isModelSelect,
-  handleMemoriesButton,
-  handleMemoriesModal,
-  isMemoriesButton,
-  isMemoriesModal,
-  handleReminderAutocomplete,
-} from "./slash-commands";
-import { ChatSession } from "./utils/chat-session";
-import {
-  fetchReplyChain,
-  fetchChatHistory,
-  fetchReferencedMessage,
-  formatMessageForAI,
-  getMessageImageInputs,
-  editReplyChunks,
-  sendReplyChunks,
-  getErrorMessage,
-} from "./utils/messages";
-import {
-  buildDiscordProfile,
-  buildDiscordUserProfile,
-  formatProfileContext,
-} from "./utils/discord-profile";
-import { buildDiscordUserIdentity } from "../utils/user-identity";
-import { messageSyncService } from "./services/message-sync";
-import { awayMessageService } from "./services/away-messages";
-import { reminderService } from "./services/reminders";
+} from '../ai';
+import { userConfigScope } from '../config';
 import {
   CHAT_TURN_TIMEOUT_MS,
   DISCORD_OPERATION_TIMEOUT_MS,
-} from "../constants";
+} from '../constants';
+import { env } from '../env';
+import { botLogger } from '../logger';
 import {
   deleteActiveChatTurn,
   getActiveChatTurn,
   getActivePresenceSession,
   getPresenceResetTimer,
+
   setActiveChatTurn,
   setActivePresenceSession,
   setPresenceResetTimer,
-  type SessionStatusSnapshot,
-} from "../stores";
+} from '../stores';
+import { selfRespondingToolNames } from '../tools';
+import { runWithToolContext } from '../utils/types';
+import { buildDiscordUserIdentity } from '../utils/user-identity';
+import { handleCommands } from './commands';
+import { awayMessageService } from './services/away-messages';
+import { messageSyncService } from './services/message-sync';
+import { reminderService } from './services/reminders';
+import {
+  handleMemoriesButton,
+  handleMemoriesModal,
+  handleModelSelect,
+  handleReminderAutocomplete,
+  handleSearchProviderSelect,
+  handleSlashCommand,
+  handleSmitheryCheckButton,
+  handleSmitherySelect,
+  handleSmitheryUnlinkSelect,
+  isMemoriesButton,
+  isMemoriesModal,
+  isModelSelect,
+  isSearchProviderSelect,
+  slashCommands,
+} from './slash-commands';
+import { ChatSession } from './utils/chat-session';
+import {
+  buildDiscordProfile,
+  buildDiscordUserProfile,
+  formatProfileContext,
+} from './utils/discord-profile';
+import {
+  editReplyChunks,
+  fetchChatHistory,
+  fetchReferencedMessage,
+  fetchReplyChain,
+  formatMessageForAI,
+  getErrorMessage,
+  getMessageImageInputs,
+  sendReplyChunks,
+} from './utils/messages';
 
 interface ResponseGate {
   isMentioned: boolean;
@@ -86,11 +87,11 @@ interface PresenceActivity {
   type: ActivityType;
 }
 
-const EDIT_REGENERATION_PREFIX =
-  "[The user edited this earlier Discord message after Ruyi already replied. Treat the edited message below as authoritative. Regenerate the answer for the edited version, but do not mention the edit unless it is necessary for clarity. Previous visible bot replies may reflect the pre-edit message.]";
+const EDIT_REGENERATION_PREFIX
+  = '[The user edited this earlier Discord message after Ruyi already replied. Treat the edited message below as authoritative. Regenerate the answer for the edited version, but do not mention the edit unless it is necessary for clarity. Previous visible bot replies may reflect the pre-edit message.]';
 
-const SIDE_EFFECT_EDIT_NOTICE =
-  "I noticed this request was edited after I had already answered. I have updated my context, but I will not repeat tool or external actions automatically from an edit. Please send a new message if you want me to redo the action.";
+const SIDE_EFFECT_EDIT_NOTICE
+  = 'I noticed this request was edited after I had already answered. I have updated my context, but I will not repeat tool or external actions automatically from an edit. Please send a new message if you want me to redo the action.';
 
 class RuyiBot {
   readonly client = new Client({
@@ -110,7 +111,7 @@ class RuyiBot {
 
   private setDefaultPresence(): void {
     this.setActivityPresence({
-      name: "over the pavilion",
+      name: 'over the pavilion',
       type: ActivityType.Watching,
     });
   }
@@ -135,14 +136,14 @@ class RuyiBot {
     snapshot: SessionStatusSnapshot,
   ): void {
     const status = snapshot.status;
-    if (status === "complete") {
+    if (status === 'complete') {
       this.setDefaultPresence();
       return;
     }
 
-    const toolName = snapshot.currentTool ?? "a tool";
+    const toolName = snapshot.currentTool ?? 'a tool';
     const activities: Record<
-      Exclude<SessionStatusSnapshot["status"], "complete">,
+      Exclude<SessionStatusSnapshot['status'], 'complete'>,
       PresenceActivity
     > = {
       thinking: {
@@ -162,7 +163,7 @@ class RuyiBot {
         type: ActivityType.Watching,
       },
       error: {
-        name: "for recovery",
+        name: 'for recovery',
         type: ActivityType.Watching,
       },
     };
@@ -172,10 +173,10 @@ class RuyiBot {
 
   private clearPresenceResetTimer(presenceSession?: symbol): void {
     const presenceResetTimer = getPresenceResetTimer();
-    if (!presenceResetTimer) return;
+    if (!presenceResetTimer) { return; }
     if (
-      presenceSession &&
-      presenceResetTimer.session !== presenceSession
+      presenceSession
+      && presenceResetTimer.session !== presenceSession
     ) {
       return;
     }
@@ -185,7 +186,7 @@ class RuyiBot {
   }
 
   private resetPresenceSession(presenceSession: symbol): void {
-    if (getActivePresenceSession() !== presenceSession) return;
+    if (getActivePresenceSession() !== presenceSession) { return; }
 
     setActivePresenceSession(null);
     this.setDefaultPresence();
@@ -197,14 +198,14 @@ class RuyiBot {
   ): void {
     this.clearPresenceResetTimer();
 
-    const timeoutMs =
-      CHAT_TURN_TIMEOUT_MS + DISCORD_OPERATION_TIMEOUT_MS + 5000;
+    const timeoutMs
+      = CHAT_TURN_TIMEOUT_MS + DISCORD_OPERATION_TIMEOUT_MS + 5000;
     const timer = setTimeout(() => {
-      if (getActivePresenceSession() !== presenceSession) return;
+      if (getActivePresenceSession() !== presenceSession) { return; }
 
       botLogger.warn(
         { ...context, timeoutMs },
-        "Presence session fallback reset fired",
+        'Presence session fallback reset fired',
       );
       this.resetPresenceSession(presenceSession);
     }, timeoutMs);
@@ -220,8 +221,8 @@ class RuyiBot {
     const botUser = this.client.user;
     const isMentioned = botUser ? message.mentions.has(botUser) : false;
     const isDM = message.channel.isDMBased();
-    const isReplyToBot =
-      Boolean(botUser) && referencedMessage?.author.id === botUser?.id;
+    const isReplyToBot
+      = Boolean(botUser) && referencedMessage?.author.id === botUser?.id;
 
     return { isMentioned, isDM, isReplyToBot };
   }
@@ -231,12 +232,12 @@ class RuyiBot {
     gate: ResponseGate,
   ): Promise<boolean> {
     const username = message.author.username;
-    const channelName = "name" in message.channel ? message.channel.name : "DM";
+    const channelName = 'name' in message.channel ? message.channel.name : 'DM';
 
     if (gate.isMentioned || gate.isDM || gate.isReplyToBot) {
       botLogger.info(
         { user: username, channel: channelName, ...gate },
-        "Replying to mention/DM/reply",
+        'Replying to mention/DM/reply',
       );
       return true;
     }
@@ -245,22 +246,22 @@ class RuyiBot {
       const classifierMessage = formatMessageForAI(message);
       const shouldRespond = await replyClassifier.shouldReply(
         classifierMessage,
-        this.client.user?.username ?? "Bot",
+        this.client.user?.username ?? 'Bot',
         message.channel.id,
       );
       botLogger.debug(
         {
           user: username,
           channel: channelName,
-          decision: shouldRespond ? "reply" : "skip",
+          decision: shouldRespond ? 'reply' : 'skip',
         },
-        "Reply classifier decision",
+        'Reply classifier decision',
       );
       return shouldRespond;
     } catch (error) {
       botLogger.error(
         { error: (error as Error)?.message, user: username },
-        "Reply classifier failed; skipping",
+        'Reply classifier failed; skipping',
       );
       return false;
     }
@@ -277,7 +278,7 @@ class RuyiBot {
     referencedMessage: Message | null,
   ): ToolContext {
     return {
-      surface: "discord",
+      surface: 'discord',
       identity: buildDiscordUserIdentity(
         message.author.id,
         message.author.username,
@@ -312,7 +313,7 @@ class RuyiBot {
       await sessionManager.recordAssistantMessages(
         message.channel.id,
         message.id,
-        sentChunks.map((chunk) => chunk.id),
+        sentChunks.map(chunk => chunk.id),
       );
       await awayMessageService.scheduleAfterHandledTurn(message);
       return;
@@ -325,11 +326,11 @@ class RuyiBot {
           channelId: message.channel.id,
           messageId: message.id,
         },
-        "Chat returned empty reply and no self-responding tool was used",
+        'Chat returned empty reply and no self-responding tool was used',
       );
       try {
         await message.reply(
-          "Forgive me, my lord — your humble servant could not produce a reply this time. Please try again in a moment.",
+          'Forgive me, my lord — your humble servant could not produce a reply this time. Please try again in a moment.',
         );
       } catch (replyError) {
         botLogger.error(
@@ -337,7 +338,7 @@ class RuyiBot {
             error: (replyError as Error).message,
             channelId: message.channel.id,
           },
-          "Failed to send empty-reply notice",
+          'Failed to send empty-reply notice',
         );
       }
       return;
@@ -372,9 +373,9 @@ class RuyiBot {
     const combinedHistory = [...replyChain, ...chatHistory];
     const profileContext = await this.buildCurrentUserProfileContext(message);
     const imageInputs = [
-      ...getMessageImageInputs(message, "current message"),
+      ...getMessageImageInputs(message, 'current message'),
       ...(toolCtx.referencedMessage
-        ? getMessageImageInputs(toolCtx.referencedMessage, "replied message")
+        ? getMessageImageInputs(toolCtx.referencedMessage, 'replied message')
         : []),
     ];
 
@@ -384,7 +385,7 @@ class RuyiBot {
         historyCount: chatHistory.length,
         imageInputCount: imageInputs.length,
       },
-      "Fetched message context",
+      'Fetched message context',
     );
 
     session.setReplyTarget(message);
@@ -406,7 +407,7 @@ class RuyiBot {
         ),
         userId: message.author.id,
         session,
-        surface: "discord",
+        surface: 'discord',
         identity,
         chatHistory: combinedHistory,
         imageInputs,
@@ -414,8 +415,7 @@ class RuyiBot {
         messageId: message.id,
         signal,
         persistUserMessage,
-      }),
-    );
+      }));
   }
 
   private async buildCurrentUserProfileContext(
@@ -437,9 +437,9 @@ class RuyiBot {
           channelId: message.channel.id,
           userId: message.author.id,
         },
-        "Could not build current user profile context",
+        'Could not build current user profile context',
       );
-      return "";
+      return '';
     }
   }
 
@@ -448,45 +448,45 @@ class RuyiBot {
     const error = new Error(
       `Chat turn timed out after ${timeoutSeconds} seconds`,
     );
-    error.name = "ChatTurnTimeoutError";
+    error.name = 'ChatTurnTimeoutError';
     return error;
   }
 
   private createChatTurnSupersededError(): Error {
     const error = new Error(
-      "Chat turn was superseded by a newer direct request",
+      'Chat turn was superseded by a newer direct request',
     );
-    error.name = "ChatTurnSupersededError";
+    error.name = 'ChatTurnSupersededError';
     return error;
   }
 
   private createChatTurnSourceDeletedError(): Error {
-    const error = new Error("Chat turn source message was deleted");
-    error.name = "ChatTurnSourceDeletedError";
+    const error = new Error('Chat turn source message was deleted');
+    error.name = 'ChatTurnSourceDeletedError';
     return error;
   }
 
   private throwIfAborted(signal: AbortSignal): void {
-    if (!signal.aborted) return;
+    if (!signal.aborted) { return; }
     const reason: unknown = signal.reason;
-    if (reason instanceof Error) throw reason;
+    if (reason instanceof Error) { throw reason; }
     throw this.createChatTurnTimeoutError();
   }
 
   private getAbortError(signal: AbortSignal): Error {
     const reason: unknown = signal.reason;
-    if (reason instanceof Error) return reason;
-    return new Error("Chat turn was aborted");
+    if (reason instanceof Error) { return reason; }
+    return new Error('Chat turn was aborted');
   }
 
   private abortActiveChatTurn(channelId: string, nextMessageId: string): void {
     const activeTurn = getActiveChatTurn(channelId);
-    if (!activeTurn || activeTurn.controller.signal.aborted) return;
+    if (!activeTurn || activeTurn.controller.signal.aborted) { return; }
 
     activeTurn.controller.abort(this.createChatTurnSupersededError());
     botLogger.warn(
       { channelId, nextMessageId },
-      "Aborted previous chat turn for newer direct request",
+      'Aborted previous chat turn for newer direct request',
     );
   }
 
@@ -495,14 +495,14 @@ class RuyiBot {
     messageIds: string[],
   ): void {
     const activeTurn = getActiveChatTurn(channelId);
-    if (!activeTurn || activeTurn.controller.signal.aborted) return;
+    if (!activeTurn || activeTurn.controller.signal.aborted) { return; }
 
     const deletedIds = new Set(messageIds);
     const sourceDeleted = deletedIds.has(activeTurn.messageId);
     const referenceDeleted = activeTurn.referencedMessageId
       ? deletedIds.has(activeTurn.referencedMessageId)
       : false;
-    if (!sourceDeleted && !referenceDeleted) return;
+    if (!sourceDeleted && !referenceDeleted) { return; }
 
     activeTurn.controller.abort(this.createChatTurnSourceDeletedError());
     botLogger.warn(
@@ -514,7 +514,7 @@ class RuyiBot {
         sourceDeleted,
         referenceDeleted,
       },
-      "Aborted active chat turn because its Discord context was deleted",
+      'Aborted active chat turn because its Discord context was deleted',
     );
   }
 
@@ -549,7 +549,7 @@ class RuyiBot {
     try {
       return await Promise.race([guardedOperation, timeoutPromise]);
     } finally {
-      if (timeout) clearTimeout(timeout);
+      if (timeout) { clearTimeout(timeout); }
     }
   }
 
@@ -559,7 +559,7 @@ class RuyiBot {
   ): Promise<void> {
     await this.withOperationTimeout(
       session.deleteStatusEmbed(),
-      "Tool embed delete",
+      'Tool embed delete',
       context,
     );
   }
@@ -570,7 +570,7 @@ class RuyiBot {
   ): Promise<void> {
     await this.withOperationTimeout(
       permissionManager.deletePromptMessages(turnId),
-      "Permission prompt cleanup",
+      'Permission prompt cleanup',
       context,
     );
   }
@@ -582,17 +582,17 @@ class RuyiBot {
   ): Promise<void> {
     await this.withOperationTimeout(
       message.reply(content),
-      "Error reply send",
+      'Error reply send',
       context,
     );
   }
 
   private getAbortPromise(signal: AbortSignal): Promise<never> {
-    if (signal.aborted) return Promise.reject(this.getAbortError(signal));
+    if (signal.aborted) { return Promise.reject(this.getAbortError(signal)); }
 
     return new Promise<never>((_resolve, reject) => {
       signal.addEventListener(
-        "abort",
+        'abort',
         () => {
           reject(this.getAbortError(signal));
         },
@@ -621,7 +621,7 @@ class RuyiBot {
             messageId: message.id,
             timeoutMs: CHAT_TURN_TIMEOUT_MS,
           },
-          "Chat turn watchdog timed out",
+          'Chat turn watchdog timed out',
         );
         reject(error);
       }, CHAT_TURN_TIMEOUT_MS);
@@ -634,7 +634,7 @@ class RuyiBot {
         this.getAbortPromise(signal),
       ]);
     } finally {
-      if (timeout) clearTimeout(timeout);
+      if (timeout) { clearTimeout(timeout); }
     }
   }
 
@@ -650,7 +650,7 @@ class RuyiBot {
     setActivePresenceSession(presenceSession);
     this.schedulePresenceReset(presenceSession, context);
     const session = new ChatSession(message.channel, (state) => {
-      if (getActivePresenceSession() !== presenceSession) return;
+      if (getActivePresenceSession() !== presenceSession) { return; }
       this.setSessionPresence(message.author.displayName, state);
     });
     session.onThinking();
@@ -661,7 +661,7 @@ class RuyiBot {
         abortController.abort(error);
         botLogger.warn(
           { ...context, timeoutMs: CHAT_TURN_TIMEOUT_MS },
-          "Edited message regeneration timed out",
+          'Edited message regeneration timed out',
         );
         reject(error);
       }, CHAT_TURN_TIMEOUT_MS);
@@ -680,7 +680,7 @@ class RuyiBot {
         this.getAbortPromise(signal),
       ]);
     } finally {
-      if (timeout) clearTimeout(timeout);
+      if (timeout) { clearTimeout(timeout); }
       session.cleanup();
       this.resetPresenceSession(presenceSession);
       this.clearPresenceResetTimer(presenceSession);
@@ -718,7 +718,7 @@ class RuyiBot {
           channelId: message.channel.id,
           messageId: message.id,
         },
-        "Edited message regeneration returned empty reply",
+        'Edited message regeneration returned empty reply',
       );
       return;
     }
@@ -732,7 +732,7 @@ class RuyiBot {
     await sessionManager.recordAssistantMessages(
       message.channel.id,
       message.id,
-      editedChunks.map((chunk) => chunk.id),
+      editedChunks.map(chunk => chunk.id),
     );
   }
 
@@ -741,7 +741,7 @@ class RuyiBot {
   ): Promise<Message | null> {
     try {
       const resolved = message.partial ? await message.fetch() : message;
-      if (resolved.author.bot) return null;
+      if (resolved.author.bot) { return null; }
       return resolved;
     } catch (error) {
       botLogger.debug(
@@ -750,7 +750,7 @@ class RuyiBot {
           channelId: message.channelId,
           messageId: message.id,
         },
-        "Could not fetch updated Discord message",
+        'Could not fetch updated Discord message',
       );
       return null;
     }
@@ -770,7 +770,7 @@ class RuyiBot {
       await sessionManager.recordAssistantMessages(
         message.channel.id,
         message.id,
-        editedChunks.map((chunk) => chunk.id),
+        editedChunks.map(chunk => chunk.id),
       );
     }
   }
@@ -780,7 +780,7 @@ class RuyiBot {
     newMessage: Message | PartialMessage,
   ): Promise<void> {
     const message = await this.resolveUpdatedUserMessage(newMessage);
-    if (!message) return;
+    if (!message) { return; }
 
     const formattedMessage = formatMessageForAI(message);
     const update = await conversationContext.updateMessageContent(
@@ -789,15 +789,15 @@ class RuyiBot {
       message.author.username,
       formattedMessage,
     );
-    if (!update.found || !update.changed || !update.oldContent) return;
+    if (!update.found || !update.changed || !update.oldContent) { return; }
 
-    const existingReplyIds =
-      await sessionManager.getAssistantReplyIdsForUserMessage(
+    const existingReplyIds
+      = await sessionManager.getAssistantReplyIdsForUserMessage(
         message.channel.id,
         message.id,
       );
-    const sessionInvalidated =
-      await sessionManager.invalidateIfUserMessageEdited(
+    const sessionInvalidated
+      = await sessionManager.invalidateIfUserMessageEdited(
         message.channel.id,
         message.id,
       );
@@ -815,10 +815,10 @@ class RuyiBot {
         sessionInvalidated,
         ...assessment,
       },
-      "Processed edited Discord message",
+      'Processed edited Discord message',
     );
 
-    if (!assessment.meaningful || existingReplyIds.length === 0) return;
+    if (!assessment.meaningful || existingReplyIds.length === 0) { return; }
 
     this.abortActiveChatTurn(message.channel.id, message.id);
 
@@ -855,7 +855,7 @@ class RuyiBot {
           stack: (error as Error).stack,
           name: (error as Error).name,
         },
-        "Failed to regenerate reply after message edit",
+        'Failed to regenerate reply after message edit',
       );
     } finally {
       if (
@@ -867,10 +867,10 @@ class RuyiBot {
   }
 
   private async handleAIChat(message: Message): Promise<void> {
-    const referencedMessage =
-      (await this.withOperationTimeout(
+    const referencedMessage
+      = (await this.withOperationTimeout(
         fetchReferencedMessage(message),
-        "Referenced message fetch",
+        'Referenced message fetch',
         {
           user: message.author.username,
           channelId: message.channel.id,
@@ -878,7 +878,7 @@ class RuyiBot {
         },
       )) ?? null;
     const gate = this.computeResponseGate(message, referencedMessage);
-    if (!(await this.shouldBotRespond(message, gate))) return;
+    if (!(await this.shouldBotRespond(message, gate))) { return; }
     if (this.isDirectResponseGate(gate)) {
       this.abortActiveChatTurn(message.channel.id, message.id);
     }
@@ -898,7 +898,7 @@ class RuyiBot {
       messageId: message.id,
     });
     const session = new ChatSession(message.channel, (state) => {
-      if (getActivePresenceSession() !== presenceSession) return;
+      if (getActivePresenceSession() !== presenceSession) { return; }
       this.setSessionPresence(displayName, state);
     });
     session.onThinking();
@@ -921,8 +921,8 @@ class RuyiBot {
         stack?: string;
         name?: string;
       };
-      const isSuperseded = err?.name === "ChatTurnSupersededError";
-      const isSourceDeleted = err?.name === "ChatTurnSourceDeletedError";
+      const isSuperseded = err?.name === 'ChatTurnSupersededError';
+      const isSourceDeleted = err?.name === 'ChatTurnSourceDeletedError';
       const isSilentAbort = isSuperseded || isSourceDeleted;
       const logPayload = {
         status: err?.status ?? err?.code,
@@ -937,10 +937,10 @@ class RuyiBot {
       if (isSilentAbort) {
         botLogger.warn(
           logPayload,
-          "Chat turn stopped without user-facing error",
+          'Chat turn stopped without user-facing error',
         );
       } else {
-        botLogger.error(logPayload, "Failed to generate reply");
+        botLogger.error(logPayload, 'Failed to generate reply');
       }
 
       await this.deleteStatusEmbedSafely(session, logPayload);
@@ -969,9 +969,9 @@ class RuyiBot {
     message: Message,
   ): Promise<void> => {
     try {
-      if (message.author.bot) return;
+      if (message.author.bot) { return; }
       awayMessageService.recordUserActivity(message);
-      if (await handleCommands(message)) return;
+      if (await handleCommands(message)) { return; }
       await this.handleAIChat(message);
     } catch (error) {
       botLogger.error(
@@ -983,7 +983,7 @@ class RuyiBot {
           channelId: message.channel.id,
           messageId: message.id,
         },
-        "Message dispatch failed",
+        'Message dispatch failed',
       );
     }
   };
@@ -993,13 +993,13 @@ class RuyiBot {
   private async registerSlashCommands() {
     const rest = new REST().setToken(env.DISCORD_TOKEN);
     try {
-      const commands = slashCommands.map((cmd) => cmd.toJSON());
+      const commands = slashCommands.map(cmd => cmd.toJSON());
       await rest.put(Routes.applicationCommands(this.client.user!.id), {
         body: commands,
       });
-      botLogger.info({ count: commands.length }, "Registered slash commands");
+      botLogger.info({ count: commands.length }, 'Registered slash commands');
     } catch (error) {
-      botLogger.error({ error }, "Failed to register slash commands");
+      botLogger.error({ error }, 'Failed to register slash commands');
     }
   }
 
@@ -1011,38 +1011,38 @@ class RuyiBot {
     } else if (interaction.isChatInputCommand()) {
       await handleSlashCommand(interaction);
     } else if (
-      interaction.isStringSelectMenu() &&
-      isSearchProviderSelect(interaction.customId)
+      interaction.isStringSelectMenu()
+      && isSearchProviderSelect(interaction.customId)
     ) {
       await handleSearchProviderSelect(interaction);
     } else if (
-      interaction.isStringSelectMenu() &&
-      isModelSelect(interaction.customId)
+      interaction.isStringSelectMenu()
+      && isModelSelect(interaction.customId)
     ) {
       await handleModelSelect(interaction);
     } else if (
-      interaction.isStringSelectMenu() &&
-      interaction.customId === "smithery_select_server"
+      interaction.isStringSelectMenu()
+      && interaction.customId === 'smithery_select_server'
     ) {
       await handleSmitherySelect(interaction);
     } else if (
-      interaction.isStringSelectMenu() &&
-      interaction.customId === "smithery_unlink_server"
+      interaction.isStringSelectMenu()
+      && interaction.customId === 'smithery_unlink_server'
     ) {
       await handleSmitheryUnlinkSelect(interaction);
     } else if (
-      interaction.isButton() &&
-      interaction.customId.startsWith("smithery_check:")
+      interaction.isButton()
+      && interaction.customId.startsWith('smithery_check:')
     ) {
       await handleSmitheryCheckButton(interaction);
     } else if (
-      interaction.isButton() &&
-      isMemoriesButton(interaction.customId)
+      interaction.isButton()
+      && isMemoriesButton(interaction.customId)
     ) {
       await handleMemoriesButton(interaction);
     } else if (
-      interaction.isModalSubmit() &&
-      isMemoriesModal(interaction.customId)
+      interaction.isModalSubmit()
+      && isMemoriesModal(interaction.customId)
     ) {
       await handleMemoriesModal(interaction);
     }
@@ -1050,7 +1050,7 @@ class RuyiBot {
 
   registerEvents() {
     this.client.once(Events.ClientReady, async (readyClient) => {
-      botLogger.info({ tag: readyClient.user.tag }, "Bot logged in");
+      botLogger.info({ tag: readyClient.user.tag }, 'Bot logged in');
       this.setDefaultPresence();
       await this.registerSlashCommands();
       messageSyncService.start(this.client);
@@ -1078,7 +1078,7 @@ class RuyiBot {
 
     this.client.on(Events.MessageBulkDelete, async (messages, channel) => {
       const messageIds = [...messages.keys()];
-      if (messageIds.length === 0) return;
+      if (messageIds.length === 0) { return; }
 
       this.abortActiveChatTurnIfMessagesDeleted(channel.id, messageIds);
       await messageSyncService.deleteMessages(channel.id, messageIds);
@@ -1086,7 +1086,7 @@ class RuyiBot {
   }
 
   start() {
-    botLogger.info("Starting bot...");
+    botLogger.info('Starting bot...');
     return this.client.login(env.DISCORD_TOKEN);
   }
 }

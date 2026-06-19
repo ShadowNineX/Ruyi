@@ -1,6 +1,7 @@
-import mongoose, { Schema, type Document } from "mongoose";
+import type { Document } from 'mongoose';
+import mongoose, { Schema } from 'mongoose';
 
-export type MemoryScope = "user";
+export type MemoryScope = 'user';
 
 export interface IMemory extends Document {
   key: string;
@@ -10,7 +11,7 @@ export interface IMemory extends Document {
   username: string | null;
   createdBy: string;
   pinned: boolean;
-  source: "user" | "auto";
+  source: 'user' | 'auto';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -19,12 +20,12 @@ const MemorySchema = new Schema<IMemory>(
   {
     key: { type: String, required: true },
     value: { type: String, required: true },
-    scope: { type: String, enum: ["user"], required: true },
+    scope: { type: String, enum: ['user'], required: true },
     personId: { type: String, required: true },
     username: { type: String, default: null },
     createdBy: { type: String, required: true },
     pinned: { type: Boolean, default: false, index: true },
-    source: { type: String, enum: ["user", "auto"], default: "user" },
+    source: { type: String, enum: ['user', 'auto'], default: 'user' },
   },
   { timestamps: true },
 );
@@ -34,4 +35,4 @@ MemorySchema.index({ key: 1, personId: 1 }, { unique: true });
 // Fast lookups for pinned memories per platform-linked person.
 MemorySchema.index({ personId: 1, pinned: 1 });
 
-export const Memory = mongoose.model<IMemory>("Memory", MemorySchema);
+export const Memory = mongoose.model<IMemory>('Memory', MemorySchema);

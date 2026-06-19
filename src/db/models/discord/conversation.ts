@@ -1,4 +1,5 @@
-import mongoose, { Schema, type Document, type Model } from "mongoose";
+import type { Document, Model } from 'mongoose';
+import mongoose, { Schema } from 'mongoose';
 
 export interface IDiscordConversationMessage {
   messageId: string;
@@ -35,12 +36,12 @@ const DiscordConversationSchema = new Schema<IDiscordConversation>({
   lastInteraction: { type: Date, default: Date.now },
 });
 
-export const DiscordConversation: Model<IDiscordConversation> =
-  (mongoose.models.DiscordConversation as
-    | Model<IDiscordConversation>
-    | undefined) ??
-  mongoose.model<IDiscordConversation>(
-    "DiscordConversation",
-    DiscordConversationSchema,
-    "discord_conversations",
-  );
+export const DiscordConversation: Model<IDiscordConversation>
+  = (mongoose.models.DiscordConversation as
+  | Model<IDiscordConversation>
+  | undefined)
+?? mongoose.model<IDiscordConversation>(
+  'DiscordConversation',
+  DiscordConversationSchema,
+  'discord_conversations',
+);

@@ -1,56 +1,58 @@
+import type { ButtonInteraction, ChatInputCommandInteraction, StringSelectMenuInteraction } from 'discord.js';
+import type { SmitheryConnectionScope, SmitheryServerId } from '../../db/models';
+import type { SmitheryConnectionSnapshot } from '../../mcp/smithery-api';
 import {
   ActionRowBuilder,
   ButtonBuilder,
+
   ButtonStyle,
+
   EmbedBuilder,
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
-  type ButtonInteraction,
-  type ChatInputCommandInteraction,
-  type StringSelectMenuInteraction,
-} from "discord.js";
-import { formatConfigScope, userConfigScope } from "../../config";
+
+} from 'discord.js';
+import { formatConfigScope, userConfigScope } from '../../config';
 import {
   clearSmitheryConnection,
   getSmitheryConnection,
   isSmitheryConnectionScope,
-  type SmitheryConnectionScope,
-  type SmitheryServerId,
-} from "../../db/models";
-import { botLogger } from "../../logger";
+
+} from '../../db/models';
+import { botLogger } from '../../logger';
 import {
   createOrUpdateSmitheryConnection,
   deleteSmitheryConnection,
   isSmitheryConfigured,
   refreshSmitheryConnection,
-  type SmitheryConnectionSnapshot,
-} from "../../mcp/smithery-api";
+
+} from '../../mcp/smithery-api';
 import {
   parseSmitheryServerId,
   SMITHERY_SERVERS,
-} from "./smithery/constants";
-import { getSmitheryLinkState } from "./smithery/state";
+} from './smithery/constants';
+import { getSmitheryLinkState } from './smithery/state';
 import {
   addAuthorizationButtons,
   buildAuthorizationDescription,
   buildInvalidSmitheryServerEmbed,
   buildSmitheryManagerEmbed,
   buildSmitheryManagerRows,
-} from "./smithery/ui";
+} from './smithery/ui';
 
 export const smitheryCommand = new SlashCommandBuilder()
-  .setName("smithery")
-  .setDescription("Authorize Smithery MCP servers (YouTube)");
+  .setName('smithery')
+  .setDescription('Authorize Smithery MCP servers (YouTube)');
 
-type SmitheryInteraction =
-  | ChatInputCommandInteraction
-  | StringSelectMenuInteraction
-  | ButtonInteraction;
+type SmitheryInteraction
+  = | ChatInputCommandInteraction
+    | StringSelectMenuInteraction
+    | ButtonInteraction;
 
-type SmitheryComponentInteraction =
-  | StringSelectMenuInteraction
-  | ButtonInteraction;
+type SmitheryComponentInteraction
+  = | StringSelectMenuInteraction
+    | ButtonInteraction;
 
 interface AuthorizedSmitherySelection {
   scope: SmitheryConnectionScope;
@@ -61,8 +63,8 @@ function getInteractionScope(
   interaction: SmitheryInteraction,
 ): SmitheryConnectionScope {
   const scope = userConfigScope(interaction.guildId, interaction.user.id);
-  if (isSmitheryConnectionScope(scope)) return scope;
-  throw new Error("Smithery is only available in Discord scopes.");
+  if (isSmitheryConnectionScope(scope)) { return scope; }
+  throw new Error('Smithery is only available in Discord scopes.');
 }
 
 function canManageScope(
@@ -70,9 +72,9 @@ function canManageScope(
   scope: SmitheryConnectionScope,
 ): boolean {
   return (
-    scope.kind === "discord:dm" ||
-    (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ??
-      false)
+    scope.kind === 'discord:dm'
+    || (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
+      ?? false)
   );
 }
 
@@ -80,10 +82,10 @@ async function rejectUnauthorizedSmitheryScope(
   interaction: SmitheryInteraction,
   scope: SmitheryConnectionScope,
 ): Promise<boolean> {
-  if (canManageScope(interaction, scope)) return false;
+  if (canManageScope(interaction, scope)) { return false; }
 
-  const content =
-    "You need **Manage Server** to change this server's Smithery links.";
+  const content
+    = 'You need **Manage Server** to change this server\'s Smithery links.';
 
   if (interaction.isChatInputCommand()) {
     await interaction.reply({ content, flags: MessageFlags.Ephemeral });
@@ -100,17 +102,17 @@ async function resolveAuthorizedSmitherySelection(
   interaction: StringSelectMenuInteraction,
   expectedCustomId: string,
 ): Promise<AuthorizedSmitherySelection | null> {
-  if (interaction.customId !== expectedCustomId) return null;
+  if (interaction.customId !== expectedCustomId) { return null; }
 
   await interaction.deferUpdate();
   const scope = getInteractionScope(interaction);
-  if (await rejectUnauthorizedSmitheryScope(interaction, scope)) return null;
+  if (await rejectUnauthorizedSmitheryScope(interaction, scope)) { return null; }
 
   const selectedValue = interaction.values[0];
   const serverId = selectedValue ? parseSmitheryServerId(selectedValue) : null;
   if (!serverId) {
     await interaction.editReply({
-      embeds: [buildInvalidSmitheryServerEmbed(selectedValue ?? "unknown")],
+      embeds: [buildInvalidSmitheryServerEmbed(selectedValue ?? 'unknown')],
       components: [],
     });
     return null;
@@ -160,10 +162,10 @@ export async function handleSmitheryCommand(
   const scope = getInteractionScope(interaction);
   botLogger.debug(
     { user: interaction.user.username, scope: scope.kind, scopeId: scope.id },
-    "Smithery authorize command",
+    'Smithery authorize command',
   );
 
-  if (await rejectUnauthorizedSmitheryScope(interaction, scope)) return;
+  if (await rejectUnauthorizedSmitheryScope(interaction, scope)) { return; }
 
   if (!isSmitheryConfigured()) {
     await interaction.reply({
@@ -197,16 +199,16 @@ export async function handleSmitherySelect(
 ): Promise<void> {
   const selection = await resolveAuthorizedSmitherySelection(
     interaction,
-    "smithery_select_server",
+    'smithery_select_server',
   );
-  if (!selection) return;
+  if (!selection) { return; }
   const { scope, serverId } = selection;
 
   try {
     await startSmitherySetup(interaction, scope, serverId);
   } catch (error) {
-    botLogger.error({ error, serverId }, "Failed to start Smithery setup");
-    await editSmitheryErrorReply(interaction, "Setup Failed", error);
+    botLogger.error({ error, serverId }, 'Failed to start Smithery setup');
+    await editSmitheryErrorReply(interaction, 'Setup Failed', error);
   }
 }
 
@@ -215,9 +217,9 @@ export async function handleSmitheryUnlinkSelect(
 ): Promise<void> {
   const selection = await resolveAuthorizedSmitherySelection(
     interaction,
-    "smithery_unlink_server",
+    'smithery_unlink_server',
   );
-  if (!selection) return;
+  if (!selection) { return; }
   const { scope, serverId } = selection;
 
   try {
@@ -226,7 +228,7 @@ export async function handleSmitheryUnlinkSelect(
     const serverInfo = SMITHERY_SERVERS[serverId];
     botLogger.error(
       { error, serverId, user: interaction.user.username },
-      "Failed to unlink Smithery service",
+      'Failed to unlink Smithery service',
     );
     await editSmitheryErrorReply(
       interaction,
@@ -240,11 +242,11 @@ export async function handleSmitheryCheckButton(
   interaction: ButtonInteraction,
 ): Promise<void> {
   const serverId = parseSmitheryCheckCustomId(interaction.customId);
-  if (!serverId) return;
+  if (!serverId) { return; }
 
   await interaction.deferUpdate();
   const scope = getInteractionScope(interaction);
-  if (await rejectUnauthorizedSmitheryScope(interaction, scope)) return;
+  if (await rejectUnauthorizedSmitheryScope(interaction, scope)) { return; }
 
   try {
     const snapshot = await refreshSmitheryConnection(scope, serverId);
@@ -252,11 +254,11 @@ export async function handleSmitheryCheckButton(
   } catch (error) {
     botLogger.error(
       { error, serverId, user: interaction.user.username },
-      "Failed to refresh Smithery connection",
+      'Failed to refresh Smithery connection',
     );
     await editSmitheryErrorReply(
       interaction,
-      "Status Check Failed",
+      'Status Check Failed',
       error,
       buildSetupRetryComponents(serverId),
     );
@@ -280,7 +282,7 @@ async function startSmitherySetup(
         .setDescription(
           `**${serverInfo.name}** is already linked, so it is hidden from the setup menu.`,
         )
-        .setColor(0x5865f2),
+        .setColor(0x5865F2),
     );
     return;
   }
@@ -293,7 +295,7 @@ async function startSmitherySetup(
       serverId,
       status: snapshot.status,
     },
-    "Smithery connection created or updated",
+    'Smithery connection created or updated',
   );
   await showConnectionState(interaction, scope, serverId, snapshot);
 }
@@ -314,7 +316,7 @@ async function unlinkSmitheryServer(
 
   botLogger.info(
     { scope: scope.kind, scopeId: scope.id, serverId, user: interaction.user.username },
-    "Smithery service unlinked",
+    'Smithery service unlinked',
   );
 
   await editSmitheryManagerReply(
@@ -323,10 +325,10 @@ async function unlinkSmitheryServer(
     new EmbedBuilder()
       .setTitle(`${serverInfo.emoji} ${serverInfo.name} Unlinked`)
       .setDescription(
-        `Ruyi's saved Smithery connection for **${serverInfo.name}** has been removed.\n\n` +
-          "You can set it up again from the menu below.",
+        `Ruyi's saved Smithery connection for **${serverInfo.name}** has been removed.\n\n`
+        + 'You can set it up again from the menu below.',
       )
-      .setColor(0x00aa88),
+      .setColor(0x00AA88),
   );
 }
 
@@ -338,23 +340,23 @@ async function showConnectionState(
 ): Promise<void> {
   const serverInfo = SMITHERY_SERVERS[serverId];
 
-  if (snapshot.status === "connected") {
+  if (snapshot.status === 'connected') {
     await editSmitheryManagerReply(
       interaction,
       scope,
       new EmbedBuilder()
         .setTitle(`${serverInfo.emoji} ${serverInfo.name} Connected`)
         .setDescription(
-          `**${serverInfo.name}** is connected through Smithery for ${formatConfigScope(scope)}.\n\n` +
-            "Smithery now owns the downstream authorization for this service.",
+          `**${serverInfo.name}** is connected through Smithery for ${formatConfigScope(scope)}.\n\n`
+          + 'Smithery now owns the downstream authorization for this service.',
         )
-        .setColor(0x00ff00),
+        .setColor(0x00FF00),
     );
     return;
   }
 
-  const title =
-    snapshot.status === "auth_required" || snapshot.status === "input_required"
+  const title
+    = snapshot.status === 'auth_required' || snapshot.status === 'input_required'
       ? `${serverInfo.emoji} Finish ${serverInfo.name} Setup`
       : `${serverInfo.emoji} ${serverInfo.name} Needs Attention`;
   const setupUrl = snapshot.setupUrl;
@@ -365,11 +367,11 @@ async function showConnectionState(
         new EmbedBuilder()
           .setTitle(title)
           .setDescription(
-            `${buildAuthorizationDescription(setupUrl)}\n\n` +
-              `Current status: **${snapshot.status}**` +
-              (snapshot.errorMessage ? `\n${snapshot.errorMessage}` : ""),
+            `${buildAuthorizationDescription(setupUrl)}\n\n`
+            + `Current status: **${snapshot.status}**${
+              snapshot.errorMessage ? `\n${snapshot.errorMessage}` : ''}`,
           )
-          .setColor(snapshot.status === "error" ? 0xff0000 : 0xffa500),
+          .setColor(snapshot.status === 'error' ? 0xFF0000 : 0xFFA500),
       ],
       components: buildSetupComponents(setupUrl, serverId),
     });
@@ -381,11 +383,11 @@ async function showConnectionState(
       new EmbedBuilder()
         .setTitle(title)
         .setDescription(
-          `Smithery returned status **${snapshot.status}**, but did not include a setup URL.\n\n` +
-            `Current status: **${snapshot.status}**` +
-            (snapshot.errorMessage ? `\n${snapshot.errorMessage}` : ""),
+          `Smithery returned status **${snapshot.status}**, but did not include a setup URL.\n\n`
+          + `Current status: **${snapshot.status}**${
+            snapshot.errorMessage ? `\n${snapshot.errorMessage}` : ''}`,
         )
-        .setColor(snapshot.status === "error" ? 0xff0000 : 0xffa500),
+        .setColor(snapshot.status === 'error' ? 0xFF0000 : 0xFFA500),
     ],
     components: buildSetupRetryComponents(serverId),
   });
@@ -407,30 +409,30 @@ function buildSetupRetryComponents(
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(`smithery_check:${serverId}`)
-        .setLabel("Check Status")
+        .setLabel('Check Status')
         .setStyle(ButtonStyle.Success),
     ),
   ];
 }
 
 function parseSmitheryCheckCustomId(customId: string): SmitheryServerId | null {
-  if (!customId.startsWith("smithery_check:")) return null;
-  return parseSmitheryServerId(customId.slice("smithery_check:".length));
+  if (!customId.startsWith('smithery_check:')) { return null; }
+  return parseSmitheryServerId(customId.slice('smithery_check:'.length));
 }
 
 function buildSmitheryConfigMissingEmbed(): EmbedBuilder {
   return new EmbedBuilder()
-    .setTitle("Smithery Connect Not Configured")
+    .setTitle('Smithery Connect Not Configured')
     .setDescription(
-      "Set `SMITHERY_API_KEY` and `SMITHERY_NAMESPACE` in the bot environment, then restart Ruyi.\n\n" +
-        "After that, `/smithery` can create hosted setup links instead of asking you to paste authorization codes.",
+      'Set `SMITHERY_API_KEY` and `SMITHERY_NAMESPACE` in the bot environment, then restart Ruyi.\n\n'
+      + 'After that, `/smithery` can create hosted setup links instead of asking you to paste authorization codes.',
     )
-    .setColor(0xffa500);
+    .setColor(0xFFA500);
 }
 
 function buildSmitheryErrorEmbed(title: string, error: unknown): EmbedBuilder {
   return new EmbedBuilder()
     .setTitle(title)
-    .setDescription(error instanceof Error ? error.message : "Unknown error")
-    .setColor(0xff0000);
+    .setDescription(error instanceof Error ? error.message : 'Unknown error')
+    .setColor(0xFF0000);
 }

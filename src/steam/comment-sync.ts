@@ -1,4 +1,4 @@
-import { dateToTime } from "../utils/date";
+import { dateToTime } from '../utils/date';
 
 export interface VisibleSteamComment {
   id: string;
@@ -16,7 +16,7 @@ export interface SteamCommentWindow {
 }
 
 function isSyntheticCommentId(commentId: string): boolean {
-  return commentId.startsWith("ruyi:");
+  return commentId.startsWith('ruyi:');
 }
 
 function oldestVisibleCommentTime(comments: VisibleSteamComment[]): number | null {
@@ -24,7 +24,7 @@ function oldestVisibleCommentTime(comments: VisibleSteamComment[]): number | nul
     const time = dateToTime(comment.date);
     return time === null ? [] : [time];
   });
-  if (times.length === 0) return null;
+  if (times.length === 0) { return null; }
   return Math.min(...times);
 }
 
@@ -33,20 +33,20 @@ export function findDeletedSteamCommentIds(
   visibleWindow: SteamCommentWindow,
 ): string[] {
   const visibleIds = new Set(
-    visibleWindow.comments.map((comment) => comment.id),
+    visibleWindow.comments.map(comment => comment.id),
   );
-  const fetchedWholeProfile =
-    visibleWindow.totalCount <= visibleWindow.comments.length;
+  const fetchedWholeProfile
+    = visibleWindow.totalCount <= visibleWindow.comments.length;
   const oldestVisibleTime = oldestVisibleCommentTime(visibleWindow.comments);
 
   return archivedComments
     .filter((comment) => {
-      if (isSyntheticCommentId(comment.commentId)) return false;
-      if (visibleIds.has(comment.commentId)) return false;
-      if (fetchedWholeProfile) return true;
-      if (oldestVisibleTime === null) return false;
+      if (isSyntheticCommentId(comment.commentId)) { return false; }
+      if (visibleIds.has(comment.commentId)) { return false; }
+      if (fetchedWholeProfile) { return true; }
+      if (oldestVisibleTime === null) { return false; }
       const archivedTime = dateToTime(comment.timestamp);
       return archivedTime === null ? false : archivedTime >= oldestVisibleTime;
     })
-    .map((comment) => comment.commentId);
+    .map(comment => comment.commentId);
 }

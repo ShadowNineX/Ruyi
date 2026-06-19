@@ -1,14 +1,14 @@
-import { createStore } from "@tanstack/store";
-import type { BaseMessageOptions, Message, SendableChannels } from "discord.js";
+import type { BaseMessageOptions, Message, SendableChannels } from 'discord.js';
+import { createStore } from '@tanstack/store';
 
 export type PermissionPromptPayload = Pick<
   BaseMessageOptions,
-  "embeds" | "components"
+  'embeds' | 'components'
 >;
 
 export interface PermissionPromptController {
-  showPrompt(payload: PermissionPromptPayload): Promise<Message | null>;
-  releasePrompt(): void;
+  showPrompt: (payload: PermissionPromptPayload) => Promise<Message | null>;
+  releasePrompt: () => void;
 }
 
 export interface PermissionContext {
@@ -68,7 +68,7 @@ export function addPermissionPromptMessage(
 
 export function takePermissionPromptMessages(turnId: string): Set<Message> {
   const messages = permissionStore.state.promptMessagesByTurnId.get(turnId);
-  if (!messages) return new Set<Message>();
+  if (!messages) { return new Set<Message>(); }
 
   permissionStore.setState((state) => {
     const promptMessagesByTurnId = new Map(state.promptMessagesByTurnId);

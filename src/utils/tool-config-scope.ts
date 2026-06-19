@@ -1,15 +1,16 @@
+import type { ConfigScope } from '../config';
 import {
+
   guildConfigScope,
   steamProfileConfigScope,
   userConfigScope,
-  type ConfigScope,
-} from "../config";
-import { toolContextManager } from "./types";
+} from '../config';
+import { toolContextManager } from './types';
 
 export function getCurrentToolConfigScope(): ConfigScope | null {
   const ctx = toolContextManager.get();
 
-  if (ctx.surface === "steam") {
+  if (ctx.surface === 'steam') {
     return ctx.steam ? steamProfileConfigScope(ctx.steam.profileId) : null;
   }
 

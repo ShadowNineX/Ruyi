@@ -1,28 +1,28 @@
-import { tool } from "@openai/agents";
-import { z } from "zod";
-import { toolLogger } from "../../logger";
-import {
-  formatError,
-  toolContextManager,
-  type ToolContext,
-} from "../../utils/types";
+import type { DMChannel, Message, TextBasedChannel, TextChannel } from 'discord.js';
+import type { MessageMatchType, RankedMessageMatch, SearchableMessage } from '../../utils/message-search';
+import type { ToolContext } from '../../utils/types';
+import { tool } from '@openai/agents';
 import {
   ChannelType,
+
   PermissionFlagsBits,
-  type DMChannel,
-  type Message,
-  type TextBasedChannel,
-  type TextChannel,
-} from "discord.js";
-import { messageSyncService } from "../services/message-sync";
-import { requesterHasChannelPermission } from "../utils/discord-permissions";
+
+} from 'discord.js';
+import { z } from 'zod';
+import { toolLogger } from '../../logger';
 import {
+
   rankMessageMatches,
+
   summarizeMessageSearchMatches,
-  type MessageMatchType,
-  type RankedMessageMatch,
-  type SearchableMessage,
-} from "../../utils/message-search";
+} from '../../utils/message-search';
+import {
+  formatError,
+
+  toolContextManager,
+} from '../../utils/types';
+import { messageSyncService } from '../services/message-sync';
+import { requesterHasChannelPermission } from '../utils/discord-permissions';
 
 interface ReactionInfo {
   emoji: string;
@@ -51,7 +51,6 @@ interface FoundMessage {
   context_after?: MessageContextItem[];
 }
 
-type BotMessageTarget = "last" | "replied";
 type MessageHistoryChannel = TextChannel | DMChannel;
 
 interface LiveMessageSearchDocument extends SearchableMessage {
@@ -62,7 +61,7 @@ interface LiveMessageSearchDocument extends SearchableMessage {
 function hasMessageHistory(
   channel: TextBasedChannel | null,
 ): channel is MessageHistoryChannel {
-  return Boolean(channel && "messages" in channel);
+  return Boolean(channel && 'messages' in channel);
 }
 
 function isGuildTextChannel(
@@ -89,9 +88,9 @@ function canManageMessages(channel: TextBasedChannel | null): boolean {
 function matchesAuthor(msg: Message, authorFilter: string): boolean {
   const authorLower = authorFilter.toLowerCase();
   return (
-    msg.author.username.toLowerCase().includes(authorLower) ||
-    (msg.member?.displayName.toLowerCase().includes(authorLower) ?? false) ||
-    (msg.author.globalName?.toLowerCase().includes(authorLower) ?? false)
+    msg.author.username.toLowerCase().includes(authorLower)
+    || (msg.member?.displayName.toLowerCase().includes(authorLower) ?? false)
+    || (msg.author.globalName?.toLowerCase().includes(authorLower) ?? false)
   );
 }
 
@@ -107,8 +106,8 @@ function filterMessages(
   query: string | null,
 ): Message[] {
   let filtered = messages;
-  if (author) filtered = filtered.filter((m) => matchesAuthor(m, author));
-  if (query) filtered = filtered.filter((m) => matchesContent(m, query));
+  if (author) { filtered = filtered.filter(m => matchesAuthor(m, author)); }
+  if (query) { filtered = filtered.filter(m => matchesContent(m, query)); }
   return filtered;
 }
 
@@ -121,8 +120,8 @@ function clampLimit(
 }
 
 function truncateContent(content: string, maxLength: number): string {
-  if (content.length <= maxLength) return content;
-  return content.slice(0, maxLength - 3) + "...";
+  if (content.length <= maxLength) { return content; }
+  return `${content.slice(0, maxLength - 3)}...`;
 }
 
 function buildContextItem(message: Message): MessageContextItem {
@@ -136,9 +135,9 @@ function buildContextItem(message: Message): MessageContextItem {
 function buildLiveMessageContext(
   messages: Message[],
   messageId: string,
-): Pick<FoundMessage, "context_before" | "context_after"> {
-  const index = messages.findIndex((message) => message.id === messageId);
-  if (index === -1) return {};
+): Pick<FoundMessage, 'context_before' | 'context_after'> {
+  const index = messages.findIndex(message => message.id === messageId);
+  if (index === -1) { return {}; }
 
   return {
     context_before: messages
@@ -173,10 +172,10 @@ async function getChannelsToSearch(
     const textChannels = channels
       .filter((c): c is TextChannel => c?.type === ChannelType.GuildText)
       .filter(canReadMessageHistory)
-      .map((c) => c);
+      .map(c => c);
     toolLogger.info(
       { channelCount: textChannels.length },
-      "Searching all channels",
+      'Searching all channels',
     );
     return textChannels;
   }
@@ -185,8 +184,8 @@ async function getChannelsToSearch(
     const channels = await ctx.guild.channels.fetch();
     const targetChannel = channels.find(
       (c): c is TextChannel =>
-        c?.type === ChannelType.GuildText &&
-        c.name.toLowerCase().includes(channelName.toLowerCase()),
+        c?.type === ChannelType.GuildText
+        && c.name.toLowerCase().includes(channelName.toLowerCase()),
     );
     if (!targetChannel) {
       return `Channel "${channelName}" not found`;
@@ -199,12 +198,12 @@ async function getChannelsToSearch(
 
   if (hasMessageHistory(ctx.channel)) {
     if (!canReadMessageHistory(ctx.channel)) {
-      return "You need Read Message History permission to search this channel.";
+      return 'You need Read Message History permission to search this channel.';
     }
     return [ctx.channel];
   }
 
-  return "No valid channel to search";
+  return 'No valid channel to search';
 }
 
 // Helper: Build a FoundMessage from a Discord message
@@ -213,7 +212,7 @@ function buildFoundMessage(
   showReactions: boolean,
   includeChannel: boolean,
   match: RankedMessageMatch<LiveMessageSearchDocument> | null,
-  context: Pick<FoundMessage, "context_before" | "context_after">,
+  context: Pick<FoundMessage, 'context_before' | 'context_after'>,
   channelName?: string,
 ): FoundMessage {
   const result: FoundMessage = {
@@ -240,7 +239,7 @@ function buildFoundMessage(
   }
 
   if (showReactions && msg.reactions.cache.size > 0) {
-    result.reactions = msg.reactions.cache.map((r) => ({
+    result.reactions = msg.reactions.cache.map(r => ({
       emoji: r.emoji.toString(),
       count: r.count,
     }));
@@ -270,18 +269,18 @@ async function searchChannel(
     return { messages: results, searchedMessages: 0, summary: emptySummary };
   }
 
-  const fetchLimit =
-    query || author
+  const fetchLimit
+    = query || author
       ? Math.min(Math.max(searchLimit * 10, 50), 100)
       : searchLimit;
   const messages = await channel.messages.fetch({ limit: fetchLimit });
   const fetchedMessages = [...messages.values()];
   const authorFiltered = author
-    ? fetchedMessages.filter((message) => matchesAuthor(message, author))
+    ? fetchedMessages.filter(message => matchesAuthor(message, author))
     : fetchedMessages;
 
-  const displayChannel = "name" in channel ? channel.name : "Direct Message";
-  const documents = authorFiltered.map((message) =>
+  const displayChannel = 'name' in channel ? channel.name : 'Direct Message';
+  const documents = authorFiltered.map(message =>
     buildLiveSearchDocument(message, displayChannel),
   );
   const matches = rankMessageMatches(documents, query, remaining);
@@ -311,36 +310,36 @@ async function searchChannel(
 }
 
 export const searchMessagesTool = tool({
-  name: "discord_message_lookup",
+  name: 'discord_message_lookup',
   description:
-    "Look up recent Discord messages for action targeting. Can inspect the current channel, a specific channel, or readable server text channels. Returns message IDs, content, reactions, and URLs. Use search_conversation for fuzzy conversation/history recall.",
+    'Look up recent Discord messages for action targeting. Can inspect the current channel, a specific channel, or readable server text channels. Returns message IDs, content, reactions, and URLs. Use search_conversation for fuzzy conversation/history recall.',
   parameters: z.object({
     query: z
       .string()
       .nullable()
       .describe(
-        "Text to match in recent message content. Leave null to get recent messages.",
+        'Text to match in recent message content. Leave null to get recent messages.',
       ),
     author: z
       .string()
       .nullable()
-      .describe("Filter by author username or display name."),
+      .describe('Filter by author username or display name.'),
     channel_name: z
       .string()
       .nullable()
-      .describe("Name of a specific channel to inspect."),
+      .describe('Name of a specific channel to inspect.'),
     search_all_channels: z
       .boolean()
       .nullable()
-      .describe("If true, inspect readable server text channels."),
+      .describe('If true, inspect readable server text channels.'),
     limit: z
       .number()
       .nullable()
-      .describe("Maximum number of messages to return (1-100, default 10)."),
+      .describe('Maximum number of messages to return (1-100, default 10).'),
     include_reactions: z
       .boolean()
       .nullable()
-      .describe("Whether to include reaction details. Default true."),
+      .describe('Whether to include reaction details. Default true.'),
   }),
   execute: async ({
     query,
@@ -353,7 +352,7 @@ export const searchMessagesTool = tool({
     const ctx = toolContextManager.get();
 
     if (!ctx.guild && search_all_channels) {
-      return { error: "Cannot search all channels outside of a server" };
+      return { error: 'Cannot search all channels outside of a server' };
     }
 
     const searchLimit = clampLimit(limit, 10, 100);
@@ -365,7 +364,7 @@ export const searchMessagesTool = tool({
         search_all_channels,
         ctx,
       );
-      if (typeof channelsResult === "string") {
+      if (typeof channelsResult === 'string') {
         return { error: channelsResult };
       }
 
@@ -387,7 +386,7 @@ export const searchMessagesTool = tool({
         allResults.push(...channelResults.messages);
         searchedMessageCount += channelResults.searchedMessages;
         summaries.push(channelResults.summary);
-        if (allResults.length >= searchLimit) break;
+        if (allResults.length >= searchLimit) { break; }
       }
 
       toolLogger.info(
@@ -399,10 +398,10 @@ export const searchMessagesTool = tool({
           found: allResults.length,
           searchedMessageCount,
         },
-        "Discord message lookup complete",
+        'Discord message lookup complete',
       );
       const exactPhraseFound = summaries.some(
-        (summary) => summary.exactPhraseFound,
+        summary => summary.exactPhraseFound,
       );
       const fuzzyMatchCount = summaries.reduce(
         (total, summary) => total + summary.fuzzyMatchCount,
@@ -424,21 +423,21 @@ export const searchMessagesTool = tool({
           searched_message_count: searchedMessageCount,
           result_limit: searchLimit,
           limitation:
-            "Discord message lookup only inspects a bounded recent message window from readable channels. Use search_conversation for fuzzy history recall.",
+            'Discord message lookup only inspects a bounded recent message window from readable channels. Use search_conversation for fuzzy history recall.',
         },
         hint:
           allResults.length > 0
-            ? "Use manage_reaction with the message ID to add/remove reactions, edit_bot_message to edit the bot's own messages, or delete_messages to remove them"
-            : "No messages found matching your criteria",
+            ? 'Use manage_reaction with the message ID to add/remove reactions, edit_bot_message to edit the bot\'s own messages, or delete_messages to remove them'
+            : 'No messages found matching your criteria',
       };
     } catch (error) {
       const errorMessage = formatError(error);
       toolLogger.error(
         { error: errorMessage },
-        "Failed to look up Discord messages",
+        'Failed to look up Discord messages',
       );
       return {
-        error: "Failed to look up Discord messages",
+        error: 'Failed to look up Discord messages',
         details: errorMessage,
       };
     }
@@ -451,7 +450,7 @@ async function fetchMessagesByIds(
   messageIds: string[],
 ): Promise<Message[]> {
   const messages: Message[] = [];
-  const uniqueIds = [...new Set(messageIds.map((id) => id.trim()))]
+  const uniqueIds = [...new Set(messageIds.map(id => id.trim()))]
     .filter(Boolean)
     .slice(0, 100);
 
@@ -462,7 +461,7 @@ async function fetchMessagesByIds(
     } catch (error) {
       toolLogger.debug(
         { messageId: id, error: formatError(error) },
-        "Could not fetch message for deletion",
+        'Could not fetch message for deletion',
       );
     }
   }
@@ -473,40 +472,40 @@ async function fetchLastBotMessage(
   channel: MessageHistoryChannel,
 ): Promise<Message | null> {
   const botUserId = channel.client.user?.id;
-  if (!botUserId) return null;
+  if (!botUserId) { return null; }
 
   const messages = await channel.messages.fetch({ limit: 50 });
-  return messages.find((message) => message.author.id === botUserId) ?? null;
+  return messages.find(message => message.author.id === botUserId) ?? null;
 }
 
 async function resolveBotMessageToEdit(
   channel: MessageHistoryChannel,
   messageId: string | null,
 ): Promise<Message | string> {
-  const normalized = messageId?.trim() || "last";
+  const normalized = messageId?.trim() || 'last';
   let targetMessage: Message | null;
 
-  if (normalized === "last") {
+  if (normalized === 'last') {
     targetMessage = await fetchLastBotMessage(channel);
-  } else if (normalized === "replied") {
+  } else if (normalized === 'replied') {
     targetMessage = toolContextManager.get().referencedMessage;
   } else {
     targetMessage = await channel.messages.fetch(normalized);
   }
 
-  if (!targetMessage) return "Could not find the target bot message";
+  if (!targetMessage) { return 'Could not find the target bot message'; }
   if (targetMessage.author.id !== channel.client.user?.id) {
-    return "I can only edit my own messages";
+    return 'I can only edit my own messages';
   }
   if (!targetMessage.editable) {
-    return "That bot message is not editable";
+    return 'That bot message is not editable';
   }
 
   return targetMessage;
 }
 
 export const editBotMessageTool = tool({
-  name: "edit_bot_message",
+  name: 'edit_bot_message',
   description:
     'Edit one of the bot\'s own previous Discord messages. Use message_id="last" or null for the latest bot message in this channel, "replied" for the message the user replied to, or a message ID from discord_message_lookup. Cannot edit user messages.',
   parameters: z.object({
@@ -520,34 +519,34 @@ export const editBotMessageTool = tool({
       .string()
       .min(1)
       .max(2000)
-      .describe("The new Discord message content, max 2000 characters."),
+      .describe('The new Discord message content, max 2000 characters.'),
   }),
   execute: async ({ message_id, content }) => {
     const ctx = toolContextManager.get();
 
     if (!hasMessageHistory(ctx.channel)) {
-      return { error: "No valid channel context for editing messages" };
+      return { error: 'No valid channel context for editing messages' };
     }
     if (!canManageMessages(ctx.channel)) {
       return {
         error:
-          "You need Manage Messages permission in this channel to ask Ruyi to edit bot messages.",
+          'You need Manage Messages permission in this channel to ask Ruyi to edit bot messages.',
       };
     }
 
     try {
       const target = await resolveBotMessageToEdit(ctx.channel, message_id);
-      if (typeof target === "string") return { error: target };
+      if (typeof target === 'string') { return { error: target }; }
 
       const edited = await target.edit(content);
       toolLogger.info(
         { messageId: edited.id, channelId: edited.channel.id },
-        "Edited bot message",
+        'Edited bot message',
       );
 
       return {
         success: true,
-        action: "edited",
+        action: 'edited',
         messageId: edited.id,
         messageUrl: edited.url,
         content: truncateContent(edited.content, 200),
@@ -556,9 +555,9 @@ export const editBotMessageTool = tool({
       const errorMessage = formatError(error);
       toolLogger.error(
         { error: errorMessage, message_id },
-        "Failed to edit bot message",
+        'Failed to edit bot message',
       );
-      return { error: "Failed to edit bot message", details: errorMessage };
+      return { error: 'Failed to edit bot message', details: errorMessage };
     }
   },
 });
@@ -589,9 +588,9 @@ async function performDeletion(
 ): Promise<DeletionResult> {
   const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
   const recentMessages = messages.filter(
-    (m) => m.createdTimestamp > twoWeeksAgo,
+    m => m.createdTimestamp > twoWeeksAgo,
   );
-  const oldMessages = messages.filter((m) => m.createdTimestamp <= twoWeeksAgo);
+  const oldMessages = messages.filter(m => m.createdTimestamp <= twoWeeksAgo);
 
   let deletedCount = 0;
   const deletedMessageIds: string[] = [];
@@ -616,7 +615,7 @@ async function performDeletion(
     } catch (error) {
       toolLogger.debug(
         { messageId: msg.id, error: formatError(error) },
-        "Could not delete old message",
+        'Could not delete old message',
       );
     }
   }
@@ -628,7 +627,7 @@ async function performDeletion(
 }
 
 export const deleteMessagesTool = tool({
-  name: "delete_messages",
+  name: 'delete_messages',
   description: `Delete messages from the current channel. Requires Manage Messages permission.
 
 HOW TO USE:
@@ -643,19 +642,19 @@ For "clean this channel", "clear chat", or "delete all messages" requests, use c
     message_ids: z
       .array(z.string())
       .nullable()
-      .describe("Array of specific message IDs to delete."),
+      .describe('Array of specific message IDs to delete.'),
     author: z
       .string()
       .nullable()
-      .describe("Delete messages from this specific user."),
+      .describe('Delete messages from this specific user.'),
     count: z
       .number()
       .nullable()
-      .describe("Number of recent messages to delete (1-100)."),
+      .describe('Number of recent messages to delete (1-100).'),
     contains: z
       .string()
       .nullable()
-      .describe("Only delete messages containing this text."),
+      .describe('Only delete messages containing this text.'),
   }),
   needsApproval: true,
   execute: async ({ message_ids, author, count, contains }) => {
@@ -664,7 +663,7 @@ For "clean this channel", "clear chat", or "delete all messages" requests, use c
     if (!isGuildTextChannel(ctx.channel)) {
       return {
         error:
-          "Message deletion is only available in server text channels, not private chats.",
+          'Message deletion is only available in server text channels, not private chats.',
       };
     }
 
@@ -672,7 +671,7 @@ For "clean this channel", "clear chat", or "delete all messages" requests, use c
     if (!canManageMessages(channel)) {
       return {
         error:
-          "You need Manage Messages permission in this channel to delete messages.",
+          'You need Manage Messages permission in this channel to delete messages.',
       };
     }
 
@@ -689,11 +688,11 @@ For "clean this channel", "clear chat", or "delete all messages" requests, use c
           contains,
         );
       } else {
-        return { error: "Must specify either message_ids or count" };
+        return { error: 'Must specify either message_ids or count' };
       }
 
       if (messagesToDelete.length === 0) {
-        return { error: "No messages found matching criteria" };
+        return { error: 'No messages found matching criteria' };
       }
 
       const deletion = await performDeletion(channel, messagesToDelete);
@@ -701,20 +700,20 @@ For "clean this channel", "clear chat", or "delete all messages" requests, use c
 
       toolLogger.info(
         { deletedCount: deletion.count, author, contains },
-        "Messages deleted",
+        'Messages deleted',
       );
 
       return {
         success: true,
         deleted: deletion.count,
         message: `Deleted ${deletion.count} message${
-          deletion.count === 1 ? "" : "s"
+          deletion.count === 1 ? '' : 's'
         }`,
       };
     } catch (error) {
       const errorMessage = formatError(error);
-      toolLogger.error({ error: errorMessage }, "Failed to delete messages");
-      return { error: "Failed to delete messages", details: errorMessage };
+      toolLogger.error({ error: errorMessage }, 'Failed to delete messages');
+      return { error: 'Failed to delete messages', details: errorMessage };
     }
   },
 });

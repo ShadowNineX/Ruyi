@@ -1,28 +1,28 @@
-import type { ChatInputCommandInteraction } from "discord.js";
-import { infoCommand, handleInfoCommand } from "./info";
-import { prefixCommand, handlePrefixCommand } from "./prefix";
-import { smitheryCommand, handleSmitheryCommand } from "./smithery";
-import { memoriesCommand, handleMemoriesCommand } from "./memories";
-import { creditsCommand, handleCreditsCommand } from "./credits";
-import { awayCommand, handleAwayCommand } from "./away";
-import { modelCommand, handleModelCommand } from "./model";
+import type { ChatInputCommandInteraction } from 'discord.js';
+import { awayCommand, handleAwayCommand } from './away';
+import { creditsCommand, handleCreditsCommand } from './credits';
+import { handleInfoCommand, infoCommand } from './info';
+import { handleMemoriesCommand, memoriesCommand } from './memories';
+import { handleModelCommand, modelCommand } from './model';
+import { handlePrefixCommand, prefixCommand } from './prefix';
 import {
-  scrapeCreatorsCommand,
-  handleScrapeCreatorsCommand,
-} from "./scrapecreators";
-import {
-  searchProviderCommand,
-  handleSearchProviderCommand,
-} from "./search-provider";
-import {
+  cancelReminderCommand,
+  handleCancelReminderCommand,
+  handleRemindCommand,
+  handleReminderAutocomplete,
+  handleTimersCommand,
   remindCommand,
   timersCommand,
-  cancelReminderCommand,
-  handleRemindCommand,
-  handleTimersCommand,
-  handleCancelReminderCommand,
-  handleReminderAutocomplete,
-} from "./reminders";
+} from './reminders';
+import {
+  handleScrapeCreatorsCommand,
+  scrapeCreatorsCommand,
+} from './scrapecreators';
+import {
+  handleSearchProviderCommand,
+  searchProviderCommand,
+} from './search-provider';
+import { handleSmitheryCommand, smitheryCommand } from './smithery';
 
 export const slashCommands = [
   infoCommand,
@@ -40,24 +40,24 @@ export const slashCommands = [
 ];
 
 export {
-  handleSmitherySelect,
-  handleSmitheryUnlinkSelect,
-  handleSmitheryCheckButton,
-} from "./smithery";
-
-export {
-  handleSearchProviderSelect,
-  isSearchProviderSelect,
-} from "./search-provider";
-
-export { handleModelSelect, isModelSelect } from "./model";
-
-export {
   handleMemoriesButton,
   handleMemoriesModal,
   isMemoriesButton,
   isMemoriesModal,
-} from "./memories";
+} from './memories';
+
+export { handleModelSelect, isModelSelect } from './model';
+
+export {
+  handleSearchProviderSelect,
+  isSearchProviderSelect,
+} from './search-provider';
+
+export {
+  handleSmitheryCheckButton,
+  handleSmitherySelect,
+  handleSmitheryUnlinkSelect,
+} from './smithery';
 
 export { handleReminderAutocomplete };
 
@@ -65,40 +65,40 @@ export async function handleSlashCommand(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
   switch (interaction.commandName) {
-    case "info":
+    case 'info':
       await handleInfoCommand(interaction);
       break;
-    case "prefix":
+    case 'prefix':
       await handlePrefixCommand(interaction);
       break;
-    case "search-provider":
+    case 'search-provider':
       await handleSearchProviderCommand(interaction);
       break;
-    case "model":
+    case 'model':
       await handleModelCommand(interaction);
       break;
-    case "credits":
+    case 'credits':
       await handleCreditsCommand(interaction);
       break;
-    case "scrapecreators":
+    case 'scrapecreators':
       await handleScrapeCreatorsCommand(interaction);
       break;
-    case "away":
+    case 'away':
       await handleAwayCommand(interaction);
       break;
-    case "remind":
+    case 'remind':
       await handleRemindCommand(interaction);
       break;
-    case "timers":
+    case 'timers':
       await handleTimersCommand(interaction);
       break;
-    case "cancel-reminder":
+    case 'cancel-reminder':
       await handleCancelReminderCommand(interaction);
       break;
-    case "smithery":
+    case 'smithery':
       await handleSmitheryCommand(interaction);
       break;
-    case "memories":
+    case 'memories':
       await handleMemoriesCommand(interaction);
       break;
   }

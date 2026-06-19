@@ -1,37 +1,37 @@
-import { Agent } from "@openai/agents";
-import { z } from "zod";
-import { aiLogger } from "../logger";
-import { CLASSIFIER_TIMEOUT_MS } from "../constants";
-import { conversationContext } from "./context";
-import { agentsRuntimeManager } from "./client";
+import { Agent } from '@openai/agents';
+import { z } from 'zod';
+import { CLASSIFIER_TIMEOUT_MS } from '../constants';
+import { aiLogger } from '../logger';
+import { agentsRuntimeManager } from './client';
+import { conversationContext } from './context';
 
 const ReplyDecisionSchema = z.object({
   shouldReply: z.boolean(),
 });
 
-const POLITE_PREFIXES = ["please ", "pls "] as const;
+const POLITE_PREFIXES = ['please ', 'pls '] as const;
 const DIRECT_REQUEST_PREFIXES = [
-  "can you ",
-  "could you ",
-  "would you ",
-  "will you ",
+  'can you ',
+  'could you ',
+  'would you ',
+  'will you ',
 ] as const;
 const MESSAGE_TARGET_WORDS = [
-  "message",
-  "messages",
-  "channel",
-  "chat",
-  "history",
+  'message',
+  'messages',
+  'channel',
+  'chat',
+  'history',
 ] as const;
-const MEMORY_WORDS = ["memory", "memories"] as const;
+const MEMORY_WORDS = ['memory', 'memories'] as const;
 const BOT_REPLY_WORDS = [
-  "message",
-  "reply",
-  "replies",
-  "response",
-  "answer",
-  "that",
-  "last",
+  'message',
+  'reply',
+  'replies',
+  'response',
+  'answer',
+  'that',
+  'last',
 ] as const;
 
 function escapeRegExp(value: string): string {
@@ -39,11 +39,11 @@ function escapeRegExp(value: string): string {
 }
 
 function normalizeForMatching(message: string): string {
-  return message.toLowerCase().trim().replace(/\s+/g, " ");
+  return message.toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
 function stripAnyPrefix(text: string, prefixes: readonly string[]): string {
-  const prefix = prefixes.find((candidate) => text.startsWith(candidate));
+  const prefix = prefixes.find(candidate => text.startsWith(candidate));
   return prefix ? text.slice(prefix.length) : text;
 }
 
@@ -55,11 +55,11 @@ function stripDirectRequestLeadIn(message: string): string {
 }
 
 function isWordCharacter(char: string | undefined): boolean {
-  if (!char) return false;
+  if (!char) { return false; }
   const code = char.codePointAt(0);
-  if (code === undefined) return false;
+  if (code === undefined) { return false; }
   return (
-    (code >= 48 && code <= 57) || (code >= 97 && code <= 122) || char === "'"
+    (code >= 48 && code <= 57) || (code >= 97 && code <= 122) || char === '\''
   );
 }
 
@@ -68,7 +68,7 @@ function startsWithWord(text: string, word: string): boolean {
 }
 
 function startsWithAnyWord(text: string, words: readonly string[]): boolean {
-  return words.some((word) => startsWithWord(text, word));
+  return words.some(word => startsWithWord(text, word));
 }
 
 function startsWithPhrase(text: string, phrase: string): boolean {
@@ -79,7 +79,7 @@ function startsWithAnyPhrase(
   text: string,
   phrases: readonly string[],
 ): boolean {
-  return phrases.some((phrase) => startsWithPhrase(text, phrase));
+  return phrases.some(phrase => startsWithPhrase(text, phrase));
 }
 
 function getWords(text: string): Set<string> {
@@ -88,82 +88,82 @@ function getWords(text: string): Set<string> {
 
 function containsAnyWord(text: string, words: readonly string[]): boolean {
   const textWords = getWords(text);
-  return words.some((word) => textWords.has(word));
+  return words.some(word => textWords.has(word));
 }
 
 function containsHttpUrl(text: string): boolean {
-  return text.includes("http://") || text.includes("https://");
+  return text.includes('http://') || text.includes('https://');
 }
 
 const DIRECT_ACTION_RULES: ReadonlyArray<(text: string) => boolean> = [
-  (text) => startsWithAnyWord(text, ["pin", "unpin"]),
-  (text) =>
-    startsWithAnyWord(text, ["clear", "delete", "remove", "purge", "clean"]) &&
-    containsAnyWord(text, MESSAGE_TARGET_WORDS),
-  (text) =>
-    startsWithAnyWord(text, ["react"]) ||
-    startsWithAnyPhrase(text, [
-      "add reaction",
-      "add a reaction",
-      "remove reaction",
-      "remove a reaction",
+  text => startsWithAnyWord(text, ['pin', 'unpin']),
+  text =>
+    startsWithAnyWord(text, ['clear', 'delete', 'remove', 'purge', 'clean'])
+    && containsAnyWord(text, MESSAGE_TARGET_WORDS),
+  text =>
+    startsWithAnyWord(text, ['react'])
+    || startsWithAnyPhrase(text, [
+      'add reaction',
+      'add a reaction',
+      'remove reaction',
+      'remove a reaction',
     ]),
-  (text) =>
-    startsWithAnyWord(text, ["search", "find", "fetch"]) ||
-    startsWithPhrase(text, "look up"),
-  (text) =>
+  text =>
+    startsWithAnyWord(text, ['search', 'find', 'fetch'])
+    || startsWithPhrase(text, 'look up'),
+  text =>
     startsWithAnyWord(text, [
-      "read",
-      "summarize",
-      "inspect",
-      "quote",
-      "open",
+      'read',
+      'summarize',
+      'inspect',
+      'quote',
+      'open',
     ]) && containsHttpUrl(text),
-  (text) => startsWithAnyWord(text, ["remember", "store", "forget"]),
-  (text) =>
-    startsWithAnyWord(text, ["show", "list", "recall"]) &&
-    containsAnyWord(text, MEMORY_WORDS),
-  (text) =>
-    startsWithAnyWord(text, ["what", "which"]) &&
-    containsAnyWord(text, MEMORY_WORDS),
-  (text) =>
+  text => startsWithAnyWord(text, ['remember', 'store', 'forget']),
+  text =>
+    startsWithAnyWord(text, ['show', 'list', 'recall'])
+    && containsAnyWord(text, MEMORY_WORDS),
+  text =>
+    startsWithAnyWord(text, ['what', 'which'])
+    && containsAnyWord(text, MEMORY_WORDS),
+  text =>
     startsWithAnyWord(text, [
-      "create",
-      "edit",
-      "assign",
-      "give",
-      "add",
-      "remove",
-    ]) && containsAnyWord(text, ["role"]),
-  (text) =>
-    startsWithAnyWord(text, ["edit", "revise", "correct", "fix", "replace"]) &&
-    containsAnyWord(text, BOT_REPLY_WORDS),
-  (text) =>
-    startsWithAnyWord(text, ["send", "make", "create"]) &&
-    containsAnyWord(text, ["embed"]),
-  (text) => startsWithAnyWord(text, ["calculate", "calc", "solve"]),
-  (text) =>
-    startsWithAnyWord(text, ["what", "what's", "whats"]) &&
-    containsAnyWord(text, ["time", "date"]),
+      'create',
+      'edit',
+      'assign',
+      'give',
+      'add',
+      'remove',
+    ]) && containsAnyWord(text, ['role']),
+  text =>
+    startsWithAnyWord(text, ['edit', 'revise', 'correct', 'fix', 'replace'])
+    && containsAnyWord(text, BOT_REPLY_WORDS),
+  text =>
+    startsWithAnyWord(text, ['send', 'make', 'create'])
+    && containsAnyWord(text, ['embed']),
+  text => startsWithAnyWord(text, ['calculate', 'calc', 'solve']),
+  text =>
+    startsWithAnyWord(text, ['what', 'what\'s', 'whats'])
+    && containsAnyWord(text, ['time', 'date']),
 ];
 
 function isDirectActionRequest(message: string): boolean {
   const text = stripDirectRequestLeadIn(message);
-  return DIRECT_ACTION_RULES.some((rule) => rule(text));
+  return DIRECT_ACTION_RULES.some(rule => rule(text));
 }
 
 function getDeterministicReplyReason(
   message: string,
   botName: string,
-): "bot_name" | "action_request" | null {
-  const aliases = [...new Set([botName, "Ruyi", "Abacus"].filter(Boolean))];
+): 'bot_name' | 'action_request' | null {
+  const aliases = [...new Set([botName, 'Ruyi', 'Abacus'].filter(Boolean))];
   const botNamePattern = new RegExp(
-    String.raw`\b(?:${aliases.map(escapeRegExp).join("|")})\b`,
-    "i",
+    String.raw`\b(?:${aliases.map(escapeRegExp).join('|')})\b`,
+    'i',
   );
 
-  if (botNamePattern.test(message)) return "bot_name";
-  if (isDirectActionRequest(message)) return "action_request";
+  if (botNamePattern.test(message)) { return 'bot_name'; }
+  if (isDirectActionRequest(message)) { return 'action_request'; }
   return null;
 }
 
@@ -184,12 +184,12 @@ class ReplyClassifier {
           messagePreview: trimmedMessage.slice(0, 50),
           reason: deterministicReason,
         },
-        "shouldReply deterministic yes",
+        'shouldReply deterministic yes',
       );
       return true;
     }
 
-    let historyContext = "";
+    let historyContext = '';
     if (channelId) {
       historyContext = await conversationContext.getMemoryContext(
         channelId,
@@ -199,7 +199,7 @@ class ReplyClassifier {
 
     const historySection = historyContext
       ? `\nPrevious chat history:\n${historyContext}`
-      : "";
+      : '';
 
     const systemPromptText = `You are a context analyzer for "${botName}", a friendly Discord bot assistant (Ruyi from Nine Sols). Decide whether Ruyi should reply.
 
@@ -229,7 +229,7 @@ Set shouldReply to false if:
 
     try {
       const agent = new Agent({
-        name: "Ruyi reply classifier",
+        name: 'Ruyi reply classifier',
         instructions: systemPromptText,
         model: agentsRuntimeManager.getBackgroundTaskModel(),
         modelSettings: agentsRuntimeManager.getBackgroundTaskModelSettings(),
@@ -246,7 +246,7 @@ Set shouldReply to false if:
       const decision = result.finalOutput?.shouldReply ?? false;
       aiLogger.debug(
         { messagePreview: message.slice(0, 50), decision },
-        "shouldReply decision",
+        'shouldReply decision',
       );
       return decision;
     } catch (error) {
@@ -258,7 +258,7 @@ Set shouldReply to false if:
           name: err.name,
           messagePreview: message.slice(0, 50),
         },
-        "shouldReply failed, defaulting to no",
+        'shouldReply failed, defaulting to no',
       );
       return false;
     } finally {

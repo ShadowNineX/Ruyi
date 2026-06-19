@@ -1,26 +1,26 @@
-import { Agent } from "@openai/agents";
-import { z } from "zod";
-import { aiLogger } from "../logger";
-import { Memory } from "../db/models";
-import type { IMemory } from "../db/models/memory";
-import { buildUserMemoryFilter } from "../utils/memory-scope";
-import type { ConversationSurface } from "./context";
-import type { RuyiUserIdentity } from "../utils/user-identity";
-import {
-  sanitizeMemoryKey,
-  truncateMemoryValue,
-} from "../utils/memory-normalization";
+import type { IMemory } from '../db/models/memory';
+import type { RuyiUserIdentity } from '../utils/user-identity';
+import type { ConversationSurface } from './context';
+import { Agent } from '@openai/agents';
+import { z } from 'zod';
 import {
   AUTO_EXTRACT_HISTORY_WINDOW,
   AUTO_EXTRACT_MAX_FACTS,
   AUTO_EXTRACT_TIMEOUT_MS,
   USER_MEMORY_CAP,
-} from "../constants";
-import { conversationContext } from "./context";
-import { agentsRuntimeManager } from "./client";
+} from '../constants';
+import { Memory } from '../db/models';
+import { aiLogger } from '../logger';
+import {
+  sanitizeMemoryKey,
+  truncateMemoryValue,
+} from '../utils/memory-normalization';
+import { buildUserMemoryFilter } from '../utils/memory-scope';
+import { agentsRuntimeManager } from './client';
+import { conversationContext } from './context';
 
 const ExtractedMemoryOperationSchema = z.object({
-  action: z.enum(["create", "update"]),
+  action: z.enum(['create', 'update']),
   key: z.string(),
   value: z.string(),
   existing_key: z.string().nullable(),
@@ -36,10 +36,10 @@ interface ExistingMemorySummary {
   key: string;
   value: string;
   pinned: boolean;
-  source: "user" | "auto";
+  source: 'user' | 'auto';
 }
 
-type MemoryOperationOutcome = "created" | "updated" | "skipped";
+type MemoryOperationOutcome = 'created' | 'updated' | 'skipped';
 
 const EXTRACTION_SYSTEM_PROMPT = `You extract durable personal facts about a Discord user from chat history.
 
@@ -70,25 +70,25 @@ Example output shape: {"memories":[{"action":"create","key":"favorite_color","va
 function normalizeComparable(value: string): string {
   return value
     .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/g, " ")
+    .replaceAll(/[^a-z0-9]+/g, ' ')
     .trim()
-    .replaceAll(/\s+/g, " ");
+    .replaceAll(/\s+/g, ' ');
 }
 
 function valuesLookDuplicate(first: string, second: string): boolean {
   const normalizedFirst = normalizeComparable(first);
   const normalizedSecond = normalizeComparable(second);
-  if (!normalizedFirst || !normalizedSecond) return false;
-  if (normalizedFirst === normalizedSecond) return true;
+  if (!normalizedFirst || !normalizedSecond) { return false; }
+  if (normalizedFirst === normalizedSecond) { return true; }
 
   const shortestLength = Math.min(
     normalizedFirst.length,
     normalizedSecond.length,
   );
   return (
-    shortestLength >= 16 &&
-    (normalizedFirst.includes(normalizedSecond) ||
-      normalizedSecond.includes(normalizedFirst))
+    shortestLength >= 16
+    && (normalizedFirst.includes(normalizedSecond)
+      || normalizedSecond.includes(normalizedFirst))
   );
 }
 
@@ -99,10 +99,10 @@ function valuesMatchExactly(first: string, second: string): boolean {
 function formatExistingMemories(memories: ExistingMemorySummary[]): string {
   return memories
     .map((memory) => {
-      const pinned = memory.pinned ? "[PINNED] " : "";
+      const pinned = memory.pinned ? '[PINNED] ' : '';
       return `- ${pinned}${memory.key}: ${memory.value} (source: ${memory.source})`;
     })
-    .join("\n");
+    .join('\n');
 }
 
 async function evictOldestWritableMemory(
@@ -110,13 +110,13 @@ async function evictOldestWritableMemory(
 ): Promise<boolean> {
   const filter = buildUserMemoryFilter(identity);
   const count = await Memory.countDocuments(filter);
-  if (count < USER_MEMORY_CAP) return true;
+  if (count < USER_MEMORY_CAP) { return true; }
 
   const oldest = await Memory.findOne({
     ...filter,
     pinned: false,
   }).sort({ updatedAt: 1 });
-  if (!oldest) return false;
+  if (!oldest) { return false; }
 
   await oldest.deleteOne();
   return true;
@@ -133,9 +133,9 @@ async function findRelatedMemory(
 
   return (
     memories.find(
-      (memory) =>
-        sanitizeMemoryKey(memory.key) === key ||
-        valuesLookDuplicate(memory.value, value),
+      memory =>
+        sanitizeMemoryKey(memory.key) === key
+        || valuesLookDuplicate(memory.value, value),
     ) ?? null
   );
 }
@@ -151,14 +151,14 @@ async function findOperationTarget(
       ...buildUserMemoryFilter(identity),
       key: existingKey,
     });
-    if (existing) return existing;
+    if (existing) { return existing; }
   }
 
   const exact = await Memory.findOne({
     ...buildUserMemoryFilter(identity),
     key,
   });
-  if (exact) return exact;
+  if (exact) { return exact; }
 
   return findRelatedMemory(identity, key, value);
 }
@@ -167,7 +167,7 @@ async function renameMemoryIfNeeded(
   memory: IMemory,
   nextKey: string,
 ): Promise<IMemory | null> {
-  if (memory.key === nextKey) return memory;
+  if (memory.key === nextKey) { return memory; }
 
   const conflicting = await Memory.findOne({
     personId: memory.personId,
@@ -191,9 +191,9 @@ async function applyMemoryOperation(
   operation: ExtractedMemoryOperation,
 ): Promise<MemoryOperationOutcome> {
   const key = sanitizeMemoryKey(operation.key);
-  if (!key) return "skipped";
+  if (!key) { return 'skipped'; }
   const value = truncateMemoryValue(operation.value.trim());
-  if (!value) return "skipped";
+  if (!value) { return 'skipped'; }
   const existingKey = operation.existing_key
     ? sanitizeMemoryKey(operation.existing_key)
     : null;
@@ -204,22 +204,22 @@ async function applyMemoryOperation(
     existingKey,
     value,
   );
-  if (target?.pinned) return "skipped";
+  if (target?.pinned) { return 'skipped'; }
 
   if (target) {
     if (target.key === key && valuesMatchExactly(target.value, value)) {
-      return "skipped";
+      return 'skipped';
     }
 
     const writableTarget = await renameMemoryIfNeeded(target, key);
-    if (!writableTarget || writableTarget.pinned) return "skipped";
+    if (!writableTarget || writableTarget.pinned) { return 'skipped'; }
     writableTarget.value = value;
     await writableTarget.save();
-    return "updated";
+    return 'updated';
   }
 
-  if (operation.action === "update") return "skipped";
-  if (!(await evictOldestWritableMemory(identity))) return "skipped";
+  if (operation.action === 'update') { return 'skipped'; }
+  if (!(await evictOldestWritableMemory(identity))) { return 'skipped'; }
 
   await Memory.create({
     ...buildUserMemoryFilter(identity),
@@ -227,10 +227,10 @@ async function applyMemoryOperation(
     value,
     username,
     createdBy: username,
-    source: "auto",
+    source: 'auto',
     pinned: false,
   });
-  return "created";
+  return 'created';
 }
 
 async function fetchExistingMemories(
@@ -243,7 +243,7 @@ async function fetchExistingMemories(
     .sort({ pinned: -1, updatedAt: -1 })
     .limit(USER_MEMORY_CAP);
 
-  return memories.map((memory) => ({
+  return memories.map(memory => ({
     key: memory.key,
     value: memory.value,
     pinned: memory.pinned,
@@ -260,12 +260,12 @@ export async function autoExtractFacts(
   username: string,
   identity: RuyiUserIdentity,
   conversationId: string,
-  surface: ConversationSurface = "discord",
+  surface: ConversationSurface = 'discord',
 ): Promise<boolean> {
   if (!identity.canWriteMemory) {
     aiLogger.debug(
       { username, conversationId, surface },
-      "Skip extraction: identity is not allowed to write memories",
+      'Skip extraction: identity is not allowed to write memories',
     );
     return false;
   }
@@ -278,16 +278,16 @@ export async function autoExtractFacts(
   if (!history || history.length < 80) {
     aiLogger.debug(
       { username, conversationId, surface },
-      "Skip extraction: history too short",
+      'Skip extraction: history too short',
     );
     return false;
   }
 
   const existing = await fetchExistingMemories(identity);
-  const existingBlock =
-    existing.length > 0
+  const existingBlock
+    = existing.length > 0
       ? `\nExisting memories about ${username}:\n${formatExistingMemories(existing)}`
-      : "";
+      : '';
 
   const userPrompt = `Target user: ${username}${existingBlock}
 
@@ -304,7 +304,7 @@ Extract durable facts about ${username}. Return create/update memory operations,
 
   try {
     const agent = new Agent({
-      name: "Ruyi memory extractor",
+      name: 'Ruyi memory extractor',
       instructions: EXTRACTION_SYSTEM_PROMPT,
       model: agentsRuntimeManager.getBackgroundTaskModel(),
       modelSettings: agentsRuntimeManager.getBackgroundTaskModelSettings(),
@@ -316,8 +316,8 @@ Extract durable facts about ${username}. Return create/update memory operations,
       signal: abortController.signal,
     });
 
-    const operations =
-      result.finalOutput?.memories.slice(0, AUTO_EXTRACT_MAX_FACTS) ?? [];
+    const operations
+      = result.finalOutput?.memories.slice(0, AUTO_EXTRACT_MAX_FACTS) ?? [];
     const outcomes: Record<MemoryOperationOutcome, number> = {
       created: 0,
       updated: 0,
@@ -340,7 +340,7 @@ Extract durable facts about ${username}. Return create/update memory operations,
             key: operation.key,
             existingKey: operation.existing_key,
           },
-          "Failed to apply auto-extracted memory operation",
+          'Failed to apply auto-extracted memory operation',
         );
       }
     }
@@ -355,7 +355,7 @@ Extract durable facts about ${username}. Return create/update memory operations,
         updated: outcomes.updated,
         skipped: outcomes.skipped,
       },
-      "Auto-extraction completed",
+      'Auto-extraction completed',
     );
 
     return true;
@@ -369,7 +369,7 @@ Extract durable facts about ${username}. Return create/update memory operations,
         conversationId,
         surface,
       },
-      "Auto-extraction failed",
+      'Auto-extraction failed',
     );
     return false;
   } finally {

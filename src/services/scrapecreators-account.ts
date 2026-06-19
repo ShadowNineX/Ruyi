@@ -1,15 +1,16 @@
-import { z } from "zod";
-import { botLogger } from "../logger";
+import { z } from 'zod';
+import { botLogger } from '../logger';
 import {
   fetchScrapeCreatorsParsed,
   hasScrapeCreatorsApiKey,
-} from "./scrapecreators-client";
+} from './scrapecreators-client';
+
 export {
   SCRAPECREATORS_DASHBOARD_URL,
   ScrapeCreatorsApiError,
-} from "./scrapecreators-client";
+} from './scrapecreators-client';
 
-const DEFAULT_PINTEREST_ENDPOINT_FILTER = "/v1/pinterest";
+const DEFAULT_PINTEREST_ENDPOINT_FILTER = '/v1/pinterest';
 
 const creditBalanceSchema = z.looseObject({
   creditCount: z.coerce.number(),
@@ -66,16 +67,16 @@ async function fetchAccountEndpoint<T>(
   return fetchScrapeCreatorsParsed(schema, {
     path,
     params,
-    notConfiguredMessage: "SCRAPECREATORS_API_KEY is not configured",
-    requestFailedMessage: "ScrapeCreators account request failed",
-    nonJsonLogMessage: "ScrapeCreators account response body was not JSON",
+    notConfiguredMessage: 'SCRAPECREATORS_API_KEY is not configured',
+    requestFailedMessage: 'ScrapeCreators account request failed',
+    nonJsonLogMessage: 'ScrapeCreators account response body was not JSON',
     logDebug: (context, message) => botLogger.debug(context, message),
   });
 }
 
 export async function fetchScrapeCreatorsCreditBalance(): Promise<ScrapeCreatorsCreditBalance> {
   return fetchAccountEndpoint(
-    "/v1/account/credit-balance",
+    '/v1/account/credit-balance',
     creditBalanceSchema,
   );
 }
@@ -83,7 +84,7 @@ export async function fetchScrapeCreatorsCreditBalance(): Promise<ScrapeCreators
 export async function fetchScrapeCreatorsApiUsage(
   filters: ScrapeCreatorsApiUsageFilters = {},
 ): Promise<ScrapeCreatorsApiUsageEntry[]> {
-  return fetchAccountEndpoint("/v1/account/get-api-usage", apiUsageSchema, {
+  return fetchAccountEndpoint('/v1/account/get-api-usage', apiUsageSchema, {
     page: filters.page,
     endpoint: filters.endpoint ?? DEFAULT_PINTEREST_ENDPOINT_FILTER,
     statusCode: filters.statusCode,
@@ -94,7 +95,7 @@ export async function fetchScrapeCreatorsDailyUsage(): Promise<
   ScrapeCreatorsDailyUsageEntry[]
 > {
   return fetchAccountEndpoint(
-    "/v1/account/get-daily-usage-count",
+    '/v1/account/get-daily-usage-count',
     dailyUsageSchema,
   );
 }

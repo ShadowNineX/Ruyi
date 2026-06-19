@@ -1,39 +1,40 @@
+import type { ChatInputCommandInteraction, StringSelectMenuInteraction } from 'discord.js';
+import type { AiModelPreset, AiModelPresetId, ConfigScope } from '../../config';
 import {
   ActionRowBuilder,
+
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
   StringSelectMenuBuilder,
+
   StringSelectMenuOptionBuilder,
-  type ChatInputCommandInteraction,
-  type StringSelectMenuInteraction,
-} from "discord.js";
+} from 'discord.js';
 import {
   AI_MODEL_PRESETS,
+
   configManager,
+
   formatConfigScope,
   isAiModelPresetId,
   userConfigScope,
-  type AiModelPreset,
-  type AiModelPresetId,
-  type ConfigScope,
-} from "../../config";
-import { botLogger } from "../../logger";
+} from '../../config';
+import { botLogger } from '../../logger';
 
-const MODEL_SELECT_ID = "model_preset_select";
+const MODEL_SELECT_ID = 'model_preset_select';
 
 export const modelCommand = new SlashCommandBuilder()
-  .setName("model")
-  .setDescription("Choose Ruyi's intelligence level");
+  .setName('model')
+  .setDescription('Choose Ruyi\'s intelligence level');
 
 function canManageScope(
   interaction: ChatInputCommandInteraction | StringSelectMenuInteraction,
   scope: ConfigScope,
 ): boolean {
   return (
-    scope.kind === "discord:dm" ||
-    (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ??
-      false)
+    scope.kind === 'discord:dm'
+    || (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
+      ?? false)
   );
 }
 
@@ -55,9 +56,9 @@ function buildModelRow(
   return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(MODEL_SELECT_ID)
-      .setPlaceholder("Choose Ruyi's intelligence")
+      .setPlaceholder('Choose Ruyi\'s intelligence')
       .addOptions(
-        AI_MODEL_PRESETS.map((preset) =>
+        AI_MODEL_PRESETS.map(preset =>
           buildModelOption(preset, currentPreset),
         ),
       ),
@@ -70,7 +71,7 @@ function formatPreset(preset: AiModelPreset): string {
     `Model: \`${preset.model}\``,
     `Reasoning: \`${preset.reasoningEffort}\``,
     `Verbosity: \`${preset.textVerbosity}\``,
-  ].join("\n");
+  ].join('\n');
 }
 
 function currentPreset(scope: ConfigScope): AiModelPreset {
@@ -84,7 +85,7 @@ export async function handleModelCommand(
   if (!canManageScope(interaction, scope)) {
     await interaction.reply({
       content:
-        "You need **Manage Server** to change this server's intelligence level.",
+        'You need **Manage Server** to change this server\'s intelligence level.',
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -107,7 +108,7 @@ async function applySelectedPreset(
   if (!canManageScope(interaction, scope)) {
     await interaction.editReply({
       content:
-        "You need **Manage Server** to change this server's intelligence level.",
+        'You need **Manage Server** to change this server\'s intelligence level.',
       components: [],
     });
     return;
@@ -136,17 +137,17 @@ async function applySelectedPreset(
       newModel: newPreset.model,
       user: interaction.user.username,
     },
-    "AI intelligence level changed",
+    'AI intelligence level changed',
   );
 
   await interaction.editReply({
     content: [
       `Intelligence changed from **${oldPreset.label}** to **${newPreset.label}** for ${formatConfigScope(scope)}.`,
-      "",
+      '',
       formatPreset(newPreset),
-      "",
+      '',
       `The next reply in ${formatConfigScope(scope)} will use this intelligence level.`,
-    ].join("\n"),
+    ].join('\n'),
     components: [buildModelRow(scope)],
   });
 }
@@ -154,12 +155,12 @@ async function applySelectedPreset(
 export async function handleModelSelect(
   interaction: StringSelectMenuInteraction,
 ): Promise<void> {
-  if (interaction.customId !== MODEL_SELECT_ID) return;
+  if (interaction.customId !== MODEL_SELECT_ID) { return; }
 
   const selectedValue = interaction.values[0];
   if (!selectedValue || !isAiModelPresetId(selectedValue)) {
     await interaction.update({
-      content: "Invalid intelligence level selected.",
+      content: 'Invalid intelligence level selected.',
       components: [],
     });
     return;
@@ -179,13 +180,13 @@ export async function handleModelSelect(
         selectedValue,
         guildId: interaction.guildId,
       },
-      "Failed to change AI intelligence level",
+      'Failed to change AI intelligence level',
     );
 
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({
         content:
-          "Forgive me, my lord - I could not change the intelligence level.",
+          'Forgive me, my lord - I could not change the intelligence level.',
         components: [
           buildModelRow(userConfigScope(interaction.guildId, interaction.user.id)),
         ],
@@ -194,7 +195,7 @@ export async function handleModelSelect(
     }
 
     await interaction.update({
-      content: "Forgive me, my lord - I could not change the intelligence level.",
+      content: 'Forgive me, my lord - I could not change the intelligence level.',
       components: [],
     });
   }

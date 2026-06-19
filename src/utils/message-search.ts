@@ -1,11 +1,12 @@
-import Fuse, { type FuseResult } from "fuse.js";
+import type { FuseResult } from 'fuse.js';
+import Fuse from 'fuse.js';
 
-export type MessageMatchType =
-  | "recent"
-  | "exact_phrase"
-  | "all_terms"
-  | "partial_terms"
-  | "fuzzy";
+export type MessageMatchType
+  = | 'recent'
+    | 'exact_phrase'
+    | 'all_terms'
+    | 'partial_terms'
+    | 'fuzzy';
 
 export interface SearchableMessage {
   id: string;
@@ -24,7 +25,7 @@ export interface RankedMessageMatch<T extends SearchableMessage> {
 }
 
 interface DeterministicMatch {
-  matchType: Exclude<MessageMatchType, "recent" | "fuzzy">;
+  matchType: Exclude<MessageMatchType, 'recent' | 'fuzzy'>;
   score: number;
   matchedTerms: string[];
   missingTerms: string[];
@@ -46,7 +47,7 @@ function isAsciiDigit(codePoint: number | undefined): boolean {
 
 function isSearchWordCharacter(character: string): boolean {
   const codePoint = character.codePointAt(0);
-  if (isAsciiDigit(codePoint)) return true;
+  if (isAsciiDigit(codePoint)) { return true; }
 
   return (
     character.toLocaleLowerCase() !== character.toLocaleUpperCase()
@@ -54,7 +55,7 @@ function isSearchWordCharacter(character: string): boolean {
 }
 
 function normalizeSearchText(value: string): string {
-  let output = "";
+  let output = '';
   let previousWasSpace = true;
 
   for (const character of value.toLowerCase()) {
@@ -62,7 +63,7 @@ function normalizeSearchText(value: string): string {
       output += character;
       previousWasSpace = false;
     } else if (!previousWasSpace) {
-      output += " ";
+      output += ' ';
       previousWasSpace = true;
     }
   }
@@ -71,7 +72,7 @@ function normalizeSearchText(value: string): string {
 }
 
 function tokenizeMessageSearchQuery(query: string): string[] {
-  return [...new Set(normalizeSearchText(query).split(" ").filter(Boolean))];
+  return [...new Set(normalizeSearchText(query).split(' ').filter(Boolean))];
 }
 
 function timestampMs(value: Date | number): number {
@@ -90,9 +91,9 @@ function buildRecentMatches<T extends SearchableMessage>(
 ): RankedMessageMatch<T>[] {
   return sortRecentFirst(messages)
     .slice(0, limit)
-    .map((item) => ({
+    .map(item => ({
       item,
-      matchType: "recent",
+      matchType: 'recent',
       score: 1,
       fuseScore: null,
       matchedTerms: [],
@@ -106,16 +107,16 @@ function deterministicMatch<T extends SearchableMessage>(
   queryTerms: string[],
 ): DeterministicMatch | null {
   const normalizedContent = normalizeSearchText(item.content);
-  const matchedTerms = queryTerms.filter((term) =>
+  const matchedTerms = queryTerms.filter(term =>
     normalizedContent.includes(term),
   );
   const missingTerms = queryTerms.filter(
-    (term) => !matchedTerms.includes(term),
+    term => !matchedTerms.includes(term),
   );
 
   if (normalizedQuery && normalizedContent.includes(normalizedQuery)) {
     return {
-      matchType: "exact_phrase",
+      matchType: 'exact_phrase',
       score: 0,
       matchedTerms,
       missingTerms,
@@ -124,7 +125,7 @@ function deterministicMatch<T extends SearchableMessage>(
 
   if (queryTerms.length > 0 && missingTerms.length === 0) {
     return {
-      matchType: "all_terms",
+      matchType: 'all_terms',
       score: 0.15,
       matchedTerms,
       missingTerms,
@@ -134,7 +135,7 @@ function deterministicMatch<T extends SearchableMessage>(
   if (matchedTerms.length > 0) {
     const missingRatio = missingTerms.length / queryTerms.length;
     return {
-      matchType: "partial_terms",
+      matchType: 'partial_terms',
       score: PARTIAL_BASE_SCORE + missingRatio * 0.2,
       matchedTerms,
       missingTerms,
@@ -167,7 +168,7 @@ function addDeterministicMatches<T extends SearchableMessage>(
 ): void {
   messages.forEach((item, rank) => {
     const match = deterministicMatch(item, normalizedQuery, queryTerms);
-    if (!match) return;
+    if (!match) { return; }
 
     addOrImproveMatch(matches, {
       item,
@@ -188,15 +189,15 @@ function addFuseMatches<T extends SearchableMessage>(
 ): void {
   fuseResults.forEach((result, rank) => {
     const fuseScore = result.score ?? FUSE_THRESHOLD;
-    if (fuseScore > FUSE_THRESHOLD) return;
+    if (fuseScore > FUSE_THRESHOLD) { return; }
 
     const existing = matches.get(result.item.id);
-    const score =
-      existing?.score ?? PARTIAL_BASE_SCORE + fuseScore * FUSE_WEIGHT;
+    const score
+      = existing?.score ?? PARTIAL_BASE_SCORE + fuseScore * FUSE_WEIGHT;
 
     addOrImproveMatch(matches, {
       item: result.item,
-      matchType: existing?.matchType ?? "fuzzy",
+      matchType: existing?.matchType ?? 'fuzzy',
       score,
       fuseScore,
       matchedTerms: existing?.matchedTerms ?? [],
@@ -212,10 +213,10 @@ function sortMatches<T extends SearchableMessage>(
   return [...matches]
     .sort((a, b) => {
       const scoreDelta = a.score - b.score;
-      if (scoreDelta !== 0) return scoreDelta;
-      const timeDelta =
-        timestampMs(b.item.timestamp) - timestampMs(a.item.timestamp);
-      if (timeDelta !== 0) return timeDelta;
+      if (scoreDelta !== 0) { return scoreDelta; }
+      const timeDelta
+        = timestampMs(b.item.timestamp) - timestampMs(a.item.timestamp);
+      if (timeDelta !== 0) { return timeDelta; }
       return a.rank - b.rank;
     })
     .map(({ rank: _rank, ...match }) => match);
@@ -226,18 +227,18 @@ export function rankMessageMatches<T extends SearchableMessage>(
   query: string | null,
   limit: number,
 ): RankedMessageMatch<T>[] {
-  const normalizedQuery = query ? normalizeSearchText(query) : "";
-  if (!normalizedQuery) return buildRecentMatches(messages, limit);
+  const normalizedQuery = query ? normalizeSearchText(query) : '';
+  if (!normalizedQuery) { return buildRecentMatches(messages, limit); }
 
-  const queryTerms = tokenizeMessageSearchQuery(query ?? "");
+  const queryTerms = tokenizeMessageSearchQuery(query ?? '');
   const matches = new Map<string, MutableRankedMatch<T>>();
 
   addDeterministicMatches(messages, matches, normalizedQuery, queryTerms);
 
   const fuse = new Fuse(messages, {
     keys: [
-      { name: "content", weight: 0.9 },
-      { name: "author", weight: 0.1 },
+      { name: 'content', weight: 0.9 },
+      { name: 'author', weight: 0.1 },
     ],
     includeScore: true,
     ignoreLocation: true,
@@ -245,7 +246,7 @@ export function rankMessageMatches<T extends SearchableMessage>(
     shouldSort: true,
     threshold: FUSE_THRESHOLD,
   });
-  addFuseMatches(fuse.search(query ?? ""), matches, queryTerms);
+  addFuseMatches(fuse.search(query ?? ''), matches, queryTerms);
 
   return sortMatches(matches.values()).slice(0, limit);
 }
@@ -260,13 +261,13 @@ export function summarizeMessageSearchMatches<T extends SearchableMessage>(
 } {
   return {
     exactPhraseFound: matches.some(
-      (match) => match.matchType === "exact_phrase",
+      match => match.matchType === 'exact_phrase',
     ),
     bestMatchType: matches[0]?.matchType ?? null,
-    fuzzyMatchCount: matches.filter((match) => match.matchType === "fuzzy")
+    fuzzyMatchCount: matches.filter(match => match.matchType === 'fuzzy')
       .length,
     partialMatchCount: matches.filter(
-      (match) => match.matchType === "partial_terms",
+      match => match.matchType === 'partial_terms',
     ).length,
   };
 }

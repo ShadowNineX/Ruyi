@@ -1,24 +1,26 @@
+import type { ChatInputCommandInteraction } from 'discord.js';
+import type { BuildInfo } from '../../build-info';
 import {
+
   EmbedBuilder,
   MessageFlags,
   SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-} from "discord.js";
-import mongoose from "mongoose";
-import { agentsRuntimeManager } from "../../ai";
-import { getBuildInfo, type BuildInfo } from "../../build-info";
-import { countConnectedSmitheryConnections } from "../../db/models";
-import { botLogger } from "../../logger";
-import { steamCommunityClient } from "../../steam/client";
-import { steamIntegrationEnabled } from "../../utils/user-identity";
+} from 'discord.js';
+import mongoose from 'mongoose';
+import { agentsRuntimeManager } from '../../ai';
+import { getBuildInfo } from '../../build-info';
+import { countConnectedSmitheryConnections } from '../../db/models';
+import { botLogger } from '../../logger';
+import { steamCommunityClient } from '../../steam/client';
+import { steamIntegrationEnabled } from '../../utils/user-identity';
 
 const INFO_COLORS = {
-  healthy: 0x57f287,
-  warning: 0xffaa00,
-  error: 0xcc3333,
+  healthy: 0x57F287,
+  warning: 0xFFAA00,
+  error: 0xCC3333,
 } as const;
 
-type HealthState = "OK" | "Warning" | "Error" | "Disabled";
+type HealthState = 'OK' | 'Warning' | 'Error' | 'Disabled';
 
 interface HealthItem {
   label: string;
@@ -27,8 +29,8 @@ interface HealthItem {
 }
 
 export const infoCommand = new SlashCommandBuilder()
-  .setName("info")
-  .setDescription("Show Ruyi health status and running Git commit");
+  .setName('info')
+  .setDescription('Show Ruyi health status and running Git commit');
 
 function formatDuration(totalSeconds: number): string {
   const seconds = Math.max(0, Math.floor(totalSeconds));
@@ -44,18 +46,18 @@ function formatDuration(totalSeconds: number): string {
     remainingSeconds > 0 || seconds === 0 ? `${remainingSeconds}s` : null,
   ].filter((part): part is string => part !== null);
 
-  return parts.slice(0, 3).join(" ");
+  return parts.slice(0, 3).join(' ');
 }
 
 function formatDiscordTimestamp(date: Date | null): string {
-  if (!date) return "Not ready";
+  if (!date) { return 'Not ready'; }
   return `<t:${Math.floor(date.getTime() / 1000)}:R>`;
 }
 
 function formatBuildTime(value: string | null): string {
-  if (!value) return "Not bundled";
+  if (!value) { return 'Not bundled'; }
   const time = Date.parse(value);
-  if (!Number.isFinite(time)) return "Invalid build time";
+  if (!Number.isFinite(time)) { return 'Invalid build time'; }
   return `<t:${Math.floor(time / 1000)}:R>`;
 }
 
@@ -78,68 +80,68 @@ function getDiscordHealth(
   const ready = Boolean(interaction.client.readyAt);
   const ping = interaction.client.ws.ping;
   return {
-    label: "Discord",
-    state: ready ? "OK" : "Warning",
+    label: 'Discord',
+    state: ready ? 'OK' : 'Warning',
     detail: ready
       ? `Gateway ready, ${Math.round(ping)} ms ping`
-      : "Gateway is not ready",
+      : 'Gateway is not ready',
   };
 }
 
 function getMongoHealth(): HealthItem {
   const state = mongoose.connection.readyState;
-  const labels = ["Disconnected", "Connected", "Connecting", "Disconnecting"];
+  const labels = ['Disconnected', 'Connected', 'Connecting', 'Disconnecting'];
   const detail = labels[state] ?? `Unknown state ${state}`;
 
   if (state === 1) {
-    return { label: "MongoDB", state: "OK", detail };
+    return { label: 'MongoDB', state: 'OK', detail };
   }
   if (state === 0) {
-    return { label: "MongoDB", state: "Error", detail };
+    return { label: 'MongoDB', state: 'Error', detail };
   }
-  return { label: "MongoDB", state: "Warning", detail };
+  return { label: 'MongoDB', state: 'Warning', detail };
 }
 
 function getOpenAIHealth(): HealthItem {
   return {
-    label: "OpenAI Agents",
-    state: agentsRuntimeManager.isConnected() ? "OK" : "Warning",
+    label: 'OpenAI Agents',
+    state: agentsRuntimeManager.isConnected() ? 'OK' : 'Warning',
     detail: agentsRuntimeManager.isConnected()
-      ? "Runtime initialized"
-      : "Runtime not initialized",
+      ? 'Runtime initialized'
+      : 'Runtime not initialized',
   };
 }
 
 function getSteamHealth(): HealthItem {
   if (!steamIntegrationEnabled()) {
     return {
-      label: "Steam",
-      state: "Disabled",
-      detail: "Steam env is not configured",
+      label: 'Steam',
+      state: 'Disabled',
+      detail: 'Steam env is not configured',
     };
   }
 
   return {
-    label: "Steam",
-    state: steamCommunityClient.isReady() ? "OK" : "Warning",
+    label: 'Steam',
+    state: steamCommunityClient.isReady() ? 'OK' : 'Warning',
     detail: steamCommunityClient.isReady()
-      ? "Community session ready"
-      : "Configured but not ready",
+      ? 'Community session ready'
+      : 'Configured but not ready',
   };
 }
 
 async function getSmitheryHealth(): Promise<HealthItem> {
   const connected = await countConnectedSmitheryConnections();
   return {
-    label: "Smithery",
-    state: "OK",
-    detail: `${connected} connected service${connected === 1 ? "" : "s"}`,
+    label: 'Smithery',
+    state: 'OK',
+    detail: `${connected} connected service${connected === 1 ? '' : 's'}`,
   };
 }
 
 function chooseHealthColor(items: HealthItem[]): number {
-  if (items.some((item) => item.state === "Error")) return INFO_COLORS.error;
-  if (items.some((item) => item.state === "Warning")) {
+  if (items.some(item => item.state === 'Error')) { return INFO_COLORS.error; }
+  if (items.some(item => item.state === 'Warning')) {
     return INFO_COLORS.warning;
   }
   return INFO_COLORS.healthy;
@@ -158,38 +160,38 @@ async function buildInfoEmbed(
   ];
 
   return new EmbedBuilder()
-    .setTitle("Ruyi Info")
-    .setDescription("Runtime health and build details.")
+    .setTitle('Ruyi Info')
+    .setDescription('Runtime health and build details.')
     .setColor(chooseHealthColor(healthItems))
     .addFields(
       {
-        name: "Build",
+        name: 'Build',
         value: [
           `Commit: ${formatCommit(buildInfo)}`,
           `Build time: ${formatBuildTime(buildInfo.buildTime)}`,
-          `Bundled: ${buildInfo.bundled ? "Yes" : "No"}`,
-        ].join("\n"),
+          `Bundled: ${buildInfo.bundled ? 'Yes' : 'No'}`,
+        ].join('\n'),
       },
       {
-        name: "Runtime",
+        name: 'Runtime',
         value: [
           `Uptime: ${formatDuration(process.uptime())}`,
           `Discord ready: ${formatDiscordTimestamp(interaction.client.readyAt)}`,
           `Bun: ${Bun.version}`,
-        ].join("\n"),
+        ].join('\n'),
       },
       {
-        name: "Health",
-        value: healthItems.map(formatHealthLine).join("\n"),
+        name: 'Health',
+        value: healthItems.map(formatHealthLine).join('\n'),
       },
     )
     .setTimestamp();
 }
 
 function buildErrorEmbed(error: unknown): EmbedBuilder {
-  const message = error instanceof Error ? error.message : "Unknown error";
+  const message = error instanceof Error ? error.message : 'Unknown error';
   return new EmbedBuilder()
-    .setTitle("Ruyi Info Unavailable")
+    .setTitle('Ruyi Info Unavailable')
     .setDescription(message)
     .setColor(INFO_COLORS.error)
     .setTimestamp();
@@ -198,7 +200,7 @@ function buildErrorEmbed(error: unknown): EmbedBuilder {
 export async function handleInfoCommand(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
-  botLogger.info({ user: interaction.user.username }, "/info invoked");
+  botLogger.info({ user: interaction.user.username }, '/info invoked');
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   try {
@@ -210,7 +212,7 @@ export async function handleInfoCommand(
         stack: error instanceof Error ? error.stack : undefined,
         user: interaction.user.username,
       },
-      "/info failed",
+      '/info failed',
     );
     await interaction.editReply({ embeds: [buildErrorEmbed(error)] });
   }

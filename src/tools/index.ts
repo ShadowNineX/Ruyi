@@ -1,44 +1,45 @@
-import { calculatorTool } from "./calc";
-import { channelInfoTool } from "../discord/tools/channel";
-import { serverInfoTool } from "../discord/tools/server";
-import { userInfoTool } from "../discord/tools/user";
-import { resolveTimeTool } from "./time";
-import { manageReminderTool } from "../discord/tools/reminder";
-import { getEventsTool, manageEventTool } from "../discord/tools/events";
-import { manageRoleTool } from "../discord/tools/role";
-import { reactionTool } from "../discord/tools/reaction";
-import { pinTool } from "../discord/tools/pin";
+import type { Tool } from '@openai/agents';
+import type { ConversationSurface } from '../ai/context';
+import { hostedMcpTool } from '@openai/agents';
+import { auditLogTool } from '../discord/tools/audit';
+import { channelInfoTool } from '../discord/tools/channel';
+import { embedTool } from '../discord/tools/embed';
+import { getEventsTool, manageEventTool } from '../discord/tools/events';
+import { generateImageTool } from '../discord/tools/image';
 import {
-  searchMessagesTool,
   deleteMessagesTool,
   editBotMessageTool,
-} from "../discord/tools/message";
-import { embedTool } from "../discord/tools/embed";
-import { fetchUrlTool } from "./fetch";
-import { webSearchTool } from "./web-search";
-import { pinterestTool } from "./pinterest";
-import { reverseImageSearchTool } from "../discord/tools/reverse-image-search";
-import { generateImageTool } from "../discord/tools/image";
-import { describeImageTool } from "./vision";
+  searchMessagesTool,
+} from '../discord/tools/message';
+import { pinTool } from '../discord/tools/pin';
+import { reactionTool } from '../discord/tools/reaction';
+import { manageReminderTool } from '../discord/tools/reminder';
+import { reverseImageSearchTool } from '../discord/tools/reverse-image-search';
+import { manageRoleTool } from '../discord/tools/role';
+import { serverInfoTool } from '../discord/tools/server';
 import {
-  memoryStoreTool,
-  memoryRecallTool,
-  searchMemoryTool,
-  searchConversationTool,
-} from "./memory";
-import { auditLogTool } from "../discord/tools/audit";
-import { lastfmTool } from "./lastfm";
-import {
-  smitheryListToolsTool,
   smitheryCallTool,
-} from "../discord/tools/smithery";
+  smitheryListToolsTool,
+} from '../discord/tools/smithery';
+import { userInfoTool } from '../discord/tools/user';
+import { env } from '../env';
 import {
-  steamProfileCommentTool,
   steamProfileCommentsTool,
-} from "../steam/tools/profile-comment";
-import { hostedMcpTool, type Tool } from "@openai/agents";
-import { env } from "../env";
-import type { ConversationSurface } from "../ai/context";
+  steamProfileCommentTool,
+} from '../steam/tools/profile-comment';
+import { calculatorTool } from './calc';
+import { fetchUrlTool } from './fetch';
+import { lastfmTool } from './lastfm';
+import {
+  memoryRecallTool,
+  memoryStoreTool,
+  searchConversationTool,
+  searchMemoryTool,
+} from './memory';
+import { pinterestTool } from './pinterest';
+import { resolveTimeTool } from './time';
+import { describeImageTool } from './vision';
+import { webSearchTool } from './web-search';
 
 interface ToolRegistration {
   readonly tool: Tool;
@@ -53,73 +54,73 @@ interface ToolRegistration {
 
 const githubMcpTool: Tool | null = env.GITHUB_PERSONAL_ACCESS_TOKEN
   ? hostedMcpTool({
-      serverLabel: "github",
+      serverLabel: 'github',
       serverUrl: env.GITHUB_MCP_URL,
       headers: {
         Authorization: `Bearer ${env.GITHUB_PERSONAL_ACCESS_TOKEN}`,
       },
-      requireApproval: "always",
+      requireApproval: 'always',
       serverDescription:
-        "GitHub's official MCP server for repositories, code, issues, pull requests, workflows, notifications, and related GitHub operations.",
+        'GitHub\'s official MCP server for repositories, code, issues, pull requests, workflows, notifications, and related GitHub operations.',
     })
   : null;
 
 const baseToolRegistry: readonly ToolRegistration[] = [
   { tool: calculatorTool },
-  { tool: channelInfoTool, surfaces: ["discord"] },
-  { tool: serverInfoTool, surfaces: ["discord"] },
-  { tool: userInfoTool, surfaces: ["discord"] },
+  { tool: channelInfoTool, surfaces: ['discord'] },
+  { tool: serverInfoTool, surfaces: ['discord'] },
+  { tool: userInfoTool, surfaces: ['discord'] },
   { tool: resolveTimeTool },
-  { tool: manageReminderTool, surfaces: ["discord"] },
-  { tool: getEventsTool, surfaces: ["discord"] },
-  { tool: manageEventTool, surfaces: ["discord"] },
-  { tool: manageRoleTool, surfaces: ["discord"] },
-  { tool: reactionTool, surfaces: ["discord"] },
-  { tool: pinTool, surfaces: ["discord"] },
-  { tool: searchMessagesTool, surfaces: ["discord"] },
-  { tool: deleteMessagesTool, surfaces: ["discord"] },
+  { tool: manageReminderTool, surfaces: ['discord'] },
+  { tool: getEventsTool, surfaces: ['discord'] },
+  { tool: manageEventTool, surfaces: ['discord'] },
+  { tool: manageRoleTool, surfaces: ['discord'] },
+  { tool: reactionTool, surfaces: ['discord'] },
+  { tool: pinTool, surfaces: ['discord'] },
+  { tool: searchMessagesTool, surfaces: ['discord'] },
+  { tool: deleteMessagesTool, surfaces: ['discord'] },
   {
     tool: editBotMessageTool,
     producesDiscordOutput: true,
-    surfaces: ["discord"],
+    surfaces: ['discord'],
   },
-  { tool: embedTool, producesDiscordOutput: true, surfaces: ["discord"] },
+  { tool: embedTool, producesDiscordOutput: true, surfaces: ['discord'] },
   { tool: fetchUrlTool },
   { tool: webSearchTool, externalService: true },
   { tool: pinterestTool, externalService: true },
   {
     tool: reverseImageSearchTool,
     externalService: true,
-    surfaces: ["discord"],
+    surfaces: ['discord'],
   },
   {
     tool: generateImageTool,
     producesDiscordOutput: true,
-    surfaces: ["discord"],
+    surfaces: ['discord'],
   },
   { tool: describeImageTool },
   { tool: memoryStoreTool },
   { tool: memoryRecallTool },
   { tool: searchMemoryTool },
-  { tool: searchConversationTool, surfaces: ["discord", "steam"] },
-  { tool: auditLogTool, surfaces: ["discord"] },
+  { tool: searchConversationTool, surfaces: ['discord', 'steam'] },
+  { tool: auditLogTool, surfaces: ['discord'] },
   { tool: lastfmTool },
-  { tool: smitheryListToolsTool, externalService: true, surfaces: ["discord"] },
-  { tool: smitheryCallTool, externalService: true, surfaces: ["discord"] },
+  { tool: smitheryListToolsTool, externalService: true, surfaces: ['discord'] },
+  { tool: smitheryCallTool, externalService: true, surfaces: ['discord'] },
   {
     tool: steamProfileCommentTool,
     externalService: true,
-    surfaces: ["discord", "steam"],
+    surfaces: ['discord', 'steam'],
   },
   {
     tool: steamProfileCommentsTool,
     externalService: true,
-    surfaces: ["discord"],
+    surfaces: ['discord'],
   },
 ];
 
 function buildToolRegistry(): readonly ToolRegistration[] {
-  if (!githubMcpTool) return baseToolRegistry;
+  if (!githubMcpTool) { return baseToolRegistry; }
   return [...baseToolRegistry, { tool: githubMcpTool, externalService: true }];
 }
 
@@ -127,7 +128,7 @@ const toolRegistry = buildToolRegistry();
 
 // Export all tools as an array for use with the OpenAI Agents runtime.
 export const allTools: readonly Tool[] = toolRegistry.map(
-  (registration) => registration.tool,
+  registration => registration.tool,
 );
 
 function supportsSurface(
@@ -141,14 +142,14 @@ export function getToolsForSurface(
   surface: ConversationSurface,
 ): readonly Tool[] {
   return toolRegistry
-    .filter((registration) => supportsSurface(registration, surface))
-    .map((registration) => registration.tool);
+    .filter(registration => supportsSurface(registration, surface))
+    .map(registration => registration.tool);
 }
 
 export function getToolNamesForSurface(
   surface: ConversationSurface,
 ): ReadonlySet<string> {
-  return new Set(getToolsForSurface(surface).map((tool) => tool.name));
+  return new Set(getToolsForSurface(surface).map(tool => tool.name));
 }
 
 export function isExternalToolName(
@@ -156,10 +157,10 @@ export function isExternalToolName(
   surface: ConversationSurface,
 ): boolean {
   return toolRegistry.some(
-    (registration) =>
-      registration.tool.name === toolName &&
-      registration.externalService === true &&
-      supportsSurface(registration, surface),
+    registration =>
+      registration.tool.name === toolName
+      && registration.externalService === true
+      && supportsSurface(registration, surface),
   );
 }
 
@@ -169,6 +170,6 @@ export function isExternalToolName(
  */
 export const selfRespondingToolNames: ReadonlySet<string> = new Set(
   toolRegistry
-    .filter((registration) => registration.producesDiscordOutput === true)
-    .map((registration) => registration.tool.name),
+    .filter(registration => registration.producesDiscordOutput === true)
+    .map(registration => registration.tool.name),
 );

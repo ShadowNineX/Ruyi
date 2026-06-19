@@ -1,4 +1,4 @@
-import { createStore } from "@tanstack/store";
+import { createStore } from '@tanstack/store';
 
 export interface AwayTimer {
   timer: ReturnType<typeof setTimeout>;

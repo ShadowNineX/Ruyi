@@ -1,4 +1,4 @@
-import type { PermissionPromptController } from "../stores";
+import type { PermissionPromptController } from '../stores';
 
 export abstract class ChatRuntimeSession {
   getPermissionPromptController?(): PermissionPromptController;

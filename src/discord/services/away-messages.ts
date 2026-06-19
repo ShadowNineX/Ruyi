@@ -1,26 +1,22 @@
-import { Agent } from "@openai/agents";
-import type { Message } from "discord.js";
+import type { Message } from 'discord.js';
+import type { ConfigScope } from '../../config';
+import type { DiscordPresenceInfo } from '../utils/discord-profile';
+import { Agent } from '@openai/agents';
+import { agentsRuntimeManager } from '../../ai/client';
+import { conversationContext } from '../../ai/context';
+import { systemPrompt } from '../../ai/prompt';
 import {
   configManager,
+
   configScopeKey,
   userConfigScope,
-  type ConfigScope,
-} from "../../config";
+} from '../../config';
 import {
   AWAY_MESSAGE_GENERATION_TIMEOUT_MS,
   AWAY_MESSAGE_MAX_LENGTH,
-} from "../../constants";
-import { DiscordConversation } from "../../db/models";
-import { aiLogger, botLogger } from "../../logger";
-import { agentsRuntimeManager } from "../../ai/client";
-import { conversationContext } from "../../ai/context";
-import { systemPrompt } from "../../ai/prompt";
-import {
-  buildDiscordPresence,
-  formatPresenceContext,
-  type DiscordPresenceInfo,
-} from "../utils/discord-profile";
-import { fetchRecentChatMessages, splitMessage } from "../utils/messages";
+} from '../../constants';
+import { DiscordConversation } from '../../db/models';
+import { aiLogger, botLogger } from '../../logger';
 import {
   deleteAwayTimer,
   getAwayTimer,
@@ -32,10 +28,16 @@ import {
   setLastChannelActivityAt,
   setLastScopedUserActivityAt,
   setLastUserActivityAt,
-} from "../../stores";
+} from '../../stores';
+import {
+  buildDiscordPresence,
+
+  formatPresenceContext,
+} from '../utils/discord-profile';
+import { fetchRecentChatMessages, splitMessage } from '../utils/messages';
 
 interface AwayTarget {
-  channel: Message["channel"];
+  channel: Message['channel'];
   scope: ConfigScope;
   channelId: string;
   userId: string;
@@ -45,13 +47,13 @@ interface AwayTarget {
 }
 
 const AWAY_MESSAGE_INSTRUCTIONS = [
-  "Compose one short Character.AI-style away message from Ruyi to the current user.",
-  "This is a proactive message after a quiet gap in an existing conversation.",
-  "Do not mention timers, automation, inactivity tracking, settings, or that this was triggered by a service.",
-  "Do not perform or promise actions. Do not ask multiple questions.",
-  "Stay in Ruyi's formal, warm Nine Sols voice. Keep it human-feeling, gentle, and specific to the recent context when possible.",
-  "Return only the message text. The Discord mention will be added outside your response.",
-].join("\n");
+  'Compose one short Character.AI-style away message from Ruyi to the current user.',
+  'This is a proactive message after a quiet gap in an existing conversation.',
+  'Do not mention timers, automation, inactivity tracking, settings, or that this was triggered by a service.',
+  'Do not perform or promise actions. Do not ask multiple questions.',
+  'Stay in Ruyi\'s formal, warm Nine Sols voice. Keep it human-feeling, gentle, and specific to the recent context when possible.',
+  'Return only the message text. The Discord mention will be added outside your response.',
+].join('\n');
 
 function awayKey(
   scope: ConfigScope,
@@ -67,8 +69,8 @@ function scopedUserActivityKey(scope: ConfigScope, userId: string): string {
 
 function sanitizeAwayMessage(content: string): string {
   const withoutMassMentions = content
-    .replaceAll("@everyone", "everyone")
-    .replaceAll("@here", "here")
+    .replaceAll('@everyone', 'everyone')
+    .replaceAll('@here', 'here')
     .trim();
   return withoutMassMentions.length > AWAY_MESSAGE_MAX_LENGTH
     ? `${withoutMassMentions.slice(0, AWAY_MESSAGE_MAX_LENGTH - 3).trimEnd()}...`
@@ -77,7 +79,7 @@ function sanitizeAwayMessage(content: string): string {
 
 class AwayMessageService {
   recordUserActivity(message: Message): void {
-    if (message.author.bot) return;
+    if (message.author.bot) { return; }
 
     const scope = userConfigScope(message.guild?.id ?? null, message.author.id);
     const now = Date.now();
@@ -91,13 +93,13 @@ class AwayMessageService {
   }
 
   async scheduleAfterHandledTurn(message: Message): Promise<void> {
-    if (message.author.bot || !("send" in message.channel)) {
+    if (message.author.bot || !('send' in message.channel)) {
       return;
     }
 
     const scope = userConfigScope(message.guild?.id ?? null, message.author.id);
     const settings = configManager.getAwaySettings(scope);
-    if (!settings.scopeEnabled) return;
+    if (!settings.scopeEnabled) { return; }
     if (!(await configManager.isAwayEnabledForUser(scope, message.author.id))) {
       return;
     }
@@ -138,13 +140,13 @@ class AwayMessageService {
         dueAt,
         delayMinutes: settings.delayMinutes,
       },
-      "Scheduled away message",
+      'Scheduled away message',
     );
   }
 
   private clearTimer(key: string): void {
     const existing = getAwayTimer(key);
-    if (!existing) return;
+    if (!existing) { return; }
 
     clearTimeout(existing.timer);
     deleteAwayTimer(key);
@@ -152,7 +154,7 @@ class AwayMessageService {
 
   private clearTimersForUser(userId: string): void {
     for (const [key, timer] of getAwayTimerEntries()) {
-      if (timer.userId === userId) this.clearTimer(key);
+      if (timer.userId === userId) { this.clearTimer(key); }
     }
   }
 
@@ -173,7 +175,7 @@ class AwayMessageService {
 
     try {
       const settings = configManager.getAwaySettings(target.scope);
-      if (!settings.scopeEnabled) return;
+      if (!settings.scopeEnabled) { return; }
       if (
         !(await configManager.isAwayEnabledForUser(target.scope, target.userId))
       ) {
@@ -196,21 +198,21 @@ class AwayMessageService {
             userId: target.userId,
             username: target.username,
           },
-          "Skipped away message because activity resumed",
+          'Skipped away message because activity resumed',
         );
         return;
       }
 
       const presence = await this.fetchTargetPresence(target);
       const generated = await this.generateAwayMessage(target, presence);
-      if (!generated) return;
+      if (!generated) { return; }
 
       const chunks = splitMessage(
         `<@${target.userId}> ${generated}`,
         AWAY_MESSAGE_MAX_LENGTH + 32,
       );
       const firstChunk = chunks[0];
-      if (!firstChunk || !("send" in target.channel)) return;
+      if (!firstChunk || !('send' in target.channel)) { return; }
 
       await target.channel.send({
         content: firstChunk,
@@ -228,7 +230,7 @@ class AwayMessageService {
           userId: target.userId,
           username: target.username,
         },
-        "Sent away message",
+        'Sent away message',
       );
     } catch (error) {
       botLogger.error(
@@ -239,7 +241,7 @@ class AwayMessageService {
           channelId: target.channelId,
           userId: target.userId,
         },
-        "Failed to send away message",
+        'Failed to send away message',
       );
     }
   }
@@ -252,9 +254,9 @@ class AwayMessageService {
     );
     const lastChannelActivity = getLastChannelActivityAt(target.channelId);
 
-    if (lastGlobalUserActivity > target.scheduledAt) return false;
-    if (lastUserActivity > target.scheduledAt) return false;
-    if (lastChannelActivity > target.scheduledAt) return false;
+    if (lastGlobalUserActivity > target.scheduledAt) { return false; }
+    if (lastUserActivity > target.scheduledAt) { return false; }
+    if (lastChannelActivity > target.scheduledAt) { return false; }
 
     return (
       now - lastUserActivity >= delayMs && now - lastChannelActivity >= delayMs
@@ -264,7 +266,7 @@ class AwayMessageService {
   private async fetchTargetPresence(
     target: AwayTarget,
   ): Promise<DiscordPresenceInfo | null> {
-    if (!("guild" in target.channel)) return null;
+    if (!('guild' in target.channel)) { return null; }
 
     try {
       const member = await target.channel.guild.members.fetch(target.userId);
@@ -276,7 +278,7 @@ class AwayMessageService {
           channelId: target.channelId,
           userId: target.userId,
         },
-        "Could not fetch Discord presence for away message",
+        'Could not fetch Discord presence for away message',
       );
       return null;
     }
@@ -303,7 +305,7 @@ class AwayMessageService {
               channelId: target.channelId,
               userId: target.userId,
             },
-            failureMessage: "Could not fetch live history for away message",
+            failureMessage: 'Could not fetch live history for away message',
           }),
           target.scope,
         ),
@@ -316,11 +318,11 @@ class AwayMessageService {
         recentHistory,
         `<instructions>\n${AWAY_MESSAGE_INSTRUCTIONS}\nTarget user display name: ${target.displayName}\n</instructions>`,
       ]
-        .filter((section) => section.length > 0)
-        .join("\n\n");
+        .filter(section => section.length > 0)
+        .join('\n\n');
 
       const agent = new Agent({
-        name: "Ruyi Away Message",
+        name: 'Ruyi Away Message',
         instructions: systemPrompt,
         model: agentsRuntimeManager.getModel(target.scope),
         modelSettings: agentsRuntimeManager.getModelSettings(target.scope),
@@ -332,8 +334,8 @@ class AwayMessageService {
         signal: abortController.signal,
       });
       const finalOutput = result.finalOutput;
-      const content =
-        typeof finalOutput === "string" ? sanitizeAwayMessage(finalOutput) : "";
+      const content
+        = typeof finalOutput === 'string' ? sanitizeAwayMessage(finalOutput) : '';
 
       return content.length > 0 ? content : null;
     } catch (error) {
@@ -344,7 +346,7 @@ class AwayMessageService {
           channelId: target.channelId,
           username: target.username,
         },
-        "Away message generation failed",
+        'Away message generation failed',
       );
       return null;
     } finally {
@@ -358,18 +360,18 @@ class AwayMessageService {
     try {
       const conversation = await DiscordConversation.findOne({ channelId });
       const messages = conversation?.messages.slice(-12) ?? [];
-      if (messages.length === 0) return "";
+      if (messages.length === 0) { return ''; }
 
       const lines = messages.map(
-        (message) => `${message.author}: ${message.content}`,
+        message => `${message.author}: ${message.content}`,
       );
-      return `Recent archived conversation:\n${lines.join("\n")}`;
+      return `Recent archived conversation:\n${lines.join('\n')}`;
     } catch (error) {
       botLogger.debug(
         { error: (error as Error).message, channelId },
-        "Could not fetch archived history for away message",
+        'Could not fetch archived history for away message',
       );
-      return "";
+      return '';
     }
   }
 }

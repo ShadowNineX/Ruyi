@@ -1,34 +1,34 @@
-import { tool } from "@openai/agents";
-import { z } from "zod";
-import { EmbedBuilder, PermissionFlagsBits } from "discord.js";
-import { toolLogger } from "../../logger";
-import { toolContextManager, formatError } from "../../utils/types";
-import { requesterHasChannelPermission } from "../utils/discord-permissions";
+import { tool } from '@openai/agents';
+import { EmbedBuilder, PermissionFlagsBits } from 'discord.js';
+import { z } from 'zod';
+import { toolLogger } from '../../logger';
+import { formatError, toolContextManager } from '../../utils/types';
+import { requesterHasChannelPermission } from '../utils/discord-permissions';
 
 // Map color names to hex values
 const colorMap: Record<string, number> = {
-  red: 0xe74c3c,
-  blue: 0x3498db,
-  green: 0x2ecc71,
-  purple: 0x9b59b6,
-  gold: 0xf1c40f,
-  orange: 0xe67e22,
-  pink: 0xe91e63,
-  cyan: 0x00bcd4,
+  red: 0xE74C3C,
+  blue: 0x3498DB,
+  green: 0x2ECC71,
+  purple: 0x9B59B6,
+  gold: 0xF1C40F,
+  orange: 0xE67E22,
+  pink: 0xE91E63,
+  cyan: 0x00BCD4,
   teal: 0x009688,
-  white: 0xffffff,
+  white: 0xFFFFFF,
   black: 0x000000,
-  gray: 0x95a5a6,
-  grey: 0x95a5a6,
+  gray: 0x95A5A6,
+  grey: 0x95A5A6,
 };
 
 function parseColor(color: string | null): number {
-  if (!color) return 0x9b59b6;
+  if (!color) { return 0x9B59B6; }
   const normalized = color.trim().toLowerCase();
   const namedColor = colorMap[normalized];
-  if (namedColor !== undefined) return namedColor;
-  const hex = normalized.replace(/^#/, "");
-  if (!/^[\da-f]{6}$/i.test(hex)) return 0x9b59b6;
+  if (namedColor !== undefined) { return namedColor; }
+  const hex = normalized.replace(/^#/, '');
+  if (!/^[\da-f]{6}$/i.test(hex)) { return 0x9B59B6; }
   return Number.parseInt(hex, 16);
 }
 
@@ -46,14 +46,14 @@ const MAX_FOOTER = 2048;
 const MAX_EMBED_TOTAL = 6000;
 
 function truncateEmbedText(value: string, maxLength: number): string {
-  if (value.length <= maxLength) return value;
-  return value.slice(0, maxLength - 3) + "...";
+  if (value.length <= maxLength) { return value; }
+  return `${value.slice(0, maxLength - 3)}...`;
 }
 
 function normalizeField(field: EmbedField): Required<EmbedField> {
   return {
-    name: truncateEmbedText(field.name, MAX_FIELD_NAME) || "\u200b",
-    value: truncateEmbedText(field.value, MAX_FIELD_VALUE) || "\u200b",
+    name: truncateEmbedText(field.name, MAX_FIELD_NAME) || '\u200B',
+    value: truncateEmbedText(field.value, MAX_FIELD_VALUE) || '\u200B',
     inline: field.inline ?? false,
   };
 }
@@ -70,9 +70,9 @@ function chunkFields(fields: EmbedField[], baseLength = 0): EmbedField[][] {
   for (const rawField of fields) {
     const field = normalizeField(rawField);
     const nextLength = currentLength + fieldLength(field);
-    const shouldStartNewChunk =
-      currentChunk.length >= MAX_FIELDS_PER_EMBED ||
-      (currentChunk.length > 0 && nextLength > MAX_EMBED_TOTAL);
+    const shouldStartNewChunk
+      = currentChunk.length >= MAX_FIELDS_PER_EMBED
+        || (currentChunk.length > 0 && nextLength > MAX_EMBED_TOTAL);
 
     if (shouldStartNewChunk) {
       chunks.push(currentChunk);
@@ -92,7 +92,7 @@ function chunkFields(fields: EmbedField[], baseLength = 0): EmbedField[][] {
 }
 
 function chunkDescription(description: string): string[] {
-  if (description.length <= MAX_DESCRIPTION) return [description];
+  if (description.length <= MAX_DESCRIPTION) { return [description]; }
 
   const chunks: string[] = [];
   let remaining = description;
@@ -102,9 +102,9 @@ function chunkDescription(description: string): string[] {
       chunks.push(remaining);
       break;
     }
-    let splitIndex = remaining.lastIndexOf("\n", MAX_DESCRIPTION);
+    let splitIndex = remaining.lastIndexOf('\n', MAX_DESCRIPTION);
     if (splitIndex < MAX_DESCRIPTION - 500) {
-      splitIndex = remaining.lastIndexOf(" ", MAX_DESCRIPTION);
+      splitIndex = remaining.lastIndexOf(' ', MAX_DESCRIPTION);
     }
     if (splitIndex < MAX_DESCRIPTION - 500) {
       splitIndex = MAX_DESCRIPTION;
@@ -129,9 +129,8 @@ interface EmbedConfig {
 function buildEmbed(config: EmbedConfig): EmbedBuilder {
   const embed = new EmbedBuilder().setColor(config.color);
 
-  if (config.title) embed.setTitle(truncateEmbedText(config.title, 256));
-  if (config.description)
-    embed.setDescription(truncateEmbedText(config.description, MAX_DESCRIPTION));
+  if (config.title) { embed.setTitle(truncateEmbedText(config.title, 256)); }
+  if (config.description) { embed.setDescription(truncateEmbedText(config.description, MAX_DESCRIPTION)); }
 
   if (config.fields && config.fields.length > 0) {
     for (const field of config.fields.slice(0, MAX_FIELDS_PER_EMBED)) {
@@ -144,10 +143,9 @@ function buildEmbed(config: EmbedConfig): EmbedBuilder {
     }
   }
 
-  if (config.footer)
-    embed.setFooter({ text: truncateEmbedText(config.footer, MAX_FOOTER) });
-  if (config.thumbnail) embed.setThumbnail(config.thumbnail);
-  if (config.showTimestamp) embed.setTimestamp();
+  if (config.footer) { embed.setFooter({ text: truncateEmbedText(config.footer, MAX_FOOTER) }); }
+  if (config.thumbnail) { embed.setThumbnail(config.thumbnail); }
+  if (config.showTimestamp) { embed.setTimestamp(); }
 
   return embed;
 }
@@ -156,7 +154,7 @@ function getContinuationTitle(
   title: string | null,
   isFirst: boolean,
 ): string | null {
-  if (isFirst) return title;
+  if (isFirst) { return title; }
   return title ? `${title} (cont.)` : null;
 }
 
@@ -172,15 +170,15 @@ function buildMultipleEmbeds(
   const descriptionChunks: (string | null)[] = description
     ? chunkDescription(description)
     : [];
-  const fieldChunks: EmbedField[][] =
-    fields && fields.length > 0 ? chunkFields(fields) : [];
+  const fieldChunks: EmbedField[][]
+    = fields && fields.length > 0 ? chunkFields(fields) : [];
 
   let partIndex = 0;
 
   for (const descChunk of descriptionChunks) {
     const isFirst = partIndex === 0;
-    const hasMoreParts =
-      partIndex < descriptionChunks.length - 1 || fieldChunks.length > 0;
+    const hasMoreParts
+      = partIndex < descriptionChunks.length - 1 || fieldChunks.length > 0;
 
     embeds.push(
       buildEmbed({
@@ -224,30 +222,30 @@ function needsMultipleEmbeds(
   footer: string | null,
 ): boolean {
   const tooManyFields = fields !== null && fields.length > MAX_FIELDS_PER_EMBED;
-  const descriptionTooLong =
-    description !== null && description.length > MAX_DESCRIPTION;
-  const totalLength =
-    (title?.length ?? 0) +
-    (description?.length ?? 0) +
-    (footer?.length ?? 0) +
-    (fields ?? [])
-      .map((field) => fieldLength(normalizeField(field)))
-      .reduce((sum, length) => sum + length, 0);
+  const descriptionTooLong
+    = description !== null && description.length > MAX_DESCRIPTION;
+  const totalLength
+    = (title?.length ?? 0)
+      + (description?.length ?? 0)
+      + (footer?.length ?? 0)
+      + (fields ?? [])
+        .map(field => fieldLength(normalizeField(field)))
+        .reduce((sum, length) => sum + length, 0);
 
   return tooManyFields || descriptionTooLong || totalLength > MAX_EMBED_TOTAL;
 }
 
 export const embedTool = tool({
-  name: "send_embed",
+  name: 'send_embed',
   description:
-    "Send a beautifully formatted Discord embed message. Use this for tables, lists, structured data, audit logs, search results, or any content that benefits from rich formatting.",
+    'Send a beautifully formatted Discord embed message. Use this for tables, lists, structured data, audit logs, search results, or any content that benefits from rich formatting.',
   parameters: z.object({
-    title: z.string().nullable().describe("The embed title."),
+    title: z.string().nullable().describe('The embed title.'),
     description: z
       .string()
       .nullable()
-      .describe("Main embed description. Supports Discord markdown."),
-    color: z.string().nullable().describe("Embed color as hex or color name."),
+      .describe('Main embed description. Supports Discord markdown.'),
+    color: z.string().nullable().describe('Embed color as hex or color name.'),
     fields: z
       .array(
         z.object({
@@ -257,24 +255,24 @@ export const embedTool = tool({
         }),
       )
       .nullable()
-      .describe("Array of field objects for structured data."),
-    footer: z.string().nullable().describe("Small text at the bottom."),
+      .describe('Array of field objects for structured data.'),
+    footer: z.string().nullable().describe('Small text at the bottom.'),
     thumbnail: z
       .string()
       .nullable()
-      .describe("URL of a small image in top-right corner."),
+      .describe('URL of a small image in top-right corner.'),
   }),
   execute: async ({ title, description, color, fields, footer, thumbnail }) => {
     const ctx = toolContextManager.get();
 
     if (!ctx.channel) {
-      toolLogger.warn("No channel context available for send_embed");
-      return { error: "No channel context available" };
+      toolLogger.warn('No channel context available for send_embed');
+      return { error: 'No channel context available' };
     }
 
     const channel = ctx.channel;
-    if (!("send" in channel)) {
-      return { error: "Cannot send messages in this channel type" };
+    if (!('send' in channel)) {
+      return { error: 'Cannot send messages in this channel type' };
     }
     if (
       !requesterHasChannelPermission(channel, [
@@ -284,7 +282,7 @@ export const embedTool = tool({
     ) {
       return {
         error:
-          "You need Send Messages and Embed Links permission in this channel to ask Ruyi to send embeds.",
+          'You need Send Messages and Embed Links permission in this channel to ask Ruyi to send embeds.',
       };
     }
 
@@ -293,7 +291,7 @@ export const embedTool = tool({
       let embeds: EmbedBuilder[];
 
       if (!title && !description && (!fields || fields.length === 0) && !footer && !thumbnail) {
-        return { error: "Embed needs at least a title, description, field, footer, or thumbnail" };
+        return { error: 'Embed needs at least a title, description, field, footer, or thumbnail' };
       }
 
       if (needsMultipleEmbeds(fields, description, title, footer)) {
@@ -325,19 +323,19 @@ export const embedTool = tool({
 
       toolLogger.info(
         { title, fieldCount: fields?.length ?? 0, embedCount: embeds.length },
-        "Sent embed message(s)",
+        'Sent embed message(s)',
       );
 
       return {
         success: true,
-        title: title ?? "(no title)",
+        title: title ?? '(no title)',
         fieldCount: fields?.length ?? 0,
         embedCount: embeds.length,
       };
     } catch (error) {
       const errorMessage = formatError(error);
-      toolLogger.error({ error: errorMessage }, "Failed to send embed");
-      return { error: "Failed to send embed", details: errorMessage };
+      toolLogger.error({ error: errorMessage }, 'Failed to send embed');
+      return { error: 'Failed to send embed', details: errorMessage };
     }
   },
 });

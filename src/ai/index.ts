@@ -1,37 +1,37 @@
 // Main AI module - re-exports all public APIs
 
+import { aiLogger } from '../logger';
+import { agentsRuntimeManager } from './client';
 // Runtime management
-export { agentsRuntimeManager } from "./client";
-
-// Session management
-export { sessionManager } from "./session";
-
-// Context and memory
-export { conversationContext, type ChatMessage } from "./context";
+// Convenience shutdown
+import { sessionManager } from './session';
 
 // Chat
-export { chatService } from "./chat";
+export { chatService } from './chat';
 
 // Classifier
-export { replyClassifier } from "./classifier";
-export { editClassifier } from "./edit-classifier";
+export { replyClassifier } from './classifier';
 
+export { agentsRuntimeManager } from './client';
+
+// Context and memory
+export { type ChatMessage, conversationContext } from './context';
+
+export { editClassifier } from './edit-classifier';
 // Permissions
-export { permissionManager } from "./permissions";
+export { permissionManager } from './permissions';
 
-// Convenience shutdown
-import { sessionManager } from "./session";
-import { agentsRuntimeManager } from "./client";
-import { aiLogger } from "../logger";
+// Session management
+export { sessionManager } from './session';
 
 export async function shutdownAgentsRuntime(): Promise<void> {
   aiLogger.info(
     { sessionCount: sessionManager.getActiveCount() },
-    "Shutting down OpenAI Agents runtime",
+    'Shutting down OpenAI Agents runtime',
   );
 
   await sessionManager.destroyAll();
   await agentsRuntimeManager.stop();
 
-  aiLogger.info("OpenAI Agents runtime shutdown complete");
+  aiLogger.info('OpenAI Agents runtime shutdown complete');
 }

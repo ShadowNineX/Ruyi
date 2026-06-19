@@ -1,21 +1,22 @@
-import mongoose, { Schema, type Document, type Model } from "mongoose";
+import type { Document, Model } from 'mongoose';
+import mongoose, { Schema } from 'mongoose';
 
 /** Supported Smithery server IDs. */
-export type SmitheryServerId = "youtube";
-export type SmitheryConnectionScopeKind = "discord:guild" | "discord:dm";
+export type SmitheryServerId = 'youtube';
+export type SmitheryConnectionScopeKind = 'discord:guild' | 'discord:dm';
 
 export interface SmitheryConnectionScope {
   kind: SmitheryConnectionScopeKind;
   id: string;
 }
 
-export type SmitheryConnectionStatus =
-  | "connected"
-  | "auth_required"
-  | "input_required"
-  | "disconnected"
-  | "error"
-  | "unknown";
+export type SmitheryConnectionStatus
+  = | 'connected'
+    | 'auth_required'
+    | 'input_required'
+    | 'disconnected'
+    | 'error'
+    | 'unknown';
 
 export interface ISmitheryConnection extends Document {
   scopeKind: SmitheryConnectionScopeKind;
@@ -33,13 +34,13 @@ const SmitheryConnectionSchema = new Schema<ISmitheryConnection>(
   {
     scopeKind: {
       type: String,
-      enum: ["discord:guild", "discord:dm"],
+      enum: ['discord:guild', 'discord:dm'],
       required: true,
     },
     scopeId: { type: String, required: true },
     serverId: { type: String, required: true },
     connectionId: { type: String, required: true, unique: true },
-    status: { type: String, required: true, default: "unknown" },
+    status: { type: String, required: true, default: 'unknown' },
     setupUrl: { type: String },
     errorMessage: { type: String },
   },
@@ -52,19 +53,19 @@ SmitheryConnectionSchema.index(
 );
 SmitheryConnectionSchema.index({ scopeKind: 1, scopeId: 1, status: 1 });
 
-const SmitheryConnection: Model<ISmitheryConnection> =
-  (mongoose.models.SmitheryConnection as
-    | Model<ISmitheryConnection>
-    | undefined) ??
-  mongoose.model<ISmitheryConnection>(
-    "SmitheryConnection",
-    SmitheryConnectionSchema,
-  );
+const SmitheryConnection: Model<ISmitheryConnection>
+  = (mongoose.models.SmitheryConnection as
+  | Model<ISmitheryConnection>
+  | undefined)
+?? mongoose.model<ISmitheryConnection>(
+  'SmitheryConnection',
+  SmitheryConnectionSchema,
+);
 
 export function isSmitheryConnectionScope(
   scope: { kind: string; id: string },
 ): scope is SmitheryConnectionScope {
-  return scope.kind === "discord:guild" || scope.kind === "discord:dm";
+  return scope.kind === 'discord:guild' || scope.kind === 'discord:dm';
 }
 
 function scopeFilter(scope: SmitheryConnectionScope) {
@@ -85,7 +86,7 @@ export async function getAllSmitheryConnections(
 }
 
 export async function countConnectedSmitheryConnections(): Promise<number> {
-  return SmitheryConnection.countDocuments({ status: "connected" });
+  return SmitheryConnection.countDocuments({ status: 'connected' });
 }
 
 export async function saveSmitheryConnection(input: {
@@ -123,7 +124,7 @@ export async function saveSmitheryConnection(input: {
       $set: setFields,
       $unset: unsetFields,
     },
-    { upsert: true, returnDocument: "after" },
+    { upsert: true, returnDocument: 'after' },
   );
 }
 

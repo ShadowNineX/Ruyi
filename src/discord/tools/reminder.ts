@@ -1,49 +1,49 @@
-import { tool } from "@openai/agents";
-import { z } from "zod";
+import { tool } from '@openai/agents';
+import { z } from 'zod';
+import { toolLogger } from '../../logger';
+import { formatError, toolContextManager } from '../../utils/types';
 import {
   formatReminderId,
   formatReminderLine,
   reminderService,
-} from "../services/reminders";
-import { toolLogger } from "../../logger";
-import { formatError, toolContextManager } from "../../utils/types";
+} from '../services/reminders';
 
-const ReminderActionSchema = z.enum(["create", "list", "cancel"]);
+const ReminderActionSchema = z.enum(['create', 'list', 'cancel']);
 
 function unixToDate(unix: number): Date {
   return new Date(unix * 1000);
 }
 
 export const manageReminderTool = tool({
-  name: "manage_reminder",
+  name: 'manage_reminder',
   description:
-    "Create, list, or cancel reminders and timers for the current Discord user/channel. Requires exact due_unix for creation; use resolve_time or current context before calling if needed.",
+    'Create, list, or cancel reminders and timers for the current Discord user/channel. Requires exact due_unix for creation; use resolve_time or current context before calling if needed.',
   parameters: z.object({
-    action: ReminderActionSchema.describe("Create, list, or cancel reminders."),
+    action: ReminderActionSchema.describe('Create, list, or cancel reminders.'),
     kind: z
-      .enum(["reminder", "timer"])
-      .default("reminder")
-      .describe("Use timer for countdown-style requests, reminder otherwise."),
+      .enum(['reminder', 'timer'])
+      .default('reminder')
+      .describe('Use timer for countdown-style requests, reminder otherwise.'),
     due_unix: z
       .number()
       .int()
       .nullable()
       .describe(
-        "Exact future Unix timestamp in seconds for create. Do not pass natural-language text here.",
+        'Exact future Unix timestamp in seconds for create. Do not pass natural-language text here.',
       ),
     text: z
       .string()
       .nullable()
-      .describe("Reminder text for create, such as what the user wants to do."),
+      .describe('Reminder text for create, such as what the user wants to do.'),
     reminder_id: z
       .string()
       .nullable()
-      .describe("Exact reminder ID for cancel."),
+      .describe('Exact reminder ID for cancel.'),
   }),
   execute: async ({ action, kind, due_unix, text, reminder_id }) => {
     const { message } = toolContextManager.get();
     if (!message) {
-      return { error: "Reminder tools require an active Discord message." };
+      return { error: 'Reminder tools require an active Discord message.' };
     }
 
     const scope = reminderService.getScope(
@@ -52,13 +52,13 @@ export const manageReminderTool = tool({
     );
 
     try {
-      if (action === "list") {
+      if (action === 'list') {
         const reminders = await reminderService.listActiveReminders(
           scope,
           message.author.id,
         );
         return {
-          reminders: reminders.map((reminder) => ({
+          reminders: reminders.map(reminder => ({
             id: formatReminderId(reminder),
             kind: reminder.kind,
             text: reminder.text,
@@ -69,14 +69,14 @@ export const manageReminderTool = tool({
           count: reminders.length,
           guidance:
             reminders.length === 0
-              ? "Tell the user they have no active reminders in this server/private chat."
-              : "Show the active reminders concisely, including IDs only if the user may cancel one.",
+              ? 'Tell the user they have no active reminders in this server/private chat.'
+              : 'Show the active reminders concisely, including IDs only if the user may cancel one.',
         };
       }
 
-      if (action === "cancel") {
+      if (action === 'cancel') {
         if (!reminder_id) {
-          return { error: "reminder_id is required to cancel a reminder." };
+          return { error: 'reminder_id is required to cancel a reminder.' };
         }
 
         const result = await reminderService.cancelReminder(
@@ -88,20 +88,20 @@ export const manageReminderTool = tool({
           cancelled: result.cancelled,
           reminder_id,
           guidance: result.cancelled
-            ? "Tell the user the reminder was cancelled."
-            : "Tell the user no active reminder with that ID was found in this server/private chat.",
+            ? 'Tell the user the reminder was cancelled.'
+            : 'Tell the user no active reminder with that ID was found in this server/private chat.',
         };
       }
 
       if (!due_unix) {
         return {
-          error: "due_unix is required to create a reminder.",
+          error: 'due_unix is required to create a reminder.',
           guidance:
-            "Resolve or calculate the due time first, then call manage_reminder again with the exact Unix timestamp.",
+            'Resolve or calculate the due time first, then call manage_reminder again with the exact Unix timestamp.',
         };
       }
       if (!text?.trim()) {
-        return { error: "text is required to create a reminder." };
+        return { error: 'text is required to create a reminder.' };
       }
 
       const reminder = await reminderService.createReminder({
@@ -125,7 +125,7 @@ export const manageReminderTool = tool({
           userId: reminder.userId,
           dueUnix,
         },
-        "Created reminder",
+        'Created reminder',
       );
 
       return {
@@ -137,7 +137,7 @@ export const manageReminderTool = tool({
         due_discord: `<t:${dueUnix}:F>`,
         due_relative: `<t:${dueUnix}:R>`,
         guidance:
-          "Confirm the reminder naturally. Mention when it is due; include the ID only if useful for cancellation.",
+          'Confirm the reminder naturally. Mention when it is due; include the ID only if useful for cancellation.',
       };
     } catch (error) {
       const errorMessage = formatError(error);
@@ -151,7 +151,7 @@ export const manageReminderTool = tool({
           channelId: message.channel.id,
           error: errorMessage,
         },
-        "Reminder tool failed",
+        'Reminder tool failed',
       );
       return { error: errorMessage };
     }

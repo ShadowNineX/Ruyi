@@ -1,32 +1,31 @@
-import { tool } from "@openai/agents";
-import { z } from "zod";
+import type { ColorResolvable, Guild, GuildMember, Role } from 'discord.js';
+import { tool } from '@openai/agents';
 import {
+
   PermissionFlagsBits,
-  type ColorResolvable,
-  type Guild,
-  type Role,
-  type GuildMember,
-} from "discord.js";
-import { toolLogger } from "../../logger";
-import { toolContextManager, formatError } from "../../utils/types";
+
+} from 'discord.js';
+import { z } from 'zod';
+import { toolLogger } from '../../logger';
+import { formatError, toolContextManager } from '../../utils/types';
 
 const USER_ID_REGEX = /^\d{17,20}$/;
 const USER_MENTION_REGEX = /^<@!?(\d{17,20})>$/;
-const INVALID_ROLE_COLOR_ERROR =
-  "Invalid role color. Use a 6-digit hex color like #FF5733.";
+const INVALID_ROLE_COLOR_ERROR
+  = 'Invalid role color. Use a 6-digit hex color like #FF5733.';
 
-type RoleColorResolution =
-  | { ok: true; color: ColorResolvable | undefined }
-  | { ok: false; error: string };
+type RoleColorResolution
+  = | { ok: true; color: ColorResolvable | undefined }
+    | { ok: false; error: string };
 
-type MemberRoleAction = "assign" | "remove";
+type MemberRoleAction = 'assign' | 'remove';
 
 function parseColor(
   color: string | undefined | null,
 ): ColorResolvable | undefined {
-  if (!color) return undefined;
-  const normalized = color.trim().replace(/^#/, "");
-  if (!/^[\da-f]{6}$/i.test(normalized)) return undefined;
+  if (!color) { return undefined; }
+  const normalized = color.trim().replace(/^#/, '');
+  if (!/^[\da-f]{6}$/i.test(normalized)) { return undefined; }
   return `#${normalized}`;
 }
 
@@ -40,8 +39,8 @@ function resolveRoleColor(color: string | undefined | null): RoleColorResolution
 function findRole(guild: Guild, roleName: string): Role | undefined {
   const normalized = roleName.toLowerCase();
   return (
-    guild.roles.cache.find((role) => role.name.toLowerCase() === normalized) ??
-    guild.roles.cache.find((role) =>
+    guild.roles.cache.find(role => role.name.toLowerCase() === normalized)
+    ?? guild.roles.cache.find(role =>
       role.name.toLowerCase().includes(normalized),
     )
   );
@@ -61,7 +60,7 @@ async function findMember(
       (await guild.members.fetch(lookup).catch((error: unknown) => {
         toolLogger.debug(
           { userLookup, error: error instanceof Error ? error.message : String(error) },
-          "Could not fetch role target member by ID",
+          'Could not fetch role target member by ID',
         );
         return null;
       })) ?? undefined
@@ -72,10 +71,10 @@ async function findMember(
   const members = await guild.members.fetch({ query: lookup, limit: 10 });
   return (
     members.find(
-      (m) =>
-        m.user.username.toLowerCase() === lowerLookup ||
-        m.displayName.toLowerCase() === lowerLookup ||
-        m.user.globalName?.toLowerCase() === lowerLookup,
+      m =>
+        m.user.username.toLowerCase() === lowerLookup
+        || m.displayName.toLowerCase() === lowerLookup
+        || m.user.globalName?.toLowerCase() === lowerLookup,
     ) || members.first()
   );
 }
@@ -95,26 +94,26 @@ async function getRequesterRoleManager(
 ): Promise<GuildMember | string> {
   const requesterId = toolContextManager.get().message?.author.id;
   if (!requesterId) {
-    return "Could not determine who requested this role change.";
+    return 'Could not determine who requested this role change.';
   }
 
   const member = await guild.members.fetch(requesterId).catch((error: unknown) => {
     toolLogger.debug(
       { requesterId, error: error instanceof Error ? error.message : String(error) },
-      "Could not fetch role requester member",
+      'Could not fetch role requester member',
     );
     return null;
   });
 
   if (!member?.permissions.has(PermissionFlagsBits.ManageRoles)) {
-    return "You need Manage Roles permission to ask Ruyi to manage roles.";
+    return 'You need Manage Roles permission to ask Ruyi to manage roles.';
   }
 
   return member;
 }
 
 function requesterCanManageRole(requester: GuildMember, role: Role): boolean {
-  if (requester.id === requester.guild.ownerId) return true;
+  if (requester.id === requester.guild.ownerId) { return true; }
   return role.position < requester.roles.highest.position;
 }
 
@@ -122,8 +121,8 @@ function requesterCanManageMember(
   requester: GuildMember,
   target: GuildMember,
 ): boolean {
-  if (requester.id === requester.guild.ownerId) return true;
-  if (requester.id === target.id) return false;
+  if (requester.id === requester.guild.ownerId) { return true; }
+  if (requester.id === target.id) { return false; }
   return target.roles.highest.position < requester.roles.highest.position;
 }
 
@@ -156,9 +155,9 @@ function resolveManageableRole(
   }
 
   return (
-    getRoleManageabilityError(role) ??
-    getRequesterRoleError(requester, role) ??
-    role
+    getRoleManageabilityError(role)
+    ?? getRequesterRoleError(requester, role)
+    ?? role
   );
 }
 
@@ -168,10 +167,10 @@ function getMemberRoleStateError(
   role: Role,
 ): string | null {
   const hasRole = member.roles.cache.has(role.id);
-  if (action === "assign" && hasRole) {
+  if (action === 'assign' && hasRole) {
     return `${member.user.username} already has the "${role.name}" role`;
   }
-  if (action === "remove" && !hasRole) {
+  if (action === 'remove' && !hasRole) {
     return `${member.user.username} doesn't have the "${role.name}" role`;
   }
   return null;
@@ -182,12 +181,12 @@ async function applyMemberRoleAction(
   member: GuildMember,
   role: Role,
 ): Promise<void> {
-  if (action === "assign") {
-    await member.roles.add(role, "Assigned by Ruyi bot");
+  if (action === 'assign') {
+    await member.roles.add(role, 'Assigned by Ruyi bot');
     return;
   }
 
-  await member.roles.remove(role, "Removed by Ruyi bot");
+  await member.roles.remove(role, 'Removed by Ruyi bot');
 }
 
 async function handleMemberRoleAction(
@@ -202,7 +201,7 @@ async function handleMemberRoleAction(
   }
 
   const role = resolveManageableRole(guild, requester, roleName);
-  if (typeof role === "string") return { error: role };
+  if (typeof role === 'string') { return { error: role }; }
 
   const member = await findMember(guild, username);
   if (!member) {
@@ -210,19 +209,19 @@ async function handleMemberRoleAction(
   }
 
   const requesterMemberError = getRequesterMemberError(requester, member);
-  if (requesterMemberError) return { error: requesterMemberError };
+  if (requesterMemberError) { return { error: requesterMemberError }; }
 
   const roleStateError = getMemberRoleStateError(action, member, role);
-  if (roleStateError) return { error: roleStateError };
+  if (roleStateError) { return { error: roleStateError }; }
 
   await applyMemberRoleAction(action, member, role);
   toolLogger.info(
     { role: role.name, user: member.user.username },
-    action === "assign" ? "Assigned role" : "Removed role",
+    action === 'assign' ? 'Assigned role' : 'Removed role',
   );
   return {
     success: true,
-    action: action === "assign" ? "assigned" : "removed",
+    action: action === 'assign' ? 'assigned' : 'removed',
     role: { name: role.name, color: role.hexColor },
     user: member.user.username,
   };
@@ -238,19 +237,19 @@ async function handleCreateRole(
     return { error: `Role "${roleName}" already exists` };
   }
   const colorResolution = resolveRoleColor(color);
-  if (!colorResolution.ok) return { error: colorResolution.error };
+  if (!colorResolution.ok) { return { error: colorResolution.error }; }
   const newRole = await guild.roles.create({
     name: roleName,
     color: colorResolution.color,
-    reason: "Created by Ruyi bot",
+    reason: 'Created by Ruyi bot',
   });
   toolLogger.info(
     { role: newRole.name, color: newRole.hexColor },
-    "Created role",
+    'Created role',
   );
   return {
     success: true,
-    action: "created",
+    action: 'created',
     role: { name: newRole.name, color: newRole.hexColor, id: newRole.id },
   };
 }
@@ -263,21 +262,21 @@ async function handleEditRole(
   color: string | null,
 ) {
   const role = resolveManageableRole(guild, requester, roleName);
-  if (typeof role === "string") return { error: role };
+  if (typeof role === 'string') { return { error: role }; }
   if (!newName && !color) {
-    return { error: "No changes specified (provide new_name or color)" };
+    return { error: 'No changes specified (provide new_name or color)' };
   }
   const colorResolution = resolveRoleColor(color);
-  if (!colorResolution.ok) return { error: colorResolution.error };
+  if (!colorResolution.ok) { return { error: colorResolution.error }; }
   await role.edit({
     name: newName ?? undefined,
     color: colorResolution.color,
-    reason: "Edited by Ruyi bot",
+    reason: 'Edited by Ruyi bot',
   });
-  toolLogger.info({ role: role.name, newName, color }, "Edited role");
+  toolLogger.info({ role: role.name, newName, color }, 'Edited role');
   return {
     success: true,
-    action: "edited",
+    action: 'edited',
     role: { name: role.name, color: role.hexColor, id: role.id },
   };
 }
@@ -288,7 +287,7 @@ async function handleAssignRole(
   roleName: string,
   username: string | null,
 ) {
-  return handleMemberRoleAction(guild, requester, roleName, username, "assign");
+  return handleMemberRoleAction(guild, requester, roleName, username, 'assign');
 }
 
 async function handleRemoveRole(
@@ -297,71 +296,71 @@ async function handleRemoveRole(
   roleName: string,
   username: string | null,
 ) {
-  return handleMemberRoleAction(guild, requester, roleName, username, "remove");
+  return handleMemberRoleAction(guild, requester, roleName, username, 'remove');
 }
 
 export const manageRoleTool = tool({
-  name: "manage_role",
+  name: 'manage_role',
   description:
-    "Manage Discord roles: create a new role, edit an existing role's name/color, or assign/remove a role from a user",
+    'Manage Discord roles: create a new role, edit an existing role\'s name/color, or assign/remove a role from a user',
   parameters: z.object({
     action: z
-      .enum(["create", "edit", "assign", "remove"])
+      .enum(['create', 'edit', 'assign', 'remove'])
       .describe(
-        "Action to perform: create a new role, edit existing role, assign role to user, or remove role from user",
+        'Action to perform: create a new role, edit existing role, assign role to user, or remove role from user',
       ),
     role_name: z
       .string()
       .min(1)
-      .describe("Name of the role to create, edit, assign, or remove"),
+      .describe('Name of the role to create, edit, assign, or remove'),
     new_name: z
       .string()
       .nullable()
-      .describe("New name for the role (only for edit action, null otherwise)"),
+      .describe('New name for the role (only for edit action, null otherwise)'),
     color: z
       .string()
       .nullable()
       .describe(
-        "Hex color for the role e.g. '#FF5733' (for create/edit actions, null otherwise)",
+        'Hex color for the role e.g. \'#FF5733\' (for create/edit actions, null otherwise)',
       ),
     username: z
       .string()
       .nullable()
       .describe(
-        "Username to assign/remove the role to/from (for assign/remove actions, null otherwise)",
+        'Username to assign/remove the role to/from (for assign/remove actions, null otherwise)',
       ),
   }),
   needsApproval: true,
   execute: async ({ action, role_name, new_name, color, username }) => {
     const { guild } = toolContextManager.get();
     if (!guild) {
-      toolLogger.warn("manage_role called without guild context");
-      return { error: "Not in a server" };
+      toolLogger.warn('manage_role called without guild context');
+      return { error: 'Not in a server' };
     }
     const requester = await getRequesterRoleManager(guild);
-    if (typeof requester === "string") return { error: requester };
+    if (typeof requester === 'string') { return { error: requester }; }
 
     const roleName = role_name.trim();
     const newName = new_name?.trim() || null;
 
     if (!roleName) {
-      return { error: "Role name cannot be empty" };
+      return { error: 'Role name cannot be empty' };
     }
 
     toolLogger.debug(
       { action, role_name: roleName, new_name: newName, color, username },
-      "Managing role",
+      'Managing role',
     );
 
     try {
       switch (action) {
-        case "create":
+        case 'create':
           return await handleCreateRole(guild, roleName, color);
-        case "edit":
+        case 'edit':
           return await handleEditRole(guild, requester, roleName, newName, color);
-        case "assign":
+        case 'assign':
           return await handleAssignRole(guild, requester, roleName, username);
-        case "remove":
+        case 'remove':
           return await handleRemoveRole(guild, requester, roleName, username);
         default:
           return { error: `Unknown action: ${action}` };
@@ -370,7 +369,7 @@ export const manageRoleTool = tool({
       const errorMessage = formatError(error);
       toolLogger.error(
         { action, role_name: roleName, error: errorMessage },
-        "Error managing role",
+        'Error managing role',
       );
       return { error: `Failed to ${action} role: ${errorMessage}` };
     }

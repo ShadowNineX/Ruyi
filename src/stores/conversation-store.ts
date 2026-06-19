@@ -1,4 +1,4 @@
-import { createStore } from "@tanstack/store";
+import { createStore } from '@tanstack/store';
 
 interface ConversationStoreState {
   lastInteractionAtByChannel: Map<string, number>;
@@ -30,8 +30,8 @@ export function setLastInteractionAt(
 }
 
 export function incrementUserMessageCount(key: string): number {
-  const nextCount =
-    (conversationStore.state.userMessageCountByKey.get(key) ?? 0) + 1;
+  const nextCount
+    = (conversationStore.state.userMessageCountByKey.get(key) ?? 0) + 1;
   conversationStore.setState((state) => {
     const userMessageCountByKey = new Map(state.userMessageCountByKey);
     userMessageCountByKey.set(key, nextCount);

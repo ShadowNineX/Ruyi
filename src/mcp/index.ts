@@ -1,16 +1,16 @@
+import type { SmitheryConnectionScope, SmitheryServerId } from '../db/models';
 import {
   getAllSmitheryConnections,
-  type SmitheryConnectionScope,
-  type SmitheryServerId,
-} from "../db/models";
-import { mcpLogger } from "../logger";
-import { SMITHERY_SERVERS } from "./smithery-catalog";
+
+} from '../db/models';
+import { mcpLogger } from '../logger';
 import {
   getSmitheryNamespaceMcpUrl,
   isSmitheryConfigured,
   listSmitheryConnectionTools,
   refreshKnownSmitheryConnections,
-} from "./smithery-api";
+} from './smithery-api';
+import { SMITHERY_SERVERS } from './smithery-catalog';
 
 function getConnectionName(serverId: SmitheryServerId): string {
   return SMITHERY_SERVERS[serverId]?.name ?? serverId;
@@ -18,23 +18,23 @@ function getConnectionName(serverId: SmitheryServerId): string {
 
 class MCPRegistry {
   getServerForTool(toolName: string): string | undefined {
-    const [connectionId] = toolName.split(".");
+    const [connectionId] = toolName.split('.');
     if (connectionId && connectionId in SMITHERY_SERVERS) {
       return getConnectionName(connectionId as SmitheryServerId);
     }
 
-    const [sanitizedConnectionId] = toolName.split("_");
+    const [sanitizedConnectionId] = toolName.split('_');
     if (sanitizedConnectionId && sanitizedConnectionId in SMITHERY_SERVERS) {
       return getConnectionName(sanitizedConnectionId as SmitheryServerId);
     }
 
-    return toolName.startsWith("smithery") ? "Smithery" : undefined;
+    return toolName.startsWith('smithery') ? 'Smithery' : undefined;
   }
 
   async logHealth(): Promise<void> {
     if (!isSmitheryConfigured()) {
       mcpLogger.warn(
-        "Smithery Connect disabled. Set SMITHERY_API_KEY and SMITHERY_NAMESPACE to enable MCP tools.",
+        'Smithery Connect disabled. Set SMITHERY_API_KEY and SMITHERY_NAMESPACE to enable MCP tools.',
       );
       return;
     }
@@ -42,14 +42,14 @@ class MCPRegistry {
     await refreshKnownSmitheryConnections();
     const connections = await getAllSmitheryConnections();
     const connectedCount = connections.filter(
-      (connection) => connection.status === "connected",
+      connection => connection.status === 'connected',
     ).length;
 
     for (const connection of connections) {
       const serverName = getConnectionName(connection.serverId);
       const scope = { kind: connection.scopeKind, id: connection.scopeId };
-      const tools =
-        connection.status === "connected"
+      const tools
+        = connection.status === 'connected'
           ? await this.getConnectionToolNames(scope, connection.serverId)
           : [];
       mcpLogger.info(
@@ -75,7 +75,7 @@ class MCPRegistry {
         connected: connectedCount,
         total: connections.length,
       },
-      "Smithery Connect health check complete",
+      'Smithery Connect health check complete',
     );
   }
 
@@ -85,7 +85,7 @@ class MCPRegistry {
   ): Promise<string[]> {
     try {
       const tools = await listSmitheryConnectionTools(scope, serverId);
-      return tools.map((tool) => tool.name);
+      return tools.map(tool => tool.name);
     } catch (error) {
       mcpLogger.warn(
         {
@@ -94,7 +94,7 @@ class MCPRegistry {
           serverId,
           error: error instanceof Error ? error.message : String(error),
         },
-        "Failed to list Smithery connection tools",
+        'Failed to list Smithery connection tools',
       );
       return [];
     }

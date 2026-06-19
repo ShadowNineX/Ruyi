@@ -1,34 +1,34 @@
-import { tool } from "@openai/agents";
-import { z } from "zod";
-import { toolLogger } from "../../logger";
-import { steamCommunityClient } from "../client";
+import { tool } from '@openai/agents';
+import { z } from 'zod';
+import { STEAM_PROFILE_COMMENT_MAX_LENGTH } from '../../constants';
+import { toolLogger } from '../../logger';
+import { toolContextManager } from '../../utils/types';
 import {
   resolveSteamProfileTarget,
   steamIntegrationEnabled,
-} from "../../utils/user-identity";
-import { STEAM_PROFILE_COMMENT_MAX_LENGTH } from "../../constants";
-import { toolContextManager } from "../../utils/types";
-import {
-  formatSteamCommentForTool,
-  searchSteamProfileComments,
-} from "../comment-search";
+} from '../../utils/user-identity';
+import { steamCommunityClient } from '../client';
 import {
   normalizeSteamProfileComment,
   STEAM_PROFILE_COMMENT_SAFE_BBCODE_GUIDE,
-} from "../comment-format";
+} from '../comment-format';
+import {
+  formatSteamCommentForTool,
+  searchSteamProfileComments,
+} from '../comment-search';
 
 async function steamProfileCommentNeedsApproval(): Promise<boolean> {
-  return toolContextManager.get().surface === "discord";
+  return toolContextManager.get().surface === 'discord';
 }
 
 export const steamProfileCommentTool = tool({
-  name: "steam_profile_comment",
+  name: 'steam_profile_comment',
   description:
-    "Post a Steam Community profile comment from Ruyi. The target is code-whitelisted to either Ruyi's bot profile or the configured owner profile; never accepts arbitrary Steam IDs.",
+    'Post a Steam Community profile comment from Ruyi. The target is code-whitelisted to either Ruyi\'s bot profile or the configured owner profile; never accepts arbitrary Steam IDs.',
   parameters: z.object({
     target: z
-      .enum(["bot", "owner"])
-      .describe("Where to post the Steam profile comment."),
+      .enum(['bot', 'owner'])
+      .describe('Where to post the Steam profile comment.'),
     message: z
       .string()
       .min(1)
@@ -42,7 +42,7 @@ export const steamProfileCommentTool = tool({
     if (!steamIntegrationEnabled()) {
       return {
         error:
-          "Steam integration is not configured. Set the Steam env vars before posting Steam profile comments.",
+          'Steam integration is not configured. Set the Steam env vars before posting Steam profile comments.',
       };
     }
 
@@ -50,7 +50,7 @@ export const steamProfileCommentTool = tool({
     if (!targetProfileId) {
       return {
         error:
-          "Steam profile target is not configured or is not whitelisted for profile comments.",
+          'Steam profile target is not configured or is not whitelisted for profile comments.',
       };
     }
 
@@ -60,7 +60,7 @@ export const steamProfileCommentTool = tool({
       removedUnsupportedFormatting,
       convertedAlignmentSpaces,
     } = normalizeSteamProfileComment(message);
-    if (!comment) return { error: "Steam profile comment cannot be empty." };
+    if (!comment) { return { error: 'Steam profile comment cannot be empty.' }; }
 
     try {
       const commentId = await steamCommunityClient.postProfileComment(
@@ -77,7 +77,7 @@ export const steamProfileCommentTool = tool({
           removedUnsupportedFormatting,
           convertedAlignmentSpaces,
         },
-        "Posted Steam profile comment",
+        'Posted Steam profile comment',
       );
       return {
         success: true,
@@ -91,7 +91,7 @@ export const steamProfileCommentTool = tool({
         convertedAlignmentSpaces,
         final_answer_required: true,
         final_answer_guidance:
-          "Confirm that the Steam profile comment was posted. Do not quote, restate, or summarize the comment text unless the user explicitly asks for a copy.",
+          'Confirm that the Steam profile comment was posted. Do not quote, restate, or summarize the comment text unless the user explicitly asks for a copy.',
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -101,10 +101,10 @@ export const steamProfileCommentTool = tool({
           profileId: targetProfileId,
           error: errorMessage,
         },
-        "Failed to post Steam profile comment",
+        'Failed to post Steam profile comment',
       );
       return {
-        error: "Failed to post Steam profile comment.",
+        error: 'Failed to post Steam profile comment.',
         details: errorMessage,
       };
     }
@@ -112,13 +112,13 @@ export const steamProfileCommentTool = tool({
 });
 
 export const steamProfileCommentsTool = tool({
-  name: "steam_profile_comments",
+  name: 'steam_profile_comments',
   description:
-    "Discord-only bridge for reading or fuzzy-searching recent Steam Community profile comments from a whitelisted profile. Use search_conversation for the active Discord or Steam conversation itself. The target is code-whitelisted to either Ruyi's bot profile or the configured owner profile; never accepts arbitrary Steam IDs.",
+    'Discord-only bridge for reading or fuzzy-searching recent Steam Community profile comments from a whitelisted profile. Use search_conversation for the active Discord or Steam conversation itself. The target is code-whitelisted to either Ruyi\'s bot profile or the configured owner profile; never accepts arbitrary Steam IDs.',
   parameters: z.object({
     target: z
-      .enum(["bot", "owner"])
-      .describe("Which whitelisted Steam profile to inspect."),
+      .enum(['bot', 'owner'])
+      .describe('Which whitelisted Steam profile to inspect.'),
     query: z
       .string()
       .min(1)
@@ -126,7 +126,7 @@ export const steamProfileCommentsTool = tool({
       .nullable()
       .default(null)
       .describe(
-        "Optional exact or fuzzy query for Steam profile comments. Omit to read newest comments.",
+        'Optional exact or fuzzy query for Steam profile comments. Omit to read newest comments.',
       ),
     author: z
       .string()
@@ -135,7 +135,7 @@ export const steamProfileCommentsTool = tool({
       .nullable()
       .default(null)
       .describe(
-        "Optional author name or SteamID filter for searched Steam profile comments.",
+        'Optional author name or SteamID filter for searched Steam profile comments.',
       ),
     limit: z
       .number()
@@ -143,13 +143,13 @@ export const steamProfileCommentsTool = tool({
       .min(1)
       .max(20)
       .default(10)
-      .describe("Maximum number of recent comments or search matches to return."),
+      .describe('Maximum number of recent comments or search matches to return.'),
   }),
   execute: async ({ target, query, author, limit }) => {
     if (!steamIntegrationEnabled()) {
       return {
         error:
-          "Steam integration is not configured. Set the Steam env vars before reading Steam profile comments.",
+          'Steam integration is not configured. Set the Steam env vars before reading Steam profile comments.',
       };
     }
 
@@ -157,7 +157,7 @@ export const steamProfileCommentsTool = tool({
     if (!targetProfileId) {
       return {
         error:
-          "Steam profile target is not configured or is not whitelisted for profile comments.",
+          'Steam profile target is not configured or is not whitelisted for profile comments.',
       };
     }
 
@@ -178,7 +178,7 @@ export const steamProfileCommentsTool = tool({
             searchedCommentCount: search.searchedCommentCount,
             matchCount: search.matches.length,
           },
-          "Searched whitelisted Steam profile comments from Discord",
+          'Searched whitelisted Steam profile comments from Discord',
         );
 
         return {
@@ -195,10 +195,10 @@ export const steamProfileCommentsTool = tool({
             partial_match_count: search.summary.partialMatchCount,
             searched_comment_count: search.searchedCommentCount,
             result_limit: limit,
-            source: "steam",
+            source: 'steam',
             scope: `whitelisted ${target} Steam profile`,
             limitation:
-              "Discord-side Steam profile comment search only covers recent comments fetched from the whitelisted Steam profile. Deleted, private, or older comments may be unavailable.",
+              'Discord-side Steam profile comment search only covers recent comments fetched from the whitelisted Steam profile. Deleted, private, or older comments may be unavailable.',
           },
         };
       }
@@ -217,10 +217,10 @@ export const steamProfileCommentsTool = tool({
       const errorMessage = error instanceof Error ? error.message : String(error);
       toolLogger.error(
         { target, profileId: targetProfileId, error: errorMessage },
-        "Failed to read Steam profile comments",
+        'Failed to read Steam profile comments',
       );
       return {
-        error: "Failed to read Steam profile comments.",
+        error: 'Failed to read Steam profile comments.',
         details: errorMessage,
       };
     }

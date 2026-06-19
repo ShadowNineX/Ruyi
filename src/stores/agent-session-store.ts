@@ -1,8 +1,8 @@
-import { createStore } from "@tanstack/store";
+import { createStore } from '@tanstack/store';
 
 export interface CachedAgentSession {
-  matchesModel(model: string): boolean;
-  markInvalidated(): void;
+  matchesModel: (model: string) => boolean;
+  markInvalidated: () => void;
 }
 
 interface AgentSessionStoreState {
@@ -41,7 +41,7 @@ export function deleteCachedAgentSession(channelId: string): void {
 }
 
 export function clearCachedAgentSessions(): void {
-  agentSessionStore.setState((state) => ({
+  agentSessionStore.setState(state => ({
     ...state,
     activeSessions: new Map(),
   }));

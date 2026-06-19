@@ -1,46 +1,47 @@
-import { Agent } from "@openai/agents";
-import type { Client, SendableChannels, TextBasedChannel } from "discord.js";
-import type { ConfigScope } from "../../config";
+import type { Client, SendableChannels, TextBasedChannel } from 'discord.js';
+import type { ConfigScope } from '../../config';
+import type { IReminder, ReminderKind } from '../../db/models';
+import { Agent } from '@openai/agents';
+import { agentsRuntimeManager } from '../../ai/client';
+import { conversationContext } from '../../ai/context';
+import { systemPrompt } from '../../ai/prompt';
 import {
   REMINDER_DELIVERY_RETRY_DELAY_MS,
   REMINDER_DUE_BATCH_SIZE,
   REMINDER_LIST_LIMIT,
   REMINDER_LIST_TEXT_MAX_LENGTH,
+  REMINDER_MAX_DELIVERY_ATTEMPTS,
   REMINDER_MESSAGE_GENERATION_TIMEOUT_MS,
   REMINDER_MESSAGE_MAX_LENGTH,
-  REMINDER_MAX_DELIVERY_ATTEMPTS,
   REMINDER_PROCESSING_STALE_MS,
   REMINDER_SCHEDULER_ERROR_RETRY_MS,
   REMINDER_SCHEDULER_MAX_SLEEP_MS,
   REMINDER_TEXT_MAX_LENGTH,
-} from "../../constants";
-import { Reminder, type IReminder, type ReminderKind } from "../../db/models";
-import { aiLogger, botLogger } from "../../logger";
-import { agentsRuntimeManager } from "../../ai/client";
-import { conversationContext } from "../../ai/context";
-import { systemPrompt } from "../../ai/prompt";
-import { fetchRecentChatMessages, splitMessage } from "../utils/messages";
+} from '../../constants';
+import { Reminder } from '../../db/models';
+import { aiLogger, botLogger } from '../../logger';
 import {
   getReminderSchedulerNextDueAt,
   getReminderSchedulerTimeout,
   isReminderServiceRunning,
   setReminderSchedulerTimeout,
   setReminderServiceRunning,
-} from "../../stores";
+} from '../../stores';
+import { fetchRecentChatMessages, splitMessage } from '../utils/messages';
 
-const ACTIVE_REMINDER_STATUS = "scheduled";
-type ReminderConfigScope = {
-  kind: Extract<ConfigScope["kind"], "discord:guild" | "discord:dm">;
+const ACTIVE_REMINDER_STATUS = 'scheduled';
+interface ReminderConfigScope {
+  kind: Extract<ConfigScope['kind'], 'discord:guild' | 'discord:dm'>;
   id: string;
-};
+}
 const REMINDER_DELIVERY_INSTRUCTIONS = [
-  "Compose one short reminder delivery message from Ruyi to the target Discord user.",
-  "The reminder/timer is due now. Tell the user what is due in Ruyi's own voice.",
-  "Do not mention schedulers, databases, background jobs, automation, tool calls, or implementation details.",
-  "Do not ask if they still want the reminder. Do not apologize for reminding them.",
-  "Keep it warm, direct, and human-feeling. One or two short sentences is enough.",
-  "Return only the message text. The Discord mention will be added outside your response.",
-].join("\n");
+  'Compose one short reminder delivery message from Ruyi to the target Discord user.',
+  'The reminder/timer is due now. Tell the user what is due in Ruyi\'s own voice.',
+  'Do not mention schedulers, databases, background jobs, automation, tool calls, or implementation details.',
+  'Do not ask if they still want the reminder. Do not apologize for reminding them.',
+  'Keep it warm, direct, and human-feeling. One or two short sentences is enough.',
+  'Return only the message text. The Discord mention will be added outside your response.',
+].join('\n');
 
 interface CreateReminderInput {
   kind: ReminderKind;
@@ -61,20 +62,20 @@ interface ReminderCancelResult {
 
 function truncateReminderText(text: string): string {
   const trimmed = text.trim();
-  if (trimmed.length <= REMINDER_TEXT_MAX_LENGTH) return trimmed;
+  if (trimmed.length <= REMINDER_TEXT_MAX_LENGTH) { return trimmed; }
   return `${trimmed.slice(0, REMINDER_TEXT_MAX_LENGTH - 3)}...`;
 }
 
 function formatReminderKind(kind: ReminderKind): string {
-  return kind === "timer" ? "Timer" : "Reminder";
+  return kind === 'timer' ? 'Timer' : 'Reminder';
 }
 
-export function formatReminderId(reminder: Pick<IReminder, "_id">): string {
+export function formatReminderId(reminder: Pick<IReminder, '_id'>): string {
   return reminder._id.toString();
 }
 
 function truncateReminderListText(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
+  if (text.length <= maxLength) { return text; }
   return `${text.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
@@ -93,10 +94,10 @@ function getReminderErrorMessage(error: unknown): string {
 
 function assertFutureDueAt(dueAt: Date): void {
   if (Number.isNaN(dueAt.getTime())) {
-    throw new TypeError("Reminder due time is invalid");
+    throw new TypeError('Reminder due time is invalid');
   }
   if (dueAt.getTime() <= Date.now()) {
-    throw new RangeError("Reminder due time must be in the future");
+    throw new RangeError('Reminder due time must be in the future');
   }
 }
 
@@ -109,17 +110,17 @@ function reminderScopeFilter(scope: ReminderConfigScope, userId: string) {
 }
 
 function isTextSendableChannel(
-  channel: Awaited<ReturnType<Client["channels"]["fetch"]>>,
+  channel: Awaited<ReturnType<Client['channels']['fetch']>>,
 ): channel is SendableChannels {
-  return Boolean(channel && "send" in channel);
+  return Boolean(channel && 'send' in channel);
 }
 
 function sanitizeGeneratedReminderMessage(content: string): string {
   const cleaned = content
-    .replaceAll("@everyone", "everyone")
-    .replaceAll("@here", "here")
+    .replaceAll('@everyone', 'everyone')
+    .replaceAll('@here', 'here')
     .trim();
-  if (cleaned.length <= REMINDER_MESSAGE_MAX_LENGTH) return cleaned;
+  if (cleaned.length <= REMINDER_MESSAGE_MAX_LENGTH) { return cleaned; }
   return `${cleaned.slice(0, REMINDER_MESSAGE_MAX_LENGTH - 3).trimEnd()}...`;
 }
 
@@ -129,13 +130,13 @@ function getSchedulerDelay(wakeAt: Date): number {
 }
 
 function getEarlierDate(first: Date | null, second: Date | null): Date | null {
-  if (!first) return second;
-  if (!second) return first;
+  if (!first) { return second; }
+  if (!second) { return first; }
   return first.getTime() <= second.getTime() ? first : second;
 }
 
 function getProcessingRecoveryWakeAt(
-  reminder: Pick<IReminder, "processingStartedAt">,
+  reminder: Pick<IReminder, 'processingStartedAt'>,
 ): Date {
   const processingStartedAt = reminder.processingStartedAt ?? new Date();
   return new Date(processingStartedAt.getTime() + REMINDER_PROCESSING_STALE_MS);
@@ -147,7 +148,7 @@ class ReminderService {
   async createReminder(input: CreateReminderInput): Promise<IReminder> {
     assertFutureDueAt(input.dueAt);
     const text = truncateReminderText(input.text);
-    if (!text) throw new TypeError("Reminder text cannot be empty");
+    if (!text) { throw new TypeError('Reminder text cannot be empty'); }
 
     const reminder = await Reminder.create({
       kind: input.kind,
@@ -171,17 +172,17 @@ class ReminderService {
   }
 
   private scheduleCreatedReminder(reminder: IReminder): void {
-    if (!this.client) return;
+    if (!this.client) { return; }
 
     const nextDueAt = getReminderSchedulerNextDueAt();
-    if (nextDueAt && nextDueAt.getTime() <= reminder.dueAt.getTime()) return;
+    if (nextDueAt && nextDueAt.getTime() <= reminder.dueAt.getTime()) { return; }
 
-    this.scheduleWakeAt(reminder.dueAt, "reminder-created");
+    this.scheduleWakeAt(reminder.dueAt, 'reminder-created');
   }
 
   private clearScheduledWake(): void {
     const timeout = getReminderSchedulerTimeout();
-    if (timeout) clearTimeout(timeout);
+    if (timeout) { clearTimeout(timeout); }
     setReminderSchedulerTimeout(null, null);
   }
 
@@ -192,7 +193,7 @@ class ReminderService {
     const timeout = setTimeout(() => {
       setReminderSchedulerTimeout(null, null);
       const activeClient = this.client;
-      if (!activeClient) return;
+      if (!activeClient) { return; }
       void this.runDueCheck(activeClient);
     }, delayMs);
 
@@ -203,7 +204,7 @@ class ReminderService {
         delayMs,
         reason,
       },
-      "Scheduled reminder service wake",
+      'Scheduled reminder service wake',
     );
   }
 
@@ -212,10 +213,10 @@ class ReminderService {
       status: ACTIVE_REMINDER_STATUS,
     })
       .sort({ dueAt: 1 })
-      .select("dueAt");
-    const nextProcessing = await Reminder.findOne({ status: "processing" })
+      .select('dueAt');
+    const nextProcessing = await Reminder.findOne({ status: 'processing' })
       .sort({ processingStartedAt: 1 })
-      .select("processingStartedAt");
+      .select('processingStartedAt');
 
     return getEarlierDate(
       nextScheduled?.dueAt ?? null,
@@ -228,21 +229,21 @@ class ReminderService {
       const nextWakeAt = await this.findNextWakeAt();
       if (!nextWakeAt) {
         this.clearScheduledWake();
-        botLogger.debug({ reason }, "Reminder queue is idle");
+        botLogger.debug({ reason }, 'Reminder queue is idle');
         return;
       }
 
       this.scheduleWakeAt(nextWakeAt, reason);
     } catch (error) {
       const retryAt = new Date(Date.now() + REMINDER_SCHEDULER_ERROR_RETRY_MS);
-      this.scheduleWakeAt(retryAt, "scheduler-error-retry");
+      this.scheduleWakeAt(retryAt, 'scheduler-error-retry');
       botLogger.error(
         {
           reason,
           retryAt: retryAt.toISOString(),
           error: getReminderErrorMessage(error),
         },
-        "Failed to schedule next reminder wake",
+        'Failed to schedule next reminder wake',
       );
     }
   }
@@ -274,7 +275,7 @@ class ReminderService {
     );
 
     if (reminder && this.client) {
-      await this.scheduleNextWake("reminder-cancelled");
+      await this.scheduleNextWake('reminder-cancelled');
     }
 
     return { cancelled: Boolean(reminder), reminder };
@@ -283,7 +284,7 @@ class ReminderService {
   private async claimReminder(reminder: IReminder): Promise<IReminder | null> {
     return Reminder.findOneAndUpdate(
       { _id: reminder._id, status: ACTIVE_REMINDER_STATUS },
-      { $set: { status: "processing", processingStartedAt: new Date() } },
+      { $set: { status: 'processing', processingStartedAt: new Date() } },
       { new: true },
     );
   }
@@ -292,7 +293,7 @@ class ReminderService {
     const staleBefore = new Date(Date.now() - REMINDER_PROCESSING_STALE_MS);
     const result = await Reminder.updateMany(
       {
-        status: "processing",
+        status: 'processing',
         $or: [
           { processingStartedAt: null },
           { processingStartedAt: { $lte: staleBefore } },
@@ -312,7 +313,7 @@ class ReminderService {
           recoveredCount: result.modifiedCount,
           staleBefore: staleBefore.toISOString(),
         },
-        "Recovered stale processing reminders",
+        'Recovered stale processing reminders',
       );
     }
   }
@@ -323,11 +324,11 @@ class ReminderService {
   ): Promise<void> {
     const channel = await client.channels.fetch(reminder.channelId);
     if (!isTextSendableChannel(channel)) {
-      throw new Error("Reminder channel is not sendable");
+      throw new Error('Reminder channel is not sendable');
     }
     const generated = await this.generateReminderMessage(channel, reminder);
     if (!generated) {
-      throw new Error("Reminder message generation returned empty content");
+      throw new Error('Reminder message generation returned empty content');
     }
 
     const chunks = splitMessage(
@@ -335,7 +336,7 @@ class ReminderService {
       REMINDER_MESSAGE_MAX_LENGTH + 32,
     );
     const firstChunk = chunks[0];
-    if (!firstChunk) throw new Error("Reminder message was empty after split");
+    if (!firstChunk) { throw new Error('Reminder message was empty after split'); }
 
     await channel.send({
       content: firstChunk,
@@ -364,7 +365,7 @@ class ReminderService {
             reminderId: formatReminderId(reminder),
             userId: reminder.userId,
           },
-          failureMessage: "Could not fetch live history for reminder message",
+          failureMessage: 'Could not fetch live history for reminder message',
         }),
         scope,
       );
@@ -377,10 +378,10 @@ class ReminderService {
         `Due timestamp: <t:${dueUnix}:F>`,
         `</reminder_due>`,
         `<instructions>\n${REMINDER_DELIVERY_INSTRUCTIONS}\n</instructions>`,
-      ].join("\n");
+      ].join('\n');
 
       const agent = new Agent({
-        name: "Ruyi Reminder Delivery",
+        name: 'Ruyi Reminder Delivery',
         instructions: systemPrompt,
         model: agentsRuntimeManager.getModel(scope),
         modelSettings: agentsRuntimeManager.getModelSettings(scope),
@@ -391,10 +392,10 @@ class ReminderService {
         signal: abortController.signal,
       });
       const finalOutput = result.finalOutput;
-      const content =
-        typeof finalOutput === "string"
+      const content
+        = typeof finalOutput === 'string'
           ? sanitizeGeneratedReminderMessage(finalOutput)
-          : "";
+          : '';
 
       return content.length > 0 ? content : null;
     } catch (error) {
@@ -404,7 +405,7 @@ class ReminderService {
           error: getReminderErrorMessage(error),
           name: error instanceof Error ? error.name : undefined,
         },
-        "Reminder message generation failed",
+        'Reminder message generation failed',
       );
       return null;
     } finally {
@@ -446,7 +447,7 @@ class ReminderService {
     reminder: IReminder,
   ): Promise<void> {
     const claimed = await this.claimReminder(reminder);
-    if (!claimed) return;
+    if (!claimed) { return; }
 
     try {
       await this.deliverReminder(client, claimed);
@@ -457,7 +458,7 @@ class ReminderService {
           channelId: claimed.channelId,
           userId: claimed.userId,
         },
-        "Delivered reminder",
+        'Delivered reminder',
       );
     } catch (error) {
       await this.markDeliveryFailed(claimed, error);
@@ -468,13 +469,13 @@ class ReminderService {
           userId: claimed.userId,
           error: getReminderErrorMessage(error),
         },
-        "Reminder delivery failed",
+        'Reminder delivery failed',
       );
     }
   }
 
   private async runDueCheck(client: Client): Promise<void> {
-    if (isReminderServiceRunning()) return;
+    if (isReminderServiceRunning()) { return; }
 
     setReminderServiceRunning(true);
     try {
@@ -492,40 +493,40 @@ class ReminderService {
     } catch (error) {
       botLogger.error(
         { error: getReminderErrorMessage(error) },
-        "Reminder due-check failed",
+        'Reminder due-check failed',
       );
     } finally {
       setReminderServiceRunning(false);
       if (this.client) {
-        await this.scheduleNextWake("due-check-complete");
+        await this.scheduleNextWake('due-check-complete');
       }
     }
   }
 
   start(client: Client): void {
     if (this.client) {
-      botLogger.warn("Reminder service already running");
+      botLogger.warn('Reminder service already running');
       return;
     }
 
     this.client = client;
-    botLogger.info("Starting reminder service");
+    botLogger.info('Starting reminder service');
     void this.runDueCheck(client);
   }
 
   stop(): void {
-    if (!this.client) return;
+    if (!this.client) { return; }
 
     this.client = null;
     this.clearScheduledWake();
     setReminderServiceRunning(false);
-    botLogger.info("Reminder service stopped");
+    botLogger.info('Reminder service stopped');
   }
 
   getScope(guildId: string | null, userId: string): ReminderConfigScope {
     return guildId
-      ? { kind: "discord:guild", id: guildId }
-      : { kind: "discord:dm", id: userId };
+      ? { kind: 'discord:guild', id: guildId }
+      : { kind: 'discord:dm', id: userId };
   }
 }
 

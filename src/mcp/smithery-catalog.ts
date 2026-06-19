@@ -1,7 +1,7 @@
-import type { SmitheryServerId } from "../db/models";
+import type { SmitheryServerId } from '../db/models';
 
 export const SMITHERY_SERVER_IDS = [
-  "youtube",
+  'youtube',
 ] as const satisfies readonly SmitheryServerId[];
 
 interface SmitheryServerInfo {
@@ -13,10 +13,10 @@ interface SmitheryServerInfo {
 
 export const SMITHERY_SERVERS: Record<SmitheryServerId, SmitheryServerInfo> = {
   youtube: {
-    name: "YouTube",
-    emoji: "📺",
-    description: "Video search, channel info, captions",
-    mcpUrl: "https://server.smithery.ai/youtube",
+    name: 'YouTube',
+    emoji: '📺',
+    description: 'Video search, channel info, captions',
+    mcpUrl: 'https://server.smithery.ai/youtube',
   },
 };
 

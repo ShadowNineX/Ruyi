@@ -1,4 +1,4 @@
-import { createStore } from "@tanstack/store";
+import { createStore } from '@tanstack/store';
 
 interface ReminderStoreState {
   timeout: ReturnType<typeof setTimeout> | null;
@@ -26,7 +26,7 @@ export function setReminderSchedulerTimeout(
   timeout: ReturnType<typeof setTimeout> | null,
   nextDueAt: Date | null,
 ): void {
-  reminderStore.setState((state) => ({ ...state, timeout, nextDueAt }));
+  reminderStore.setState(state => ({ ...state, timeout, nextDueAt }));
 }
 
 export function isReminderServiceRunning(): boolean {
@@ -34,5 +34,5 @@ export function isReminderServiceRunning(): boolean {
 }
 
 export function setReminderServiceRunning(running: boolean): void {
-  reminderStore.setState((state) => ({ ...state, running }));
+  reminderStore.setState(state => ({ ...state, running }));
 }

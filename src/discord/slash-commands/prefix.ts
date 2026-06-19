@@ -1,24 +1,26 @@
+import type { ChatInputCommandInteraction } from 'discord.js';
+import type { ConfigScope } from '../../config';
 import {
-  SlashCommandBuilder,
-  PermissionFlagsBits,
+
   MessageFlags,
-  type ChatInputCommandInteraction,
-} from "discord.js";
+  PermissionFlagsBits,
+  SlashCommandBuilder,
+} from 'discord.js';
 import {
   configManager,
+
   formatConfigScope,
   userConfigScope,
-  type ConfigScope,
-} from "../../config";
-import { botLogger } from "../../logger";
+} from '../../config';
+import { botLogger } from '../../logger';
 
 export const prefixCommand = new SlashCommandBuilder()
-  .setName("prefix")
-  .setDescription("View or change the bot command prefix")
-  .addStringOption((option) =>
+  .setName('prefix')
+  .setDescription('View or change the bot command prefix')
+  .addStringOption(option =>
     option
-      .setName("new_prefix")
-      .setDescription("The new prefix to use (leave empty to view current)")
+      .setName('new_prefix')
+      .setDescription('The new prefix to use (leave empty to view current)')
       .setRequired(false)
       .setMaxLength(5),
   );
@@ -28,9 +30,9 @@ function canManageScope(
   scope: ConfigScope,
 ): boolean {
   return (
-    scope.kind === "discord:dm" ||
-    (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ??
-      false)
+    scope.kind === 'discord:dm'
+    || (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
+      ?? false)
   );
 }
 
@@ -40,13 +42,13 @@ export async function handlePrefixCommand(
   const scope = userConfigScope(interaction.guildId, interaction.user.id);
   if (!canManageScope(interaction, scope)) {
     await interaction.reply({
-      content: "You need **Manage Server** to change this server's prefix.",
+      content: 'You need **Manage Server** to change this server\'s prefix.',
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
-  const newPrefix = interaction.options.getString("new_prefix");
+  const newPrefix = interaction.options.getString('new_prefix');
 
   if (!newPrefix) {
     await interaction.reply({
@@ -67,7 +69,7 @@ export async function handlePrefixCommand(
       newPrefix,
       user: interaction.user.username,
     },
-    "Prefix changed",
+    'Prefix changed',
   );
   await interaction.reply({
     content: `Prefix for ${formatConfigScope(scope)} changed from \`${oldPrefix}\` to \`${newPrefix}\``,

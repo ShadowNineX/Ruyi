@@ -1,4 +1,4 @@
-import { STEAM_PROFILE_COMMENT_MAX_LENGTH } from "../constants";
+import { STEAM_PROFILE_COMMENT_MAX_LENGTH } from '../constants';
 
 export interface SteamCommentFormatResult {
   comment: string;
@@ -32,52 +32,52 @@ interface SteamTagScanResult extends RenderedSteamTag {
   nextIndex: number;
 }
 
-const NON_BREAKING_SPACE = "\u00a0";
+const NON_BREAKING_SPACE = '\u00A0';
 const MAX_STEAM_TAG_LENGTH = 120;
 const STEAM_PROFILE_COMMENT_SAFE_BBCODE_TAGS = [
-  "b",
-  "h2",
-  "h3",
-  "hr",
-  "i",
-  "p",
-  "pullquote",
-  "u",
-  "strike",
-  "spoiler",
-  "url",
+  'b',
+  'h2',
+  'h3',
+  'hr',
+  'i',
+  'p',
+  'pullquote',
+  'u',
+  'strike',
+  'spoiler',
+  'url',
 ] as const;
 
-export const STEAM_PROFILE_COMMENT_SAFE_BBCODE_GUIDE =
-  "[h2]heading[/h2], [h3]heading[/h3], [b]bold[/b], [u]underline[/u], [i]italic[/i], [strike]strike[/strike], [spoiler]spoiler[/spoiler], [hr][/hr], [url=https://example.com]text[/url], [p]paragraph[/p], [pullquote]text[/pullquote]";
+export const STEAM_PROFILE_COMMENT_SAFE_BBCODE_GUIDE
+  = '[h2]heading[/h2], [h3]heading[/h3], [b]bold[/b], [u]underline[/u], [i]italic[/i], [strike]strike[/strike], [spoiler]spoiler[/spoiler], [hr][/hr], [url=https://example.com]text[/url], [p]paragraph[/p], [pullquote]text[/pullquote]';
 
 const SAFE_INLINE_STEAM_TAGS = new Set<string>(
   STEAM_PROFILE_COMMENT_SAFE_BBCODE_TAGS,
 );
 const KNOWN_UNSUPPORTED_STEAM_TAGS = new Set([
-  "*",
-  "center",
-  "code",
-  "color",
-  "font",
-  "h1",
-  "img",
-  "left",
-  "list",
-  "noparse",
-  "olist",
-  "previewicon",
-  "previewimg",
-  "previewyoutube",
-  "quote",
-  "right",
-  "screenshot",
-  "size",
-  "table",
-  "td",
-  "th",
-  "tr",
-  "video",
+  '*',
+  'center',
+  'code',
+  'color',
+  'font',
+  'h1',
+  'img',
+  'left',
+  'list',
+  'noparse',
+  'olist',
+  'previewicon',
+  'previewimg',
+  'previewyoutube',
+  'quote',
+  'right',
+  'screenshot',
+  'size',
+  'table',
+  'td',
+  'th',
+  'tr',
+  'video',
 ]);
 
 function truncateSteamComment(comment: string): SteamCommentFormatResult {
@@ -90,7 +90,7 @@ function truncateSteamComment(comment: string): SteamCommentFormatResult {
     };
   }
 
-  const suffix = "...";
+  const suffix = '...';
   const truncated = comment
     .slice(0, STEAM_PROFILE_COMMENT_MAX_LENGTH - suffix.length)
     .trimEnd();
@@ -104,23 +104,23 @@ function truncateSteamComment(comment: string): SteamCommentFormatResult {
 
 function stripDiscordFenceLines(comment: string): string {
   return comment
-    .split("\n")
-    .filter((line) => !line.trim().startsWith("```"))
-    .join("\n");
+    .split('\n')
+    .filter(line => !line.trim().startsWith('```'))
+    .join('\n');
 }
 
 function stripDiscordLinePrefix(line: string): string {
   const trimmed = line.trimStart();
-  if (trimmed.startsWith("> ")) return trimmed.slice(2);
-  if (!trimmed.startsWith("#")) return line;
+  if (trimmed.startsWith('> ')) { return trimmed.slice(2); }
+  if (!trimmed.startsWith('#')) { return line; }
 
   let index = 0;
-  while (index < trimmed.length && trimmed[index] === "#") index += 1;
-  return trimmed[index] === " " ? trimmed.slice(index + 1) : line;
+  while (index < trimmed.length && trimmed[index] === '#') { index += 1; }
+  return trimmed[index] === ' ' ? trimmed.slice(index + 1) : line;
 }
 
 function stripPairedMarker(comment: string, marker: string): string {
-  let output = "";
+  let output = '';
   let index = 0;
 
   while (index < comment.length) {
@@ -147,51 +147,51 @@ function stripPairedMarker(comment: string, marker: string): string {
 function stripDiscordMarkdown(comment: string): string {
   const withoutFences = stripDiscordFenceLines(comment);
   const withoutLinePrefixes = withoutFences
-    .split("\n")
+    .split('\n')
     .map(stripDiscordLinePrefix)
-    .join("\n");
+    .join('\n');
 
-  return ["**", "__", "||", "`"].reduce(
+  return ['**', '__', '||', '`'].reduce(
     (current, marker) => stripPairedMarker(current, marker),
     withoutLinePrefixes,
   );
 }
 
 function trimSteamCommentInput(message: string): string {
-  const normalized = message.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
-  if (!normalized.includes("\n")) return normalized.trim();
+  const normalized = message.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+  if (!normalized.includes('\n')) { return normalized.trim(); }
 
-  const lines = normalized.split("\n");
-  while (lines.length > 0 && (lines[0] ?? "").trim() === "") {
+  const lines = normalized.split('\n');
+  while (lines.length > 0 && (lines[0] ?? '').trim() === '') {
     lines.shift();
   }
-  while (lines.length > 0 && (lines.at(-1) ?? "").trim() === "") {
+  while (lines.length > 0 && (lines.at(-1) ?? '').trim() === '') {
     lines.pop();
   }
-  return lines.join("\n");
+  return lines.join('\n');
 }
 
 function isTagNameChar(value: string | undefined): boolean {
-  if (!value) return false;
+  if (!value) { return false; }
   const code = value.toLowerCase().codePointAt(0);
-  if (code === undefined) return false;
+  if (code === undefined) { return false; }
   return (code >= 97 && code <= 122) || (code >= 48 && code <= 57);
 }
 
 function readTagName(value: string): string {
   let index = 0;
-  while (index < value.length && isTagNameChar(value[index])) index += 1;
+  while (index < value.length && isTagNameChar(value[index])) { index += 1; }
   return value.slice(0, index).toLowerCase();
 }
 
 function parseSteamTag(value: string): SteamTag | null {
   const trimmed = value.trim();
-  if (trimmed === "*") return { name: "*", closing: false, rest: "" };
+  if (trimmed === '*') { return { name: '*', closing: false, rest: '' }; }
 
-  const closing = trimmed.startsWith("/");
+  const closing = trimmed.startsWith('/');
   const body = closing ? trimmed.slice(1).trimStart() : trimmed;
   const name = readTagName(body);
-  if (!name) return null;
+  if (!name) { return null; }
 
   return {
     name,
@@ -202,22 +202,22 @@ function parseSteamTag(value: string): SteamTag | null {
 
 function isSafeUrlTarget(target: string): boolean {
   const hasWhitespace = [...target].some(
-    (character) => character.trim() === "",
+    character => character.trim() === '',
   );
   if (
-    !target ||
-    target.includes("]") ||
-    target.includes("[") ||
-    hasWhitespace
+    !target
+    || target.includes(']')
+    || target.includes('[')
+    || hasWhitespace
   ) {
     return false;
   }
 
   return (
-    target.startsWith("https://") ||
-    target.startsWith("http://") ||
-    target.startsWith("steamcommunity.com/") ||
-    target.startsWith("store.steampowered.com/")
+    target.startsWith('https://')
+    || target.startsWith('http://')
+    || target.startsWith('steamcommunity.com/')
+    || target.startsWith('store.steampowered.com/')
   );
 }
 
@@ -226,19 +226,19 @@ function looksLikeUnsupportedTagPair(
   tag: SteamTag,
   searchFrom: number,
 ): boolean {
-  if (tag.closing) return KNOWN_UNSUPPORTED_STEAM_TAGS.has(tag.name);
-  if (KNOWN_UNSUPPORTED_STEAM_TAGS.has(tag.name)) return true;
+  if (tag.closing) { return KNOWN_UNSUPPORTED_STEAM_TAGS.has(tag.name); }
+  if (KNOWN_UNSUPPORTED_STEAM_TAGS.has(tag.name)) { return true; }
   return comment.toLowerCase().includes(`[/${tag.name}]`, searchFrom);
 }
 
 function renderSafeSteamTag(tag: SteamTag): string | null {
-  if (SAFE_INLINE_STEAM_TAGS.has(tag.name) && tag.rest === "") {
+  if (SAFE_INLINE_STEAM_TAGS.has(tag.name) && tag.rest === '') {
     return tag.closing ? `[/${tag.name}]` : `[${tag.name}]`;
   }
 
-  if (tag.name !== "url") return null;
-  if (tag.closing && tag.rest === "") return "[/url]";
-  if (tag.closing || !tag.rest.startsWith("=")) return null;
+  if (tag.name !== 'url') { return null; }
+  if (tag.closing && tag.rest === '') { return '[/url]'; }
+  if (tag.closing || !tag.rest.startsWith('=')) { return null; }
 
   const target = tag.rest.slice(1).trim();
   return isSafeUrlTarget(target) ? `[url=${target}]` : null;
@@ -251,9 +251,9 @@ function renderUnsupportedSteamTag(
   start: number,
   end: number,
 ): RenderedSteamTag {
-  if (tag.name === "*") {
-    const bulletPrefix =
-      outputSoFar.length === 0 || outputSoFar.endsWith("\n") ? "- " : "\n- ";
+  if (tag.name === '*') {
+    const bulletPrefix
+      = outputSoFar.length === 0 || outputSoFar.endsWith('\n') ? '- ' : '\n- ';
     return {
       text: bulletPrefix,
       removedUnsupportedFormatting: true,
@@ -261,7 +261,7 @@ function renderUnsupportedSteamTag(
   }
 
   if (looksLikeUnsupportedTagPair(comment, tag, end + 1)) {
-    return { text: "", removedUnsupportedFormatting: true };
+    return { text: '', removedUnsupportedFormatting: true };
   }
 
   return {
@@ -290,10 +290,10 @@ function scanSteamTag(
   outputSoFar: string,
   start: number,
 ): SteamTagScanResult {
-  const end = comment.indexOf("]", start + 1);
+  const end = comment.indexOf(']', start + 1);
   if (end === -1 || end - start > MAX_STEAM_TAG_LENGTH) {
     return {
-      text: comment[start] ?? "",
+      text: comment[start] ?? '',
       nextIndex: start + 1,
       removedUnsupportedFormatting: false,
     };
@@ -315,12 +315,12 @@ function scanSteamTag(
 }
 
 function sanitizeSteamBbCode(comment: string): SanitizedSteamBbCode {
-  let output = "";
+  let output = '';
   let index = 0;
   let removedUnsupportedFormatting = false;
 
   while (index < comment.length) {
-    if (comment[index] !== "[") {
+    if (comment[index] !== '[') {
       output += comment[index];
       index += 1;
       continue;
@@ -336,27 +336,27 @@ function sanitizeSteamBbCode(comment: string): SanitizedSteamBbCode {
 }
 
 function protectLineAlignmentSpaces(line: string): AlignmentSpacingResult {
-  let output = "";
+  let output = '';
   let index = 0;
   let convertedAlignmentSpaces = false;
 
-  while (index < line.length && line[index] === " ") {
+  while (index < line.length && line[index] === ' ') {
     output += NON_BREAKING_SPACE;
     convertedAlignmentSpaces = true;
     index += 1;
   }
 
   while (index < line.length) {
-    if (line[index] !== " ") {
+    if (line[index] !== ' ') {
       output += line[index];
       index += 1;
       continue;
     }
 
     let end = index;
-    while (end < line.length && line[end] === " ") end += 1;
+    while (end < line.length && line[end] === ' ') { end += 1; }
     const runLength = end - index;
-    output += runLength > 1 ? NON_BREAKING_SPACE.repeat(runLength) : " ";
+    output += runLength > 1 ? NON_BREAKING_SPACE.repeat(runLength) : ' ';
     convertedAlignmentSpaces ||= runLength > 1;
     index = end;
   }
@@ -366,14 +366,14 @@ function protectLineAlignmentSpaces(line: string): AlignmentSpacingResult {
 
 function protectAlignmentSpaces(comment: string): AlignmentSpacingResult {
   let convertedAlignmentSpaces = false;
-  const lines = comment.split("\n").map((line) => {
+  const lines = comment.split('\n').map((line) => {
     const result = protectLineAlignmentSpaces(line);
     convertedAlignmentSpaces ||= result.convertedAlignmentSpaces;
     return result.comment;
   });
 
   return {
-    comment: lines.join("\n"),
+    comment: lines.join('\n'),
     convertedAlignmentSpaces,
   };
 }

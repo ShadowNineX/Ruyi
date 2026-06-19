@@ -1,9 +1,10 @@
-import mongoose, { Schema, type Model } from "mongoose";
+import type { Model } from 'mongoose';
+import mongoose, { Schema } from 'mongoose';
 
 export interface ISteamAgentSession {
   profileId: string;
   sessionId: string;
-  provider: "openai-agents";
+  provider: 'openai-agents';
   model: string;
   summary?: string;
   summaryUpdatedAt?: Date;
@@ -18,7 +19,7 @@ export interface ISteamAgentSession {
 const SteamAgentSessionSchema = new Schema<ISteamAgentSession>({
   profileId: { type: String, required: true, unique: true, index: true },
   sessionId: { type: String, required: true },
-  provider: { type: String, enum: ["openai-agents"], default: "openai-agents" },
+  provider: { type: String, enum: ['openai-agents'], default: 'openai-agents' },
   model: { type: String, required: true },
   summary: { type: String },
   summaryUpdatedAt: { type: Date },
@@ -30,10 +31,10 @@ const SteamAgentSessionSchema = new Schema<ISteamAgentSession>({
   promptVersion: { type: String },
 });
 
-export const SteamAgentSession: Model<ISteamAgentSession> =
-  (mongoose.models.SteamAgentSession as Model<ISteamAgentSession> | undefined) ??
-  mongoose.model<ISteamAgentSession>(
-    "SteamAgentSession",
-    SteamAgentSessionSchema,
-    "steam_agent_sessions",
-  );
+export const SteamAgentSession: Model<ISteamAgentSession>
+  = (mongoose.models.SteamAgentSession as Model<ISteamAgentSession> | undefined)
+    ?? mongoose.model<ISteamAgentSession>(
+      'SteamAgentSession',
+      SteamAgentSessionSchema,
+      'steam_agent_sessions',
+    );

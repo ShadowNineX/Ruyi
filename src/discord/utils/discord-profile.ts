@@ -1,14 +1,10 @@
+import type { Activity, Guild, GuildMember, HexColorString, PresenceStatus, User, UserFlagsString } from 'discord.js';
 import {
+
   ActivityType,
-  type Activity,
-  type Guild,
-  type GuildMember,
-  type HexColorString,
-  type PresenceStatus,
-  type User,
-  type UserFlagsString,
-} from "discord.js";
-import { botLogger } from "../../logger";
+
+} from 'discord.js';
+import { botLogger } from '../../logger';
 
 const USER_ID_REGEX = /^\d{17,20}$/;
 const USER_MENTION_REGEX = /^<@!?(\d{17,20})>$/;
@@ -116,7 +112,7 @@ export interface DiscordProfile {
 
 type DiscordProfileBase = Omit<
   DiscordProfile,
-  "availableImageTargets" | "unavailable"
+  'availableImageTargets' | 'unavailable'
 >;
 
 const ACTIVITY_TYPE_NAMES = ActivityType as unknown as Record<number, string>;
@@ -160,7 +156,7 @@ function formatFlags(user: User): UserFlagsString[] {
 
 function getNameplate(user: User): Nameplate | null {
   const nameplate = user.collectibles?.nameplate;
-  if (!nameplate) return null;
+  if (!nameplate) { return null; }
 
   return {
     asset: nameplate.asset,
@@ -186,10 +182,10 @@ function activitySummary(
   emoji: string | null,
 ): string {
   const parts = [`${type}: ${name}`];
-  if (details) parts.push(`details: ${details}`);
-  if (state) parts.push(`state: ${state}`);
-  if (emoji) parts.push(`emoji: ${emoji}`);
-  return parts.join(" | ");
+  if (details) { parts.push(`details: ${details}`); }
+  if (state) { parts.push(`state: ${state}`); }
+  if (emoji) { parts.push(`emoji: ${emoji}`); }
+  return parts.join(' | ');
 }
 
 function formatDiscordActivity(activity: Activity): DiscordActivityInfo {
@@ -233,15 +229,15 @@ export function buildDiscordPresence(member: GuildMember): DiscordPresenceInfo {
   const presence = member.presence ?? member.guild.presences.cache.get(member.id);
   if (!presence) {
     return unavailableDiscordPresence(
-      "No current presence is visible for this server member. The user may be offline/invisible, uncached, or the Guild Presences intent may be unavailable.",
+      'No current presence is visible for this server member. The user may be offline/invisible, uncached, or the Guild Presences intent may be unavailable.',
     );
   }
 
   const activities = presence.activities.map(formatDiscordActivity);
-  const primaryActivity =
-    activities.find((activity) => activity.typeCode !== ActivityType.Custom) ??
-    activities[0] ??
-    null;
+  const primaryActivity
+    = activities.find(activity => activity.typeCode !== ActivityType.Custom)
+      ?? activities[0]
+      ?? null;
 
   return {
     available: true,
@@ -259,61 +255,61 @@ export function buildDiscordPresence(member: GuildMember): DiscordPresenceInfo {
 function profileImageTargets(profile: DiscordProfileBase) {
   const targets = [
     {
-      key: "display_avatar",
-      label: "display avatar/profile picture",
+      key: 'display_avatar',
+      label: 'display avatar/profile picture',
       url: profile.avatar.display.url,
       suggestedDescribeImageQuestion:
-        "Describe this Discord profile picture/avatar. Mention visible subject, colors, style, text, and mood.",
+        'Describe this Discord profile picture/avatar. Mention visible subject, colors, style, text, and mood.',
     },
     {
-      key: "user_avatar",
-      label: "global user avatar",
+      key: 'user_avatar',
+      label: 'global user avatar',
       url: profile.avatar.user.url,
       suggestedDescribeImageQuestion:
-        "Describe this Discord global avatar. Mention visible subject, colors, style, text, and mood.",
+        'Describe this Discord global avatar. Mention visible subject, colors, style, text, and mood.',
     },
     {
-      key: "server_avatar",
-      label: "server-specific avatar",
+      key: 'server_avatar',
+      label: 'server-specific avatar',
       url: profile.avatar.server.url,
       suggestedDescribeImageQuestion:
-        "Describe this Discord server-specific avatar. Mention visible subject, colors, style, text, and mood.",
+        'Describe this Discord server-specific avatar. Mention visible subject, colors, style, text, and mood.',
     },
     {
-      key: "display_banner",
-      label: "display banner",
+      key: 'display_banner',
+      label: 'display banner',
       url: profile.banner.display.url,
       suggestedDescribeImageQuestion:
-        "Describe this Discord profile banner. Mention visible subject, colors, style, text, and mood.",
+        'Describe this Discord profile banner. Mention visible subject, colors, style, text, and mood.',
     },
     {
-      key: "avatar_decoration",
-      label: "avatar decoration",
+      key: 'avatar_decoration',
+      label: 'avatar decoration',
       url: profile.avatarDecoration.display.url,
       suggestedDescribeImageQuestion:
-        "Describe this Discord avatar decoration overlay. Mention its shape, colors, theme, and visible effects.",
+        'Describe this Discord avatar decoration overlay. Mention its shape, colors, theme, and visible effects.',
     },
     {
-      key: "primary_guild_badge",
-      label: "primary guild badge",
+      key: 'primary_guild_badge',
+      label: 'primary guild badge',
       url: profile.primaryGuild?.badgeUrl,
       suggestedDescribeImageQuestion:
-        "Describe this Discord guild tag badge. Mention visible icon, colors, and style.",
+        'Describe this Discord guild tag badge. Mention visible icon, colors, and style.',
     },
   ];
 
   return targets.filter(
-    (target): target is Omit<typeof target, "url"> & { url: string } =>
-      typeof target.url === "string" && target.url.length > 0,
+    (target): target is Omit<typeof target, 'url'> & { url: string } =>
+      typeof target.url === 'string' && target.url.length > 0,
   );
 }
 
 function unavailableProfileFields(profile: DiscordProfileBase): string[] {
   const unavailable: string[] = [];
-  if (!profile.banner.display.url) unavailable.push("profile banner");
-  if (!profile.avatarDecoration.display.url) unavailable.push("avatar decoration");
-  if (!profile.collectibles.nameplate) unavailable.push("nameplate collectible");
-  if (!profile.primaryGuild?.tag) unavailable.push("primary guild tag");
+  if (!profile.banner.display.url) { unavailable.push('profile banner'); }
+  if (!profile.avatarDecoration.display.url) { unavailable.push('avatar decoration'); }
+  if (!profile.collectibles.nameplate) { unavailable.push('nameplate collectible'); }
+  if (!profile.primaryGuild?.tag) { unavailable.push('primary guild tag'); }
   return unavailable;
 }
 
@@ -322,30 +318,30 @@ export async function resolveGuildMember(
   query: string,
 ): Promise<GuildMember | null> {
   const lookup = normalizeUserLookup(query);
-  if (!lookup) return null;
+  if (!lookup) { return null; }
   const lowerLookup = lookup.toLowerCase();
 
   const member = USER_ID_REGEX.test(lookup)
     ? await guild.members.fetch(lookup).catch((error: unknown) => {
         botLogger.debug(
           { query, error: (error as Error).message },
-          "Could not fetch profile member by ID",
+          'Could not fetch profile member by ID',
         );
         return null;
       })
     : null;
-  if (member) return member.fetch(true);
+  if (member) { return member.fetch(true); }
 
   const members = await guild.members.fetch({ query: lookup, limit: 10 });
-  const found =
-    members.find(
-      (candidate) =>
-        candidate.user.username.toLowerCase() === lowerLookup ||
-        candidate.displayName.toLowerCase() === lowerLookup ||
-        candidate.user.globalName?.toLowerCase() === lowerLookup,
-    ) ??
-    members.first() ??
-    null;
+  const found
+    = members.find(
+      candidate =>
+        candidate.user.username.toLowerCase() === lowerLookup
+        || candidate.displayName.toLowerCase() === lowerLookup
+        || candidate.user.globalName?.toLowerCase() === lowerLookup,
+    )
+    ?? members.first()
+    ?? null;
 
   return found ? found.fetch(true) : null;
 }
@@ -354,14 +350,14 @@ export async function buildDiscordProfile(member: GuildMember): Promise<DiscordP
   const fetchedMember = await member.fetch(true);
   const user = await fetchedMember.user.fetch(true);
   const displayAvatarUrl = fetchedMember.displayAvatarURL({
-    extension: "png",
+    extension: 'png',
     size: 1024,
   });
   const displayBannerUrl = fetchedMember.displayBannerURL({
-    extension: "png",
+    extension: 'png',
     size: 1024,
   });
-  const guildBadgeUrl = user.guildTagBadgeURL({ extension: "png", size: 256 });
+  const guildBadgeUrl = user.guildTagBadgeURL({ extension: 'png', size: 256 });
 
   const profileBase: DiscordProfileBase = {
     id: user.id,
@@ -379,31 +375,31 @@ export async function buildDiscordProfile(member: GuildMember): Promise<DiscordP
     publicFlags: formatFlags(user),
     avatar: {
       user: image(
-        user.avatarURL({ extension: "png", size: 1024 }),
-        "Global Discord avatar. Null means the user is using their default avatar.",
+        user.avatarURL({ extension: 'png', size: 1024 }),
+        'Global Discord avatar. Null means the user is using their default avatar.',
       ),
       server: image(
-        fetchedMember.avatarURL({ extension: "png", size: 1024 }),
-        "Server-specific avatar. Null means no server avatar is equipped here.",
+        fetchedMember.avatarURL({ extension: 'png', size: 1024 }),
+        'Server-specific avatar. Null means no server avatar is equipped here.',
       ),
       display: image(
         displayAvatarUrl,
-        "Currently visible avatar/profile picture in this server.",
+        'Currently visible avatar/profile picture in this server.',
       ),
-      default: image(user.defaultAvatarURL, "Discord default avatar fallback."),
+      default: image(user.defaultAvatarURL, 'Discord default avatar fallback.'),
     },
     banner: {
       user: image(
-        user.bannerURL({ extension: "png", size: 1024 }),
-        "Global profile banner. Null means no global banner is visible to the bot.",
+        user.bannerURL({ extension: 'png', size: 1024 }),
+        'Global profile banner. Null means no global banner is visible to the bot.',
       ),
       server: image(
-        fetchedMember.bannerURL({ extension: "png", size: 1024 }),
-        "Server-specific profile banner. Null means no server banner is equipped here.",
+        fetchedMember.bannerURL({ extension: 'png', size: 1024 }),
+        'Server-specific profile banner. Null means no server banner is equipped here.',
       ),
       display: image(
         displayBannerUrl,
-        "Currently visible profile banner in this server.",
+        'Currently visible profile banner in this server.',
       ),
     },
     avatarDecoration: {
@@ -439,10 +435,10 @@ export async function buildDiscordProfile(member: GuildMember): Promise<DiscordP
 
 export async function buildDiscordUserProfile(user: User): Promise<DiscordProfile> {
   const fetchedUser = await user.fetch(true);
-  const avatarUrl = fetchedUser.avatarURL({ extension: "png", size: 1024 });
-  const bannerUrl = fetchedUser.bannerURL({ extension: "png", size: 1024 });
+  const avatarUrl = fetchedUser.avatarURL({ extension: 'png', size: 1024 });
+  const bannerUrl = fetchedUser.bannerURL({ extension: 'png', size: 1024 });
   const guildBadgeUrl = fetchedUser.guildTagBadgeURL({
-    extension: "png",
+    extension: 'png',
     size: 256,
   });
 
@@ -463,19 +459,19 @@ export async function buildDiscordUserProfile(user: User): Promise<DiscordProfil
     avatar: {
       user: image(
         avatarUrl,
-        "Global Discord avatar. Null means the user is using their default avatar.",
+        'Global Discord avatar. Null means the user is using their default avatar.',
       ),
-      server: image(null, "Server-specific avatar is unavailable in a private chat."),
-      display: image(avatarUrl ?? fetchedUser.defaultAvatarURL, "Global avatar/profile picture."),
-      default: image(fetchedUser.defaultAvatarURL, "Discord default avatar fallback."),
+      server: image(null, 'Server-specific avatar is unavailable in a private chat.'),
+      display: image(avatarUrl ?? fetchedUser.defaultAvatarURL, 'Global avatar/profile picture.'),
+      default: image(fetchedUser.defaultAvatarURL, 'Discord default avatar fallback.'),
     },
     banner: {
       user: image(
         bannerUrl,
-        "Global profile banner. Null means no global banner is visible to the bot.",
+        'Global profile banner. Null means no global banner is visible to the bot.',
       ),
-      server: image(null, "Server-specific profile banner is unavailable in a private chat."),
-      display: image(bannerUrl, "Global profile banner."),
+      server: image(null, 'Server-specific profile banner is unavailable in a private chat.'),
+      display: image(bannerUrl, 'Global profile banner.'),
     },
     avatarDecoration: {
       user: decorationFrom(
@@ -531,28 +527,28 @@ export function formatProfileContext(profile: DiscordProfile): string {
     `  - Use get_user_info for full profile metadata; use describe_image on the relevant image URL when asked what an avatar/banner/decoration looks like.`,
   ].filter((line): line is string => Boolean(line));
 
-  return lines.join("\n");
+  return lines.join('\n');
 }
 
 export function formatPresenceContext(
   presence: DiscordPresenceInfo | null,
 ): string {
-  if (!presence?.available) return "";
+  if (!presence?.available) { return ''; }
 
   const lines = [
-    "Current Discord presence for the target user:",
+    'Current Discord presence for the target user:',
     presence.status ? `  - status: ${presence.status}` : null,
     presence.clientStatus
       ? `  - clients: ${Object.entries(presence.clientStatus)
-          .map(([client, status]) => `${client}=${status}`)
-          .join(", ")}`
+        .map(([client, status]) => `${client}=${status}`)
+        .join(', ')}`
       : null,
     presence.activities.length > 0
       ? `  - activities: ${presence.activities
-          .map((activity) => activity.summary)
-          .join("; ")}`
-      : "  - activities: none visible",
+        .map(activity => activity.summary)
+        .join('; ')}`
+      : '  - activities: none visible',
   ].filter((line): line is string => Boolean(line));
 
-  return lines.join("\n");
+  return lines.join('\n');
 }

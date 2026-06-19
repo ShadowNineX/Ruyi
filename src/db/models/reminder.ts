@@ -1,14 +1,15 @@
-import mongoose, { Schema, type Document } from "mongoose";
-import type { ConfigScope } from "../../config";
+import type { Document } from 'mongoose';
+import type { ConfigScope } from '../../config';
+import mongoose, { Schema } from 'mongoose';
 
-export type ReminderKind = "reminder" | "timer";
+export type ReminderKind = 'reminder' | 'timer';
 type ReminderScopeKind = Extract<
-  ConfigScope["kind"],
-  "discord:guild" | "discord:dm"
+  ConfigScope['kind'],
+  'discord:guild' | 'discord:dm'
 >;
-type ReminderStatus =
-  | "scheduled"
-  | "processing";
+type ReminderStatus
+  = | 'scheduled'
+    | 'processing';
 
 export interface IReminder extends Document {
   _id: mongoose.Types.ObjectId;
@@ -34,21 +35,21 @@ const ReminderSchema = new Schema<IReminder>(
   {
     kind: {
       type: String,
-      enum: ["reminder", "timer"],
+      enum: ['reminder', 'timer'],
       required: true,
     },
     text: { type: String, required: true },
     dueAt: { type: Date, required: true },
     status: {
       type: String,
-      enum: ["scheduled", "processing"],
-      default: "scheduled",
+      enum: ['scheduled', 'processing'],
+      default: 'scheduled',
       required: true,
       index: true,
     },
     scopeKind: {
       type: String,
-      enum: ["discord:guild", "discord:dm"],
+      enum: ['discord:guild', 'discord:dm'],
       required: true,
     },
     scopeId: { type: String, required: true },
@@ -74,4 +75,4 @@ ReminderSchema.index({
 });
 ReminderSchema.index({ status: 1, processingStartedAt: 1 });
 
-export const Reminder = mongoose.model<IReminder>("Reminder", ReminderSchema);
+export const Reminder = mongoose.model<IReminder>('Reminder', ReminderSchema);

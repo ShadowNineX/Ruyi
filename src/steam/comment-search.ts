@@ -1,11 +1,12 @@
+import type { MessageMatchType, RankedMessageMatch, SearchableMessage } from '../utils/message-search';
+import type { SteamProfileComment } from './client';
 import {
+
   rankMessageMatches,
+
   summarizeMessageSearchMatches,
-  type MessageMatchType,
-  type RankedMessageMatch,
-  type SearchableMessage,
-} from "../utils/message-search";
-import { steamCommunityClient, type SteamProfileComment } from "./client";
+} from '../utils/message-search';
+import { steamCommunityClient } from './client';
 
 const STEAM_COMMENT_SEARCH_FETCH_LIMIT = 50;
 
@@ -42,7 +43,7 @@ export interface SteamCommentSearchResult {
 
 function truncateContent(content: string, maxLen = 200): string {
   return content.length > maxLen
-    ? content.slice(0, maxLen - 3) + "..."
+    ? `${content.slice(0, maxLen - 3)}...`
     : content;
 }
 
@@ -73,13 +74,13 @@ function buildSearchDocuments(
   comments: SteamProfileComment[],
   authorFilter: string | null,
 ): SteamCommentSearchDocument[] {
-  const normalizedAuthorFilter = authorFilter?.trim().toLowerCase() ?? "";
+  const normalizedAuthorFilter = authorFilter?.trim().toLowerCase() ?? '';
   return comments.flatMap((comment, index) => {
-    const authorMatches =
-      !normalizedAuthorFilter ||
-      comment.authorName.toLowerCase().includes(normalizedAuthorFilter) ||
-      comment.authorSteamId.includes(normalizedAuthorFilter);
-    if (!authorMatches) return [];
+    const authorMatches
+      = !normalizedAuthorFilter
+        || comment.authorName.toLowerCase().includes(normalizedAuthorFilter)
+        || comment.authorSteamId.includes(normalizedAuthorFilter);
+    if (!authorMatches) { return []; }
 
     return {
       id: comment.id,
@@ -96,14 +97,14 @@ function buildSearchDocuments(
 function buildContextWindow(
   documents: SteamCommentSearchDocument[],
   index: number,
-): Pick<SteamCommentSearchMatch, "contextBefore" | "contextAfter"> {
+): Pick<SteamCommentSearchMatch, 'contextBefore' | 'contextAfter'> {
   return {
     contextBefore: documents
       .slice(Math.max(0, index - 2), index)
-      .map((document) => buildContextItem(document.comment)),
+      .map(document => buildContextItem(document.comment)),
     contextAfter: documents
       .slice(index + 1, index + 3)
-      .map((document) => buildContextItem(document.comment)),
+      .map(document => buildContextItem(document.comment)),
   };
 }
 
@@ -139,7 +140,7 @@ export async function searchSteamProfileComments(
   const matches = rankMessageMatches(documents, query, limit);
 
   return {
-    matches: matches.map((match) => buildSearchMatch(documents, match)),
+    matches: matches.map(match => buildSearchMatch(documents, match)),
     summary: summarizeMessageSearchMatches(matches),
     searchedCommentCount: comments.length,
   };

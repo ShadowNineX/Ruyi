@@ -1,47 +1,48 @@
+import type { AgentInputItem, ModelSettings, RunToolApprovalItem, Tool } from '@openai/agents';
+import type { TextBasedChannel } from 'discord.js';
+import type { ConfigScope } from '../config';
+import type { MessageImageInput } from '../discord/utils/messages';
+import type { RuyiUserIdentity } from '../utils/user-identity';
+import type { ChatRuntimeSession } from './chat-runtime-session';
+import type { ChatMessage, ConversationSurface } from './context';
+import type { PermissionResult } from './permissions';
 import {
   Agent,
+
   user,
-  type AgentInputItem,
-  type RunToolApprovalItem,
-  type Tool,
-  type ModelSettings,
-} from "@openai/agents";
-import type { TextBasedChannel } from "discord.js";
-import type { ConfigScope } from "../config";
-import { z } from "zod";
-import {
-  getToolsForSurface,
-  getToolNamesForSurface,
-  isExternalToolName,
-} from "../tools";
-import { aiLogger } from "../logger";
-import { env } from "../env";
+} from '@openai/agents';
+import { z } from 'zod';
 import {
   AGENT_MAX_TURNS,
   CHAT_TIMEOUT_MS,
   MAX_AGENT_IMAGE_INPUTS,
-} from "../constants";
-import type { MessageImageInput } from "../discord/utils/messages";
-import { systemPrompt } from "./prompt";
-import { sessionManager } from "./session";
-import { agentsRuntimeManager } from "./client";
-import type { ChatRuntimeSession } from "./chat-runtime-session";
+} from '../constants';
+import { env } from '../env';
+import { aiLogger } from '../logger';
 import {
+  getToolNamesForSurface,
+  getToolsForSurface,
+  isExternalToolName,
+} from '../tools';
+import { parseToolArguments } from '../utils/tool-arguments';
+import {
+  buildDiscordUserIdentity,
+
+} from '../utils/user-identity';
+import { agentsRuntimeManager } from './client';
+import {
+
   conversationContext,
-  type ChatMessage,
-  type ConversationSurface,
-} from "./context";
+
+} from './context';
+import { autoExtractFacts } from './extraction';
 import {
   getApprovalToolName,
   permissionManager,
-  type PermissionResult,
-} from "./permissions";
-import { autoExtractFacts } from "./extraction";
-import { parseToolArguments } from "../utils/tool-arguments";
-import {
-  buildDiscordUserIdentity,
-  type RuyiUserIdentity,
-} from "../utils/user-identity";
+
+} from './permissions';
+import { systemPrompt } from './prompt';
+import { sessionManager } from './session';
 
 const ToolCallSchema = z.looseObject({
   arguments: z.unknown().optional(),
@@ -70,9 +71,9 @@ interface ChatOptions {
 interface TextStreamResult {
   completed: Promise<void>;
   error: unknown;
-  toTextStream(options: {
+  toTextStream: (options: {
     compatibleWithNodeStreams: true;
-  }): AsyncIterable<unknown>;
+  }) => AsyncIterable<unknown>;
 }
 
 interface ApprovalState {
@@ -97,15 +98,15 @@ function getLifecycleToolArgs(toolCall: unknown): Record<string, unknown> {
 }
 
 function formatToolDisplayName(toolName: string, isLocal: boolean): string {
-  if (isLocal) return toolName;
+  if (isLocal) { return toolName; }
   return `mcp:${toolName}`;
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) return;
+  if (!signal?.aborted) { return; }
   const reason: unknown = signal.reason;
-  if (reason instanceof Error) throw reason;
-  throw new Error("Chat request was aborted");
+  if (reason instanceof Error) { throw reason; }
+  throw new Error('Chat request was aborted');
 }
 
 function uniqueImageInputs(
@@ -116,10 +117,10 @@ function uniqueImageInputs(
 
   for (const imageInput of imageInputs) {
     const dedupeKey = getImageDedupeKey(imageInput.url);
-    if (seen.has(dedupeKey)) continue;
+    if (seen.has(dedupeKey)) { continue; }
     seen.add(dedupeKey);
     unique.push(imageInput);
-    if (unique.length >= MAX_AGENT_IMAGE_INPUTS) break;
+    if (unique.length >= MAX_AGENT_IMAGE_INPUTS) { break; }
   }
 
   return unique;
@@ -129,15 +130,15 @@ function getImageDedupeKey(imageUrl: string): string {
   try {
     const url = new URL(imageUrl);
     if (
-      url.hostname === "cdn.discordapp.com" ||
-      url.hostname === "media.discordapp.net"
+      url.hostname === 'cdn.discordapp.com'
+      || url.hostname === 'media.discordapp.net'
     ) {
       return `${url.origin}${url.pathname}`;
     }
   } catch (error) {
     aiLogger.debug(
       { error: (error as Error).message, imageUrl },
-      "Could not parse image URL for dedupe",
+      'Could not parse image URL for dedupe',
     );
   }
 
@@ -146,17 +147,17 @@ function getImageDedupeKey(imageUrl: string): string {
 
 function formatImageInputSummary(imageInputs: MessageImageInput[]): string {
   const uniqueInputs = uniqueImageInputs(imageInputs);
-  if (uniqueInputs.length === 0) return "";
+  if (uniqueInputs.length === 0) { return ''; }
 
   const omittedCount = imageInputs.length - uniqueInputs.length;
-  const capNote =
-    omittedCount > 0
+  const capNote
+    = omittedCount > 0
       ? `\nOnly the first ${uniqueInputs.length} unique image inputs were attached natively; ${omittedCount} duplicate or over-limit image input(s) were omitted.`
-      : "";
+      : '';
 
   return `\n\nNative image inputs attached for vision:${capNote}\n${uniqueInputs
     .map((imageInput, index) => `${index + 1}. ${imageInput.source}`)
-    .join("\n")}`;
+    .join('\n')}`;
 }
 
 function buildRunnerInput(
@@ -164,12 +165,12 @@ function buildRunnerInput(
   imageInputs: MessageImageInput[],
 ): string | AgentInputItem[] {
   const images = uniqueImageInputs(imageInputs);
-  if (images.length === 0) return enrichedMessage;
+  if (images.length === 0) { return enrichedMessage; }
 
   const content: Exclude<Parameters<typeof user>[0], string> = [
-    { type: "input_text", text: enrichedMessage },
-    ...images.map((imageInput) => ({
-      type: "input_image" as const,
+    { type: 'input_text', text: enrichedMessage },
+    ...images.map(imageInput => ({
+      type: 'input_image' as const,
       image: imageInput.url,
       detail: imageInput.detail,
     })),
@@ -197,9 +198,9 @@ class ChatService {
       session,
       chatHistory = [],
       imageInputs = [],
-      profileContext = "",
+      profileContext = '',
       messageId,
-      surface = "discord",
+      surface = 'discord',
       identity = buildDiscordUserIdentity(userId, username),
       surfaceLabel,
       signal,
@@ -209,9 +210,9 @@ class ChatService {
     const cacheIdentity = identity ?? buildDiscordUserIdentity(userId, username);
 
     if (
-      surface === "discord" &&
-      channel?.isSendable() &&
-      session.getPermissionPromptController
+      surface === 'discord'
+      && channel?.isSendable()
+      && session.getPermissionPromptController
     ) {
       permissionManager.setContext(channelId, {
         channel,
@@ -234,7 +235,7 @@ class ChatService {
     if (signal?.aborted) {
       abortFromParent();
     } else {
-      signal?.addEventListener("abort", abortFromParent, { once: true });
+      signal?.addEventListener('abort', abortFromParent, { once: true });
     }
 
     const timeout = setTimeout(() => abortController.abort(), CHAT_TIMEOUT_MS);
@@ -255,15 +256,15 @@ class ChatService {
 
       const uniqueImageInputCount = uniqueImageInputs(imageInputs).length;
       const imageInputSummary = formatImageInputSummary(imageInputs);
-      const profileBlock = profileContext ? `\n\n${profileContext}` : "";
+      const profileBlock = profileContext ? `\n\n${profileContext}` : '';
       const enrichedMessage = `${dynamicContext}${profileBlock}\n\nUser message from ${username}:\n${userMessage}${imageInputSummary}`;
       const runnerInput = buildRunnerInput(enrichedMessage, imageInputs);
 
       if (env.DEBUG_PROMPTS) {
-        aiLogger.debug({ systemPrompt }, "system prompt (debug dump)");
+        aiLogger.debug({ systemPrompt }, 'system prompt (debug dump)');
         aiLogger.debug(
           { enrichedMessage },
-          "enriched user message (debug dump)",
+          'enriched user message (debug dump)',
         );
       }
 
@@ -278,11 +279,11 @@ class ChatService {
           maxImageInputs: MAX_AGENT_IMAGE_INPUTS,
           userMessagePreview: userMessage.slice(0, 80),
         },
-        "Chat input received",
+        'Chat input received',
       );
 
       if (persistUserMessage) {
-        if (surface === "discord") {
+        if (surface === 'discord') {
           await conversationContext.rememberMessage(
             conversationId,
             username,
@@ -326,7 +327,7 @@ class ChatService {
                   surface,
                   conversationId,
                 },
-                "Background fact extraction crashed",
+                'Background fact extraction crashed',
               ),
             );
         }
@@ -369,7 +370,7 @@ class ChatService {
           localToolCount: getToolsForSurface(surface).length,
           maxTurns: AGENT_MAX_TURNS,
         },
-        "Using persistent OpenAI Agents session",
+        'Using persistent OpenAI Agents session',
       );
 
       let stream = await runner.run(agent, runnerInput, runOptions);
@@ -379,7 +380,7 @@ class ChatService {
       while (stream.interruptions.length > 0) {
         approvalCycles += 1;
         if (approvalCycles > 5) {
-          throw new Error("Too many tool approval cycles in one chat turn");
+          throw new Error('Too many tool approval cycles in one chat turn');
         }
 
         session.onApprovalPending();
@@ -396,8 +397,8 @@ class ChatService {
       }
 
       const finalOutput = stream.finalOutput;
-      const finalContent =
-        typeof finalOutput === "string" && finalOutput.length > 0
+      const finalContent
+        = typeof finalOutput === 'string' && finalOutput.length > 0
           ? finalOutput
           : null;
 
@@ -408,7 +409,7 @@ class ChatService {
           localToolCallCount: toolUsage.localToolCallCount,
           externalToolCallCount: toolUsage.externalToolCallCount,
         },
-        "Chat response generated",
+        'Chat response generated',
       );
 
       session.onComplete();
@@ -416,7 +417,7 @@ class ChatService {
       if (!finalContent) {
         aiLogger.warn(
           { username, surface, conversationId },
-          "Chat request returned empty response from model",
+          'Chat request returned empty response from model',
         );
       }
 
@@ -433,7 +434,7 @@ class ChatService {
           surface,
           conversationId,
         },
-        "Chat request failed",
+        'Chat request failed',
       );
 
       await sessionManager.invalidate(conversationId, surface);
@@ -441,7 +442,7 @@ class ChatService {
       throw error;
     } finally {
       clearTimeout(timeout);
-      signal?.removeEventListener("abort", abortFromParent);
+      signal?.removeEventListener('abort', abortFromParent);
       permissionManager.clearContext(channelId);
     }
   }
@@ -454,18 +455,18 @@ class ChatService {
     surface: ConversationSurface,
   ) {
     const agent = new Agent({
-      name: "Ruyi",
+      name: 'Ruyi',
       instructions: systemPrompt,
       model,
       modelSettings,
       tools: [...getToolsForSurface(surface)],
-      toolUseBehavior: "run_llm_again",
+      toolUseBehavior: 'run_llm_again',
     });
 
-    agent.on("agent_tool_start", (_context, tool, details) => {
+    agent.on('agent_tool_start', (_context, tool, details) => {
       this.handleToolStart(tool, details.toolCall, session, toolUsage, surface);
     });
-    agent.on("agent_tool_end", (_context, tool) => {
+    agent.on('agent_tool_end', (_context, tool) => {
       this.handleToolEnd(tool, session, surface);
     });
 
@@ -478,13 +479,13 @@ class ChatService {
   ): Promise<void> {
     const textStream = stream.toTextStream({ compatibleWithNodeStreams: true });
     for await (const chunk of textStream) {
-      const delta = typeof chunk === "string" ? chunk : String(chunk);
+      const delta = typeof chunk === 'string' ? chunk : String(chunk);
       session.onTextGenerationStart(delta);
     }
 
     session.onTextGenerationEnd();
     await stream.completed;
-    if (stream.error) throw stream.error;
+    if (stream.error) { throw stream.error; }
   }
 
   private getToolDisplayName(toolName: string, surface: ConversationSurface): {
@@ -513,7 +514,7 @@ class ChatService {
     }
     aiLogger.info(
       { tool: tool.name, external: isExternalToolName(tool.name, surface) },
-      "Tool execution starting",
+      'Tool execution starting',
     );
     session.onToolStart(displayName, getLifecycleToolArgs(toolCall));
   }
@@ -524,7 +525,7 @@ class ChatService {
     surface: ConversationSurface,
   ): void {
     const { displayName } = this.getToolDisplayName(tool.name, surface);
-    aiLogger.debug({ tool: displayName }, "Tool execution complete");
+    aiLogger.debug({ tool: displayName }, 'Tool execution complete');
     session.onToolEnd(displayName);
     session.onThinking();
   }
@@ -539,13 +540,13 @@ class ChatService {
 
     for (const approval of approvals) {
       const toolName = getApprovalToolName(approval);
-      const decision =
-        rememberedDecisions.get(toolName) ??
-        (await permissionManager.requestToolApproval(
-          channelId,
-          approval,
-          sessionId,
-        ));
+      const decision
+        = rememberedDecisions.get(toolName)
+          ?? (await permissionManager.requestToolApproval(
+            channelId,
+            approval,
+            sessionId,
+          ));
 
       if (decision.rememberTool) {
         rememberedDecisions.set(toolName, decision);
@@ -567,7 +568,7 @@ class ChatService {
 
     state.reject(approval, {
       alwaysReject: decision.rememberTool,
-      message: "The Discord user denied approval for this tool call.",
+      message: 'The Discord user denied approval for this tool call.',
     });
   }
 }

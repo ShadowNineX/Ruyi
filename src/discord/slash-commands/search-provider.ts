@@ -1,47 +1,49 @@
+import type { ChatInputCommandInteraction, StringSelectMenuInteraction } from 'discord.js';
+import type { ConfigScope, SearchProvider } from '../../config';
 import {
   ActionRowBuilder,
+
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
   StringSelectMenuBuilder,
+
   StringSelectMenuOptionBuilder,
-  type ChatInputCommandInteraction,
-  type StringSelectMenuInteraction,
-} from "discord.js";
+} from 'discord.js';
 import {
   configManager,
+
   formatConfigScope,
   SEARCH_PROVIDERS,
-  userConfigScope,
-  type ConfigScope,
-  type SearchProvider,
-} from "../../config";
-import { botLogger } from "../../logger";
 
-const SEARCH_PROVIDER_SELECT_ID = "search_provider_select";
+  userConfigScope,
+} from '../../config';
+import { botLogger } from '../../logger';
+
+const SEARCH_PROVIDER_SELECT_ID = 'search_provider_select';
 
 const SEARCH_PROVIDER_LABELS: Record<SearchProvider, string> = {
-  openai: "OpenAI Web Search",
-  tavily: "Tavily",
+  openai: 'OpenAI Web Search',
+  tavily: 'Tavily',
 };
 
 const SEARCH_PROVIDER_DESCRIPTIONS: Record<SearchProvider, string> = {
-  openai: "Best default answer engine for current information.",
-  tavily: "Best retrieval engine for source-heavy research.",
+  openai: 'Best default answer engine for current information.',
+  tavily: 'Best retrieval engine for source-heavy research.',
 };
 
 export const searchProviderCommand = new SlashCommandBuilder()
-  .setName("search-provider")
-  .setDescription("Choose the primary web search provider");
+  .setName('search-provider')
+  .setDescription('Choose the primary web search provider');
 
 function canManageScope(
   interaction: ChatInputCommandInteraction | StringSelectMenuInteraction,
   scope: ConfigScope,
 ): boolean {
   return (
-    scope.kind === "discord:dm" ||
-    (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ??
-      false)
+    scope.kind === 'discord:dm'
+    || (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
+      ?? false)
   );
 }
 
@@ -67,9 +69,9 @@ function buildProviderRow(
   return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(SEARCH_PROVIDER_SELECT_ID)
-      .setPlaceholder("Choose primary search provider")
+      .setPlaceholder('Choose primary search provider')
       .addOptions(
-        SEARCH_PROVIDERS.map((provider) =>
+        SEARCH_PROVIDERS.map(provider =>
           buildProviderOption(provider, currentProvider),
         ),
       ),
@@ -87,7 +89,7 @@ export async function handleSearchProviderCommand(
   if (!canManageScope(interaction, scope)) {
     await interaction.reply({
       content:
-        "You need **Manage Server** to change this server's search provider.",
+        'You need **Manage Server** to change this server\'s search provider.',
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -104,12 +106,12 @@ export async function handleSearchProviderCommand(
 export async function handleSearchProviderSelect(
   interaction: StringSelectMenuInteraction,
 ): Promise<void> {
-  if (interaction.customId !== SEARCH_PROVIDER_SELECT_ID) return;
+  if (interaction.customId !== SEARCH_PROVIDER_SELECT_ID) { return; }
   const scope = userConfigScope(interaction.guildId, interaction.user.id);
   if (!canManageScope(interaction, scope)) {
     await interaction.update({
       content:
-        "You need **Manage Server** to change this server's search provider.",
+        'You need **Manage Server** to change this server\'s search provider.',
       components: [],
     });
     return;
@@ -118,7 +120,7 @@ export async function handleSearchProviderSelect(
   const selectedValue = interaction.values[0];
   if (!selectedValue || !isSearchProvider(selectedValue)) {
     await interaction.update({
-      content: "Invalid search provider selected.",
+      content: 'Invalid search provider selected.',
       components: [],
     });
     return;
@@ -135,7 +137,7 @@ export async function handleSearchProviderSelect(
       newProvider: selectedValue,
       user: interaction.user.username,
     },
-    "Search provider changed",
+    'Search provider changed',
   );
 
   await interaction.update({

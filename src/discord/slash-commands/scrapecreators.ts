@@ -1,14 +1,16 @@
+import type { ChatInputCommandInteraction } from 'discord.js';
+import type { ScrapeCreatorsApiUsageEntry, ScrapeCreatorsDailyUsageEntry } from '../../services/scrapecreators-account';
 import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+
   EmbedBuilder,
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-} from "discord.js";
-import { botLogger } from "../../logger";
+} from 'discord.js';
+import { botLogger } from '../../logger';
 import {
   fetchScrapeCreatorsApiUsage,
   fetchScrapeCreatorsCreditBalance,
@@ -16,64 +18,63 @@ import {
   hasScrapeCreatorsAccountKey,
   SCRAPECREATORS_DASHBOARD_URL,
   ScrapeCreatorsApiError,
-  type ScrapeCreatorsApiUsageEntry,
-  type ScrapeCreatorsDailyUsageEntry,
-} from "../../services/scrapecreators-account";
+
+} from '../../services/scrapecreators-account';
 
 const SCRAPECREATORS_COLORS = {
-  neutral: 0x5865f2,
-  warning: 0xffaa00,
-  error: 0xcc3333,
+  neutral: 0x5865F2,
+  warning: 0xFFAA00,
+  error: 0xCC3333,
 } as const;
 
-const DEFAULT_ENDPOINT_FILTER = "/v1/pinterest";
+const DEFAULT_ENDPOINT_FILTER = '/v1/pinterest';
 const RECENT_USAGE_LIMIT = 6;
 const DAILY_USAGE_LIMIT = 7;
 
 export const scrapeCreatorsCommand = new SlashCommandBuilder()
-  .setName("scrapecreators")
-  .setDescription("View ScrapeCreators credits and API usage")
+  .setName('scrapecreators')
+  .setDescription('View ScrapeCreators credits and API usage')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addSubcommand((subcommand) =>
+  .addSubcommand(subcommand =>
     subcommand
-      .setName("balance")
-      .setDescription("Show ScrapeCreators credit balance"),
+      .setName('balance')
+      .setDescription('Show ScrapeCreators credit balance'),
   )
-  .addSubcommand((subcommand) =>
+  .addSubcommand(subcommand =>
     subcommand
-      .setName("usage")
-      .setDescription("Show recent ScrapeCreators requests")
-      .addStringOption((option) =>
+      .setName('usage')
+      .setDescription('Show recent ScrapeCreators requests')
+      .addStringOption(option =>
         option
-          .setName("endpoint")
-          .setDescription("Endpoint filter. Defaults to /v1/pinterest")
+          .setName('endpoint')
+          .setDescription('Endpoint filter. Defaults to /v1/pinterest')
           .setMaxLength(120),
       )
-      .addIntegerOption((option) =>
+      .addIntegerOption(option =>
         option
-          .setName("status_code")
-          .setDescription("HTTP status code filter, such as 200 or 500")
+          .setName('status_code')
+          .setDescription('HTTP status code filter, such as 200 or 500')
           .setMinValue(100)
           .setMaxValue(599),
       )
-      .addIntegerOption((option) =>
+      .addIntegerOption(option =>
         option
-          .setName("page")
-          .setDescription("Request history page, max 100")
+          .setName('page')
+          .setDescription('Request history page, max 100')
           .setMinValue(1)
           .setMaxValue(100),
       ),
   )
-  .addSubcommand((subcommand) =>
+  .addSubcommand(subcommand =>
     subcommand
-      .setName("daily")
-      .setDescription("Show daily ScrapeCreators credit and request counts"),
+      .setName('daily')
+      .setDescription('Show daily ScrapeCreators credit and request counts'),
   );
 
 function buildDashboardButton(): ActionRowBuilder<ButtonBuilder> {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setLabel("Open ScrapeCreators")
+      .setLabel('Open ScrapeCreators')
       .setStyle(ButtonStyle.Link)
       .setURL(SCRAPECREATORS_DASHBOARD_URL),
   );
@@ -84,30 +85,30 @@ function buildBaseEmbed(title: string, color: number): EmbedBuilder {
 }
 
 function formatNumber(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
+  return new Intl.NumberFormat('en-US').format(value);
 }
 
 function formatDuration(entry: ScrapeCreatorsApiUsageEntry): string {
-  if (typeof entry.duration_ms === "number") {
+  if (typeof entry.duration_ms === 'number') {
     return `${formatNumber(entry.duration_ms)} ms`;
   }
-  if (typeof entry.duration_secs === "number") {
+  if (typeof entry.duration_secs === 'number') {
     return `${formatNumber(entry.duration_secs)} sec`;
   }
-  return "unknown";
+  return 'unknown';
 }
 
 function formatDateTime(value: string | undefined): string {
-  if (!value) return "unknown";
+  if (!value) { return 'unknown'; }
 
   const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return value;
+  if (!Number.isFinite(timestamp)) { return value; }
 
   return `<t:${Math.floor(timestamp / 1000)}:R>`;
 }
 
 function truncateFieldValue(value: string, maxLength = 1024): string {
-  if (value.length <= maxLength) return value;
+  if (value.length <= maxLength) { return value; }
   return `${value.slice(0, maxLength - 3)}...`;
 }
 
@@ -116,40 +117,40 @@ function formatEndpoint(endpoint: string): string {
 }
 
 function formatStatus(entry: ScrapeCreatorsApiUsageEntry): string {
-  const status = entry.status_code ? String(entry.status_code) : "unknown";
-  if (entry.success === true) return `${status} success`;
-  if (entry.success === false) return `${status} failed`;
+  const status = entry.status_code ? String(entry.status_code) : 'unknown';
+  if (entry.success === true) { return `${status} success`; }
+  if (entry.success === false) { return `${status} failed`; }
   return status;
 }
 
 function formatUsageLine(entry: ScrapeCreatorsApiUsageEntry): string {
-  const method = entry.http_method ?? "GET";
-  const credits =
-    typeof entry.credits === "number" ? `${formatNumber(entry.credits)} cr` : "? cr";
+  const method = entry.http_method ?? 'GET';
+  const credits
+    = typeof entry.credits === 'number' ? `${formatNumber(entry.credits)} cr` : '? cr';
 
   return [
     `\`${method} ${formatEndpoint(entry.endpoint)}\``,
     `${formatStatus(entry)} • ${credits} • ${formatDuration(entry)}`,
     formatDateTime(entry.request_time ?? entry.created_at),
-  ].join("\n");
+  ].join('\n');
 }
 
 function buildSetupEmbed(): EmbedBuilder {
-  return buildBaseEmbed("ScrapeCreators Unavailable", SCRAPECREATORS_COLORS.warning)
+  return buildBaseEmbed('ScrapeCreators Unavailable', SCRAPECREATORS_COLORS.warning)
     .setDescription(
-      "`SCRAPECREATORS_API_KEY` is not configured, so Ruyi cannot read account usage.",
+      '`SCRAPECREATORS_API_KEY` is not configured, so Ruyi cannot read account usage.',
     )
     .addFields({
-      name: "Needed",
-      value: "Add your ScrapeCreators API key as `SCRAPECREATORS_API_KEY`.",
+      name: 'Needed',
+      value: 'Add your ScrapeCreators API key as `SCRAPECREATORS_API_KEY`.',
     });
 }
 
 function buildBalanceEmbed(creditCount: number): EmbedBuilder {
-  return buildBaseEmbed("ScrapeCreators Credits", SCRAPECREATORS_COLORS.neutral)
-    .setDescription("Current ScrapeCreators account credit balance.")
+  return buildBaseEmbed('ScrapeCreators Credits', SCRAPECREATORS_COLORS.neutral)
+    .setDescription('Current ScrapeCreators account credit balance.')
     .addFields({
-      name: "Credits remaining",
+      name: 'Credits remaining',
       value: formatNumber(creditCount),
       inline: true,
     });
@@ -161,20 +162,20 @@ function buildUsageEmbed(
   page: number,
 ): EmbedBuilder {
   const visibleEntries = entries.slice(0, RECENT_USAGE_LIMIT);
-  const value =
-    visibleEntries.length > 0
-      ? truncateFieldValue(visibleEntries.map(formatUsageLine).join("\n\n"))
-      : "No matching requests returned.";
+  const value
+    = visibleEntries.length > 0
+      ? truncateFieldValue(visibleEntries.map(formatUsageLine).join('\n\n'))
+      : 'No matching requests returned.';
 
-  return buildBaseEmbed("ScrapeCreators Request History", SCRAPECREATORS_COLORS.neutral)
-    .setDescription("Recent API requests from ScrapeCreators.")
+  return buildBaseEmbed('ScrapeCreators Request History', SCRAPECREATORS_COLORS.neutral)
+    .setDescription('Recent API requests from ScrapeCreators.')
     .addFields(
       {
-        name: "Filter",
+        name: 'Filter',
         value: `Endpoint: \`${endpoint}\`\nPage: ${page}`,
       },
       {
-        name: "Recent requests",
+        name: 'Recent requests',
         value,
       },
     );
@@ -198,44 +199,44 @@ function formatDailyLine(entry: ScrapeCreatorsDailyUsageEntry): string {
     `${formatDateTime(entry.usage_date)}:`,
     `${formatNumber(entry.total_credits)} credits`,
     `${formatNumber(entry.request_count)} requests`,
-  ].join(" ");
+  ].join(' ');
 }
 
 function buildDailyEmbed(entries: ScrapeCreatorsDailyUsageEntry[]): EmbedBuilder {
   const visibleEntries = entries.slice(0, DAILY_USAGE_LIMIT);
   const totals = sumDailyUsage(visibleEntries);
-  const dailyValue =
-    visibleEntries.length > 0
-      ? visibleEntries.map(formatDailyLine).join("\n")
-      : "No daily usage returned.";
+  const dailyValue
+    = visibleEntries.length > 0
+      ? visibleEntries.map(formatDailyLine).join('\n')
+      : 'No daily usage returned.';
 
-  return buildBaseEmbed("ScrapeCreators Daily Usage", SCRAPECREATORS_COLORS.neutral)
-    .setDescription("Daily ScrapeCreators credit and request counts.")
+  return buildBaseEmbed('ScrapeCreators Daily Usage', SCRAPECREATORS_COLORS.neutral)
+    .setDescription('Daily ScrapeCreators credit and request counts.')
     .addFields(
       {
         name: `Last ${visibleEntries.length || 0} reported day(s)`,
         value: [
           `${formatNumber(totals.credits)} credits`,
           `${formatNumber(totals.requests)} requests`,
-        ].join("\n"),
+        ].join('\n'),
         inline: true,
       },
       {
-        name: "Daily breakdown",
+        name: 'Daily breakdown',
         value: truncateFieldValue(dailyValue),
       },
     );
 }
 
 function buildErrorEmbed(error: unknown): EmbedBuilder {
-  const status =
-    error instanceof ScrapeCreatorsApiError && error.status
+  const status
+    = error instanceof ScrapeCreatorsApiError && error.status
       ? ` (${error.status})`
-      : "";
-  const message =
-    error instanceof Error ? error.message : "Unknown ScrapeCreators error";
+      : '';
+  const message
+    = error instanceof Error ? error.message : 'Unknown ScrapeCreators error';
 
-  return buildBaseEmbed("ScrapeCreators Unavailable", SCRAPECREATORS_COLORS.error)
+  return buildBaseEmbed('ScrapeCreators Unavailable', SCRAPECREATORS_COLORS.error)
     .setDescription(`${message}${status}`);
 }
 
@@ -248,10 +249,10 @@ async function handleBalance(interaction: ChatInputCommandInteraction): Promise<
 }
 
 async function handleUsage(interaction: ChatInputCommandInteraction): Promise<void> {
-  const endpoint =
-    interaction.options.getString("endpoint")?.trim() || DEFAULT_ENDPOINT_FILTER;
-  const page = interaction.options.getInteger("page") ?? 1;
-  const statusCode = interaction.options.getInteger("status_code") ?? undefined;
+  const endpoint
+    = interaction.options.getString('endpoint')?.trim() || DEFAULT_ENDPOINT_FILTER;
+  const page = interaction.options.getInteger('page') ?? 1;
+  const statusCode = interaction.options.getInteger('status_code') ?? undefined;
 
   const usage = await fetchScrapeCreatorsApiUsage({
     endpoint,
@@ -278,7 +279,7 @@ export async function handleScrapeCreatorsCommand(
   botLogger.info({
     user: interaction.user.username,
     subcommand: interaction.options.getSubcommand(),
-  }, "/scrapecreators invoked");
+  }, '/scrapecreators invoked');
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -292,11 +293,11 @@ export async function handleScrapeCreatorsCommand(
 
   try {
     const subcommand = interaction.options.getSubcommand();
-    if (subcommand === "balance") {
+    if (subcommand === 'balance') {
       await handleBalance(interaction);
       return;
     }
-    if (subcommand === "usage") {
+    if (subcommand === 'usage') {
       await handleUsage(interaction);
       return;
     }
@@ -314,7 +315,7 @@ export async function handleScrapeCreatorsCommand(
             : undefined,
         user: interaction.user.username,
       },
-      "/scrapecreators failed",
+      '/scrapecreators failed',
     );
     await interaction.editReply({
       embeds: [buildErrorEmbed(error)],

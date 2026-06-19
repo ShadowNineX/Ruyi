@@ -1,26 +1,28 @@
+import type { ModelSettings } from '@openai/agents';
+import type { ConfigScope } from '../config';
 import {
   getDefaultModelSettings,
+
   OpenAIProvider,
   Runner,
   setTracingDisabled,
-  type ModelSettings,
-} from "@openai/agents";
-import { aiLogger } from "../logger";
-import { env } from "../env";
-import { configManager, type ConfigScope } from "../config";
-import { BACKGROUND_TASK_MODEL } from "../constants";
+} from '@openai/agents';
+import { configManager } from '../config';
+import { BACKGROUND_TASK_MODEL } from '../constants';
+import { env } from '../env';
+import { aiLogger } from '../logger';
 import {
   getAgentsProvider,
   getAgentsRunner,
   resetAgentsRuntime,
   setAgentsRuntime,
-} from "../stores";
+} from '../stores';
 
-type ReasoningEffort = NonNullable<ModelSettings["reasoning"]>["effort"];
-type TextVerbosity = NonNullable<ModelSettings["text"]>["verbosity"];
+type ReasoningEffort = NonNullable<ModelSettings['reasoning']>['effort'];
+type TextVerbosity = NonNullable<ModelSettings['text']>['verbosity'];
 
-const BACKGROUND_TASK_REASONING_EFFORT: ReasoningEffort = "low";
-const BACKGROUND_TASK_TEXT_VERBOSITY: TextVerbosity = "low";
+const BACKGROUND_TASK_REASONING_EFFORT: ReasoningEffort = 'low';
+const BACKGROUND_TASK_TEXT_VERBOSITY: TextVerbosity = 'low';
 
 function buildBackgroundTaskModelSettings(): ModelSettings {
   const defaults = getDefaultModelSettings(BACKGROUND_TASK_MODEL);
@@ -73,7 +75,7 @@ class AgentsRuntimeManager {
 
   initialize(): void {
     if (getAgentsRunner()) {
-      aiLogger.info("OpenAI Agents runtime already initialized");
+      aiLogger.info('OpenAI Agents runtime already initialized');
       return;
     }
 
@@ -85,8 +87,8 @@ class AgentsRuntimeManager {
       modelProvider: provider,
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
-      workflowName: "Ruyi Discord chat",
-      toolNotFoundBehavior: "return_error_to_model",
+      workflowName: 'Ruyi Discord chat',
+      toolNotFoundBehavior: 'return_error_to_model',
     });
     setAgentsRuntime(provider, runner);
 
@@ -96,7 +98,7 @@ class AgentsRuntimeManager {
         preset: configManager.getModelPreset(null),
         modelSettings: this.modelSettings,
       },
-      "OpenAI Agents runtime initialized",
+      'OpenAI Agents runtime initialized',
     );
   }
 
@@ -106,20 +108,20 @@ class AgentsRuntimeManager {
       this.initialize();
       runner = getAgentsRunner();
     }
-    if (!runner) throw new Error("OpenAI Agents runner was not initialized");
+    if (!runner) { throw new Error('OpenAI Agents runner was not initialized'); }
     return runner;
   }
 
   async stop(): Promise<void> {
     const provider = getAgentsProvider();
-    if (!provider) return;
+    if (!provider) { return; }
 
     try {
       await provider.close();
     } catch (error) {
       aiLogger.warn(
         { error: (error as Error).message },
-        "Error stopping OpenAI Agents provider",
+        'Error stopping OpenAI Agents provider',
       );
     }
     resetAgentsRuntime();

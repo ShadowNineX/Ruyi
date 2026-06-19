@@ -1,28 +1,28 @@
-import { tool } from "@openai/agents";
-import { z } from "zod";
-import { toolLogger } from "../../logger";
-import { toolContextManager } from "../../utils/types";
+import { tool } from '@openai/agents';
+import { z } from 'zod';
+import { toolLogger } from '../../logger';
+import { toolContextManager } from '../../utils/types';
 
 export const serverInfoTool = tool({
-  name: "get_server_info",
-  description: "Get information about the current Discord server",
+  name: 'get_server_info',
+  description: 'Get information about the current Discord server',
   parameters: z.object({
     include_members: z
       .boolean()
       .nullable()
       .describe(
-        "Whether to include a bounded sample of cached members. Use get_user_info for specific users.",
+        'Whether to include a bounded sample of cached members. Use get_user_info for specific users.',
       ),
     member_limit: z
       .number()
       .nullable()
-      .describe("Maximum cached members to include when include_members is true (1-50)."),
+      .describe('Maximum cached members to include when include_members is true (1-50).'),
   }),
   execute: async ({ include_members, member_limit }) => {
     const { guild } = toolContextManager.get();
     if (!guild) {
-      toolLogger.warn("get_server_info called without guild context");
-      return { error: "Not in a server" };
+      toolLogger.warn('get_server_info called without guild context');
+      return { error: 'Not in a server' };
     }
 
     const memberLimit = Math.min(
@@ -31,7 +31,7 @@ export const serverInfoTool = tool({
     );
     const cachedMembers = [...guild.members.cache.values()]
       .slice(0, memberLimit)
-      .map((m) => ({
+      .map(m => ({
         id: m.user.id,
         username: m.user.username,
         displayName: m.displayName,
@@ -40,17 +40,17 @@ export const serverInfoTool = tool({
         joinedAt: m.joinedAt?.toISOString() ?? null,
       }));
     const roles = [...guild.roles.cache.values()]
-      .filter((role) => role.name !== "@everyone")
+      .filter(role => role.name !== '@everyone')
       .sort((a, b) => b.position - a.position)
       .slice(0, 25)
-      .map((role) => ({
+      .map(role => ({
         id: role.id,
         name: role.name,
         color: role.hexColor,
         memberCount: role.members.size,
       }));
 
-    toolLogger.info({ server: guild.name }, "Got server info");
+    toolLogger.info({ server: guild.name }, 'Got server info');
 
     return {
       server: {
@@ -75,7 +75,7 @@ export const serverInfoTool = tool({
         ? { cachedMembers }
         : {
             hint:
-              "Members are omitted by default to keep responses bounded. Use get_user_info for a specific user.",
+              'Members are omitted by default to keep responses bounded. Use get_user_info for a specific user.',
           }),
     };
   },

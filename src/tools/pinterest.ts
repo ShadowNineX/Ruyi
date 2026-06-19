@@ -1,26 +1,26 @@
-import { tool } from "@openai/agents";
-import { z } from "zod";
-import { toolLogger } from "../logger";
+import { tool } from '@openai/agents';
+import { z } from 'zod';
+import { toolLogger } from '../logger';
 import {
   fetchScrapeCreatorsJson,
   parseScrapeCreatorsSchema,
-} from "../services/scrapecreators-client";
-import { formatError } from "../utils/types";
+} from '../services/scrapecreators-client';
+import { formatError } from '../utils/types';
 
-const PINTEREST_BASE_URL = "https://www.pinterest.com";
+const PINTEREST_BASE_URL = 'https://www.pinterest.com';
 const MAX_PINTEREST_RESULTS = 20;
 const DEFAULT_PINTEREST_RESULTS = 10;
 const MAX_PINTEREST_RECOMMENDED_FOLLOW_UPS = 10;
 const TRIM_PINTEREST_RESPONSE = false;
 
-type PinterestAction = "user_boards" | "board_pins" | "pin" | "search";
+type PinterestAction = 'user_boards' | 'board_pins' | 'pin' | 'search';
 type ApiRecord = Record<string, unknown>;
 
 type PinterestPinSummary = NonNullable<ReturnType<typeof summarizePin>>;
-type PinterestResponseSummary =
-  | { boards: PinterestBoardSummary[] }
-  | { pin: PinterestPinSummary }
-  | { pins: PinterestPinSummary[] };
+type PinterestResponseSummary
+  = | { boards: PinterestBoardSummary[] }
+    | { pin: PinterestPinSummary }
+    | { pins: PinterestPinSummary[] };
 type PinterestBoardSummary = ReturnType<typeof summarizeBoard>;
 
 interface ScrapeCreatorsRequest {
@@ -32,44 +32,44 @@ const maybeNumberSchema = z.number().nullish();
 const maybeBooleanSchema = z.boolean().nullish();
 
 const TEXT_VALUE_KEYS = [
-  "text",
-  "title",
-  "name",
-  "value",
-  "label",
-  "content",
-  "description",
-  "display_name",
-  "full_name",
+  'text',
+  'title',
+  'name',
+  'value',
+  'label',
+  'content',
+  'description',
+  'display_name',
+  'full_name',
 ] as const;
 
 function isApiRecord(value: unknown): value is ApiRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function normalizeApiText(value: unknown, depth = 0): string | null {
-  if (typeof value === "string") {
+  if (typeof value === 'string') {
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
   }
 
-  if (typeof value === "number" && Number.isFinite(value)) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
     return String(value);
   }
 
   if (Array.isArray(value)) {
     for (const entry of value) {
       const text = normalizeApiText(entry, depth + 1);
-      if (text) return text;
+      if (text) { return text; }
     }
     return null;
   }
 
-  if (!isApiRecord(value) || depth > 2) return null;
+  if (!isApiRecord(value) || depth > 2) { return null; }
 
   for (const key of TEXT_VALUE_KEYS) {
     const text = normalizeApiText(value[key], depth + 1);
-    if (text) return text;
+    if (text) { return text; }
   }
 
   return null;
@@ -83,7 +83,7 @@ const maybeApiTextSchema = z
     z.record(z.string(), z.unknown()),
   ])
   .nullish()
-  .transform((value) => normalizeApiText(value));
+  .transform(value => normalizeApiText(value));
 
 const pinterestImageAssetSchema = z.looseObject({
   url: maybeApiTextSchema,
@@ -207,35 +207,35 @@ type PinterestImageMap = z.infer<typeof pinterestImageMapSchema>;
 type PinterestUser = z.infer<typeof pinterestUserSchema>;
 type PinterestBoard = z.infer<typeof pinterestBoardSchema>;
 type PinterestPin = z.infer<typeof pinterestPinSchema>;
-type PinterestParsedResponse =
+type PinterestParsedResponse
+  = | {
+    action: 'user_boards';
+    boards: PinterestBoard[];
+    cursor: null;
+  }
   | {
-      action: "user_boards";
-      boards: PinterestBoard[];
-      cursor: null;
-    }
+    action: 'board_pins' | 'search';
+    pins: PinterestPin[];
+    cursor: string | null;
+  }
   | {
-      action: "board_pins" | "search";
-      pins: PinterestPin[];
-      cursor: string | null;
-    }
-  | {
-      action: "pin";
-      pin: PinterestPin;
-      cursor: null;
-    };
+    action: 'pin';
+    pin: PinterestPin;
+    cursor: null;
+  };
 
 const PINTEREST_IMAGE_KEYS = [
-  "orig",
-  "original",
-  "originals",
-  "1200x",
-  "736x",
-  "600x315",
-  "564x",
-  "474x",
-  "236x",
-  "222x",
-  "170x",
+  'orig',
+  'original',
+  'originals',
+  '1200x',
+  '736x',
+  '600x315',
+  '564x',
+  '474x',
+  '236x',
+  '222x',
+  '170x',
 ] as const;
 
 function clampMaxResults(value: number | null): number {
@@ -246,49 +246,49 @@ function clampMaxResults(value: number | null): number {
 }
 
 function getImageHttpUrl(value: string | null | undefined): string | null {
-  if (!value) return null;
-  if (!URL.canParse(value)) return null;
+  if (!value) { return null; }
+  if (!URL.canParse(value)) { return null; }
   const url = new URL(value);
-  return url.protocol === "http:" || url.protocol === "https:"
+  return url.protocol === 'http:' || url.protocol === 'https:'
     ? url.toString()
     : null;
 }
 
 function toPinterestUrl(value: string | null | undefined): string | null {
-  if (!value) return null;
-  if (value.startsWith("http://") || value.startsWith("https://")) return value;
-  if (value.startsWith("/")) return `${PINTEREST_BASE_URL}${value}`;
+  if (!value) { return null; }
+  if (value.startsWith('http://') || value.startsWith('https://')) { return value; }
+  if (value.startsWith('/')) { return `${PINTEREST_BASE_URL}${value}`; }
   return value;
 }
 
 function normalizePinterestHandle(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed.startsWith("http")) return trimmed.replace(/^@/, "");
+  if (!trimmed.startsWith('http')) { return trimmed.replace(/^@/, ''); }
 
   const url = new URL(trimmed);
-  const handle = url.pathname.split("/").find(Boolean);
+  const handle = url.pathname.split('/').find(Boolean);
   if (!handle) {
-    throw new Error("Pinterest profile URL did not include a username.");
+    throw new Error('Pinterest profile URL did not include a username.');
   }
-  return handle.replace(/^@/, "");
+  return handle.replace(/^@/, '');
 }
 
 function normalizePinUrl(value: string): string {
   const trimmed = value.trim();
-  if (/^\d+$/.test(trimmed)) return `${PINTEREST_BASE_URL}/pin/${trimmed}/`;
+  if (/^\d+$/.test(trimmed)) { return `${PINTEREST_BASE_URL}/pin/${trimmed}/`; }
   return toPinterestUrl(trimmed) ?? trimmed;
 }
 
 function getImageUrlFromImageValue(
   value: PinterestImageValue | null | undefined,
 ): string | null {
-  if (!value) return null;
-  if (typeof value === "string") return getImageHttpUrl(value);
+  if (!value) { return null; }
+  if (typeof value === 'string') { return getImageHttpUrl(value); }
 
   if (Array.isArray(value)) {
     for (const image of value) {
       const url = getImageHttpUrl(image.url);
-      if (url) return url;
+      if (url) { return url; }
     }
     return null;
   }
@@ -299,16 +299,16 @@ function getImageUrlFromImageValue(
 function getImageUrlFromImageRecord(
   images: PinterestImageMap | null | undefined,
 ): string | null {
-  if (!images) return null;
+  if (!images) { return null; }
 
   for (const key of PINTEREST_IMAGE_KEYS) {
     const url = getImageUrlFromImageValue(images[key]);
-    if (url) return url;
+    if (url) { return url; }
   }
 
   for (const image of Object.values(images)) {
     const url = getImageUrlFromImageValue(image);
-    if (url) return url;
+    if (url) { return url; }
   }
 
   return null;
@@ -316,7 +316,7 @@ function getImageUrlFromImageRecord(
 
 function getPinImageUrl(pin: PinterestPin): string | null {
   const imagesUrl = getImageUrlFromImageRecord(pin.images);
-  if (imagesUrl) return imagesUrl;
+  if (imagesUrl) { return imagesUrl; }
 
   const imageValues: Array<PinterestImageValue | null | undefined> = [
     pin.imageSpec_orig,
@@ -341,7 +341,7 @@ function getPinImageUrl(pin: PinterestPin): string | null {
 
   for (const imageValue of imageValues) {
     const url = getImageUrlFromImageValue(imageValue);
-    if (url) return url;
+    if (url) { return url; }
   }
 
   return null;
@@ -349,25 +349,25 @@ function getPinImageUrl(pin: PinterestPin): string | null {
 
 function getBoardCoverUrl(board: PinterestBoard): string | null {
   return (
-    getImageHttpUrl(board.image_cover_hd_url) ??
-    getImageHttpUrl(board.image_cover_url) ??
-    getImageUrlFromImageRecord(board.cover_images) ??
-    getImageUrlFromImageRecord(board.images)
+    getImageHttpUrl(board.image_cover_hd_url)
+    ?? getImageHttpUrl(board.image_cover_url)
+    ?? getImageUrlFromImageRecord(board.cover_images)
+    ?? getImageUrlFromImageRecord(board.images)
   );
 }
 
 function summarizeUser(user: PinterestUser | null | undefined) {
-  if (!user) return null;
+  if (!user) { return null; }
   return {
     id: user.id ?? user.entityId ?? null,
     username: user.username ?? null,
     fullName: user.full_name ?? user.fullName ?? null,
     followerCount: user.follower_count ?? user.followerCount ?? null,
     imageUrl:
-      getImageHttpUrl(user.image_large_url) ??
-      getImageHttpUrl(user.imageLargeUrl) ??
-      getImageHttpUrl(user.image_medium_url) ??
-      getImageHttpUrl(user.imageMediumUrl),
+      getImageHttpUrl(user.image_large_url)
+      ?? getImageHttpUrl(user.imageLargeUrl)
+      ?? getImageHttpUrl(user.image_medium_url)
+      ?? getImageHttpUrl(user.imageMediumUrl),
     profileUrl: toPinterestUrl(user.profileUrl),
   };
 }
@@ -416,9 +416,9 @@ async function callScrapeCreators(
     path: request.path,
     params: request.params,
     notConfiguredMessage:
-      "ScrapeCreators is not configured. Set SCRAPECREATORS_API_KEY to use Pinterest tools.",
-    requestFailedMessage: "ScrapeCreators request failed",
-    nonJsonLogMessage: "ScrapeCreators response body was not JSON",
+      'ScrapeCreators is not configured. Set SCRAPECREATORS_API_KEY to use Pinterest tools.',
+    requestFailedMessage: 'ScrapeCreators request failed',
+    nonJsonLogMessage: 'ScrapeCreators response body was not JSON',
     logDebug: (context, message) => toolLogger.debug(context, message),
   });
 }
@@ -427,7 +427,7 @@ function parsePinterestResponse(
   action: PinterestAction,
   body: unknown,
 ): PinterestParsedResponse {
-  if (action === "user_boards") {
+  if (action === 'user_boards') {
     const data = parseScrapeCreatorsSchema(
       pinterestBoardsResponseSchema,
       body,
@@ -436,7 +436,7 @@ function parsePinterestResponse(
     return { action, boards: data.boards, cursor: null };
   }
 
-  if (action === "pin") {
+  if (action === 'pin') {
     const pin = parseScrapeCreatorsSchema(
       pinterestPinSchema,
       body,
@@ -455,7 +455,7 @@ function parsePinterestResponse(
 
 function requireValue(value: string | null, message: string): string {
   const trimmed = value?.trim();
-  if (!trimmed) throw new Error(message);
+  if (!trimmed) { throw new Error(message); }
   return trimmed;
 }
 
@@ -473,43 +473,43 @@ function buildScrapeCreatorsRequest(input: {
   };
 
   switch (input.action) {
-    case "user_boards":
+    case 'user_boards':
       return {
-        path: "/v1/pinterest/user/boards",
+        path: '/v1/pinterest/user/boards',
         params: {
           handle: normalizePinterestHandle(
-            requireValue(input.handle, "handle is required for user_boards."),
+            requireValue(input.handle, 'handle is required for user_boards.'),
           ),
           trim: true,
         },
       };
-    case "board_pins":
+    case 'board_pins':
       return {
-        path: "/v1/pinterest/board",
+        path: '/v1/pinterest/board',
         params: {
           ...common,
           url: requireValue(
             input.boardUrl,
-            "board_url is required for board_pins.",
+            'board_url is required for board_pins.',
           ),
         },
       };
-    case "pin":
+    case 'pin':
       return {
-        path: "/v1/pinterest/pin",
+        path: '/v1/pinterest/pin',
         params: {
           url: normalizePinUrl(
-            requireValue(input.pinUrl, "pin_url is required for pin."),
+            requireValue(input.pinUrl, 'pin_url is required for pin.'),
           ),
           trim: TRIM_PINTEREST_RESPONSE,
         },
       };
-    case "search":
+    case 'search':
       return {
-        path: "/v1/pinterest/search",
+        path: '/v1/pinterest/search',
         params: {
           ...common,
-          query: requireValue(input.query, "query is required for search."),
+          query: requireValue(input.query, 'query is required for search.'),
         },
       };
   }
@@ -519,13 +519,13 @@ function summarizeResponse(
   parsed: PinterestParsedResponse,
   maxResults: number,
 ): PinterestResponseSummary {
-  if (parsed.action === "user_boards") {
+  if (parsed.action === 'user_boards') {
     return {
       boards: parsed.boards.slice(0, maxResults).map(summarizeBoard),
     };
   }
 
-  if (parsed.action === "pin") {
+  if (parsed.action === 'pin') {
     return {
       pin: summarizePin(parsed.pin),
     };
@@ -537,48 +537,48 @@ function summarizeResponse(
 }
 
 function getPinsFromSummary(summary: PinterestResponseSummary): PinterestPinSummary[] {
-  if ("pins" in summary) return summary.pins;
-  if ("pin" in summary) return [summary.pin];
+  if ('pins' in summary) { return summary.pins; }
+  if ('pin' in summary) { return [summary.pin]; }
   return [];
 }
 
 function getPinLabel(pin: PinterestPinSummary): string {
-  return pin.title ?? pin.description ?? pin.url ?? pin.id ?? "Pinterest pin";
+  return pin.title ?? pin.description ?? pin.url ?? pin.id ?? 'Pinterest pin';
 }
 
 function hasImageUrl(
   pin: PinterestPinSummary,
 ): pin is PinterestPinSummary & { imageUrl: string } {
-  return typeof pin.imageUrl === "string" && pin.imageUrl.trim().length > 0;
+  return typeof pin.imageUrl === 'string' && pin.imageUrl.trim().length > 0;
 }
 
 function hasPinUrl(
   pin: PinterestPinSummary,
 ): pin is PinterestPinSummary & { url: string } {
-  return typeof pin.url === "string" && pin.url.trim().length > 0;
+  return typeof pin.url === 'string' && pin.url.trim().length > 0;
 }
 
 function buildDescribeImageCall(
   pin: PinterestPinSummary & { imageUrl: string },
 ) {
   return {
-    tool: "describe_image",
+    tool: 'describe_image',
     image_url: pin.imageUrl,
     question:
-      `Visually inspect this Pinterest pin image. First transcribe any visible ` +
-      `text exactly if present, then give only the style/content details needed ` +
-      `to rate or compare the board. Keep this compact; do not write the final ` +
-      `board review here. Pin: ${getPinLabel(pin)}`,
-    detail: "high",
+      `Visually inspect this Pinterest pin image. First transcribe any visible `
+      + `text exactly if present, then give only the style/content details needed `
+      + `to rate or compare the board. Keep this compact; do not write the final `
+      + `board review here. Pin: ${getPinLabel(pin)}`,
+    detail: 'high',
     reason:
-      "The user asked to view the Pinterest image itself, not just metadata.",
+      'The user asked to view the Pinterest image itself, not just metadata.',
   };
 }
 
 function buildPinDetailCall(pin: PinterestPinSummary & { url: string }) {
   return {
-    tool: "pinterest",
-    action: "pin",
+    tool: 'pinterest',
+    action: 'pin',
     handle: null,
     board_url: null,
     pin_url: pin.url,
@@ -586,12 +586,12 @@ function buildPinDetailCall(pin: PinterestPinSummary & { url: string }) {
     cursor: null,
     max_results: 1,
     reason:
-      "Fetch individual pin details to look for a direct image URL before visual inspection.",
+      'Fetch individual pin details to look for a direct image URL before visual inspection.',
   };
 }
 
 function recommendedPinterestFollowUpCount(candidateCount: number): number {
-  if (candidateCount <= 0) return 0;
+  if (candidateCount <= 0) { return 0; }
   return Math.min(
     Math.ceil(Math.sqrt(candidateCount)),
     MAX_PINTEREST_RECOMMENDED_FOLLOW_UPS,
@@ -611,8 +611,8 @@ function buildRecommendedNextToolCalls(
     .slice(0, imageInspectionCount)
     .map(buildDescribeImageCall);
 
-  if (describeImageCalls.length > 0) return describeImageCalls;
-  if (action === "pin") return [];
+  if (describeImageCalls.length > 0) { return describeImageCalls; }
+  if (action === 'pin') { return []; }
 
   const pinDetailCandidates = pins.filter(hasPinUrl);
   const pinDetailCount = recommendedPinterestFollowUpCount(
@@ -625,8 +625,8 @@ function getPinterestImageStats(summary: PinterestResponseSummary) {
   const pins = getPinsFromSummary(summary);
   const directImageCount = pins.filter(hasImageUrl).length;
   const pinDetailCandidateCount = pins.filter(hasPinUrl).length;
-  const recommendedImageInspectionCount =
-    recommendedPinterestFollowUpCount(directImageCount);
+  const recommendedImageInspectionCount
+    = recommendedPinterestFollowUpCount(directImageCount);
   const recommendedPinDetailCount = recommendedPinterestFollowUpCount(
     pinDetailCandidateCount,
   );
@@ -640,44 +640,44 @@ function getPinterestImageStats(summary: PinterestResponseSummary) {
 }
 
 function getSummaryResultCount(summary: PinterestResponseSummary): number {
-  if ("boards" in summary) return summary.boards.length;
-  if ("pins" in summary) return summary.pins.length;
+  if ('boards' in summary) { return summary.boards.length; }
+  if ('pins' in summary) { return summary.pins.length; }
   return 1;
 }
 
 export const pinterestTool = tool({
-  name: "pinterest",
+  name: 'pinterest',
   description:
-    "Read public Pinterest data through ScrapeCreators: list a user's boards, inspect board pins, fetch a pin, or search pins. Use this when the user asks about Pinterest boards/pins.",
+    'Read public Pinterest data through ScrapeCreators: list a user\'s boards, inspect board pins, fetch a pin, or search pins. Use this when the user asks about Pinterest boards/pins.',
   parameters: z.object({
     action: z
-      .enum(["user_boards", "board_pins", "pin", "search"])
-      .describe("Pinterest lookup to perform."),
+      .enum(['user_boards', 'board_pins', 'pin', 'search'])
+      .describe('Pinterest lookup to perform.'),
     handle: z
       .string()
       .nullable()
       .describe(
-        "Pinterest username or profile URL for user_boards, such as 'broadstbullycom' or a pinterest.com profile URL.",
+        'Pinterest username or profile URL for user_boards, such as \'broadstbullycom\' or a pinterest.com profile URL.',
       ),
     board_url: z
       .string()
       .nullable()
-      .describe("Pinterest board URL for board_pins."),
+      .describe('Pinterest board URL for board_pins.'),
     pin_url: z
       .string()
       .nullable()
-      .describe("Pinterest pin URL or numeric pin ID for pin details."),
-    query: z.string().nullable().describe("Search query for search."),
+      .describe('Pinterest pin URL or numeric pin ID for pin details.'),
+    query: z.string().nullable().describe('Search query for search.'),
     cursor: z
       .string()
       .nullable()
       .describe(
-        "Pagination cursor returned by a previous board_pins/search call.",
+        'Pagination cursor returned by a previous board_pins/search call.',
       ),
     max_results: z
       .number()
       .nullable()
-      .describe("Maximum boards or pins to return, 1-20. Defaults to 10."),
+      .describe('Maximum boards or pins to return, 1-20. Defaults to 10.'),
   }),
   execute: async ({
     action,
@@ -721,11 +721,11 @@ export const pinterestTool = tool({
           recommendedNextToolCallCount: recommendedNextToolCalls.length,
           hasCursor: Boolean(nextCursor),
         },
-        "Pinterest lookup complete",
+        'Pinterest lookup complete',
       );
 
       return {
-        provider: "scrapecreators",
+        provider: 'scrapecreators',
         action,
         nextCursor,
         ...summary,
@@ -736,25 +736,25 @@ export const pinterestTool = tool({
           imageStats.recommendedImageInspectionCount,
         recommended_pin_detail_count: imageStats.recommendedPinDetailCount,
         visual_sampling_policy: {
-          strategy: "bounded_representative_sample",
+          strategy: 'bounded_representative_sample',
           max_recommended_follow_ups: MAX_PINTEREST_RECOMMENDED_FOLLOW_UPS,
           explanation:
-            "Pinterest boards can contain hundreds of pins. Do not try to inspect every image. Use the recommended sample count, then mention the sample size briefly in the final answer only when relevant.",
+            'Pinterest boards can contain hundreds of pins. Do not try to inspect every image. Use the recommended sample count, then mention the sample size briefly in the final answer only when relevant.',
         },
         recommended_next_tool_calls: recommendedNextToolCalls,
         image_inspection_note:
-          "For visual questions, ratings, or requests to view the images themselves, follow recommended_next_tool_calls. In the final answer, lead with the user's answer/rating instead of API counts. Mention counts compactly, such as 'I sampled 4 of 10 visible pins.' Do not dump every OCR result unless the user explicitly asks for a full transcript. Do not use fetch_url/web_search as a substitute for visual inspection.",
+          'For visual questions, ratings, or requests to view the images themselves, follow recommended_next_tool_calls. In the final answer, lead with the user\'s answer/rating instead of API counts. Mention counts compactly, such as \'I sampled 4 of 10 visible pins.\' Do not dump every OCR result unless the user explicitly asks for a full transcript. Do not use fetch_url/web_search as a substitute for visual inspection.',
         final_answer_guidance:
-          "Pinterest board ratings should feel like a natural opinion, not a tool report: rating first, 2-4 concise reasons, a few sampled quote/text examples only if useful, and any limitation/sample-size note at the end.",
-        note: "Results are public Pinterest data from ScrapeCreators. Use nextCursor for the next page when present.",
+          'Pinterest board ratings should feel like a natural opinion, not a tool report: rating first, 2-4 concise reasons, a few sampled quote/text examples only if useful, and any limitation/sample-size note at the end.',
+        note: 'Results are public Pinterest data from ScrapeCreators. Use nextCursor for the next page when present.',
       };
     } catch (error) {
       const errorMessage = formatError(error);
       toolLogger.error(
         { action, error: errorMessage },
-        "Pinterest lookup failed",
+        'Pinterest lookup failed',
       );
-      return { error: "Pinterest lookup failed", details: errorMessage };
+      return { error: 'Pinterest lookup failed', details: errorMessage };
     }
   },
 });

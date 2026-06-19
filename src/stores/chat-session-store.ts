@@ -1,13 +1,14 @@
-import { createStore, type Store } from "@tanstack/store";
-import type { Message } from "discord.js";
+import type { Store } from '@tanstack/store';
+import type { Message } from 'discord.js';
+import { createStore } from '@tanstack/store';
 
-type SessionStatus =
-  | "thinking"
-  | "generating"
-  | "tool"
-  | "approval"
-  | "complete"
-  | "error";
+type SessionStatus
+  = | 'thinking'
+    | 'generating'
+    | 'tool'
+    | 'approval'
+    | 'complete'
+    | 'error';
 
 export interface SessionStatusSnapshot {
   status: SessionStatus;
@@ -46,7 +47,7 @@ export type ChatSessionStore = Store<ChatSessionState>;
 
 export function createChatSessionStore(): ChatSessionStore {
   return createStore<ChatSessionState>({
-    status: "thinking",
+    status: 'thinking',
     latestToolCall: null,
     toolCounts: new Map(),
     startTime: Date.now(),
@@ -57,7 +58,7 @@ export function createChatSessionStore(): ChatSessionStore {
     statusRefreshInFlight: false,
     streamPreviewMessage: null,
     streamPreviewMessagePromise: null,
-    streamPreviewText: "",
+    streamPreviewText: '',
     streamPreviewLastEditAt: 0,
     streamPreviewEditTimer: null,
     streamPreviewEditInFlight: false,
@@ -72,7 +73,7 @@ export function setChatSessionPartial(
   store: ChatSessionStore,
   partial: Partial<ChatSessionState>,
 ): void {
-  store.setState((state) => ({ ...state, ...partial }));
+  store.setState(state => ({ ...state, ...partial }));
 }
 
 export function incrementChatSessionToolCount(

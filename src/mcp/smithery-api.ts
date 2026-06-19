@@ -1,29 +1,28 @@
-import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
-import Smithery from "@smithery/api";
-import { createConnection, SmitheryAuthorizationError } from "@smithery/api/mcp";
-import type { Connection } from "@smithery/api/resources/connections/connections";
-import type { Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
-import { env } from "../env";
-import { mcpLogger } from "../logger";
-import { getSmitheryConnectionId } from "../utils/smithery-connection-id";
+import type { Tool as McpTool } from '@modelcontextprotocol/sdk/types.js';
+import type { Connection } from '@smithery/api/resources/connections/connections';
+import type { ISmitheryConnection, SmitheryConnectionScope, SmitheryConnectionStatus, SmitheryServerId } from '../db/models';
+import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
+import Smithery from '@smithery/api';
+import { createConnection, SmitheryAuthorizationError } from '@smithery/api/mcp';
 import {
   getAllSmitheryConnections,
   getSmitheryConnection,
-  saveSmitheryConnection,
-  type ISmitheryConnection,
-  type SmitheryConnectionScope,
-  type SmitheryConnectionStatus,
-  type SmitheryServerId,
-} from "../db/models";
-import { SMITHERY_SERVERS } from "./smithery-catalog";
 
-const SMITHERY_MCP_BASE_URL = "https://mcp.smithery.run";
+  saveSmitheryConnection,
+
+} from '../db/models';
+import { env } from '../env';
+import { mcpLogger } from '../logger';
+import { getSmitheryConnectionId } from '../utils/smithery-connection-id';
+import { SMITHERY_SERVERS } from './smithery-catalog';
+
+const SMITHERY_MCP_BASE_URL = 'https://mcp.smithery.run';
 const MCP_CLIENT_INFO = {
-  name: "ruyi-discord-bot",
-  version: "1.0.0",
+  name: 'ruyi-discord-bot',
+  version: '1.0.0',
 } as const;
 const SMITHERY_APP_METADATA = {
-  app: "ruyi-discord-bot",
+  app: 'ruyi-discord-bot',
 } as const;
 
 export interface SmitheryConnectionSnapshot {
@@ -54,7 +53,7 @@ function requireSmitheryConfig(): {
 } {
   if (!env.SMITHERY_API_KEY || !env.SMITHERY_NAMESPACE) {
     throw new Error(
-      "Smithery Connect is not configured. Set SMITHERY_API_KEY and SMITHERY_NAMESPACE.",
+      'Smithery Connect is not configured. Set SMITHERY_API_KEY and SMITHERY_NAMESPACE.',
     );
   }
 
@@ -70,17 +69,17 @@ function getSmitheryClient(): Smithery {
 }
 
 function normalizeStatus(
-  state: Connection["status"] extends { state: infer T } ? T : string,
+  state: Connection['status'] extends { state: infer T } ? T : string,
 ): SmitheryConnectionStatus {
   switch (state) {
-    case "connected":
-    case "auth_required":
-    case "input_required":
-    case "disconnected":
-    case "error":
+    case 'connected':
+    case 'auth_required':
+    case 'input_required':
+    case 'disconnected':
+    case 'error':
       return state;
     default:
-      return "unknown";
+      return 'unknown';
   }
 }
 
@@ -97,32 +96,32 @@ function getConnectionMetadata(
 }
 
 function getErrorStatus(error: unknown): number | undefined {
-  if (!(error instanceof Error) || !("status" in error)) return undefined;
+  if (!(error instanceof Error) || !('status' in error)) { return undefined; }
   const status = (error as { status?: unknown }).status;
-  return typeof status === "number" ? status : undefined;
+  return typeof status === 'number' ? status : undefined;
 }
 
-function getStatusSetupUrl(status: Connection["status"] | undefined): string | undefined {
-  if (!status) return undefined;
-  if (status.state === "auth_required") {
+function getStatusSetupUrl(status: Connection['status'] | undefined): string | undefined {
+  if (!status) { return undefined; }
+  if (status.state === 'auth_required') {
     return status.setupUrl;
   }
-  if (status.state === "input_required") {
+  if (status.state === 'input_required') {
     return status.setupUrl;
   }
   return undefined;
 }
 
 function getStatusErrorMessage(
-  status: Connection["status"] | undefined,
+  status: Connection['status'] | undefined,
 ): string | undefined {
-  return status?.state === "error" ? status.message : undefined;
+  return status?.state === 'error' ? status.message : undefined;
 }
 
 function toSnapshot(connection: Connection): SmitheryConnectionSnapshot {
   return {
     connectionId: connection.connectionId,
-    status: normalizeStatus(connection.status?.state ?? "unknown"),
+    status: normalizeStatus(connection.status?.state ?? 'unknown'),
     setupUrl: getStatusSetupUrl(connection.status),
     errorMessage: getStatusErrorMessage(connection.status),
   };
@@ -177,7 +176,7 @@ async function withSmitheryMcpClient<T>(
           connectionId,
           error: error instanceof Error ? error.message : String(error),
         },
-        "Failed to close Smithery MCP client",
+        'Failed to close Smithery MCP client',
       );
     });
   }
@@ -191,7 +190,7 @@ async function requireConnectedSmitheryConnection(
   if (!connection) {
     throw new Error(`${SMITHERY_SERVERS[serverId].name} is not linked. Run /smithery first.`);
   }
-  if (connection.status !== "connected") {
+  if (connection.status !== 'connected') {
     throw new Error(
       `${SMITHERY_SERVERS[serverId].name} is not ready. Current Smithery status: ${connection.status}.`,
     );
@@ -223,7 +222,7 @@ export async function createOrUpdateSmitheryConnection(
     getSmitheryConnectionId(scope, serverId),
     {
       namespace,
-      transport: "http",
+      transport: 'http',
       mcpUrl: server.mcpUrl,
       name: server.name,
       metadata: getConnectionMetadata(scope, serverId),
@@ -253,7 +252,7 @@ export async function refreshSmitheryConnection(
 export async function refreshKnownSmitheryConnections(
   scope?: SmitheryConnectionScope,
 ): Promise<void> {
-  if (!isSmitheryConfigured()) return;
+  if (!isSmitheryConfigured()) { return; }
 
   const connections = await getAllSmitheryConnections(scope);
   for (const connection of connections) {
@@ -270,7 +269,7 @@ export async function refreshKnownSmitheryConnections(
           serverId: connection.serverId,
           error: error instanceof Error ? error.message : String(error),
         },
-        "Failed to refresh Smithery connection status",
+        'Failed to refresh Smithery connection status',
       );
     }
   }
@@ -290,7 +289,7 @@ export async function deleteSmitheryConnection(
     );
     return result.success;
   } catch (error) {
-    if (getErrorStatus(error) === 404) return true;
+    if (getErrorStatus(error) === 404) { return true; }
     throw error;
   }
 }
@@ -300,9 +299,8 @@ export async function listSmitheryConnectionTools(
   serverId: SmitheryServerId,
 ): Promise<SmitheryToolSummary[]> {
   const connection = await requireConnectedSmitheryConnection(scope, serverId);
-  const result = await withSmitheryMcpClient(connection.connectionId, (client) =>
-    client.listTools(),
-  );
+  const result = await withSmitheryMcpClient(connection.connectionId, client =>
+    client.listTools());
   return result.tools.map(toToolSummary);
 }
 
@@ -315,9 +313,8 @@ export async function callSmitheryConnectionTool(
   const connection = await requireConnectedSmitheryConnection(scope, serverId);
 
   try {
-    const result = await withSmitheryMcpClient(connection.connectionId, (client) =>
-      client.callTool({ name: toolName, arguments: args }),
-    );
+    const result = await withSmitheryMcpClient(connection.connectionId, client =>
+      client.callTool({ name: toolName, arguments: args }));
     return {
       connectionId: connection.connectionId,
       toolName,
@@ -327,7 +324,7 @@ export async function callSmitheryConnectionTool(
     if (error instanceof SmitheryAuthorizationError) {
       await saveSnapshot(scope, serverId, {
         connectionId: error.connectionId,
-        status: "auth_required",
+        status: 'auth_required',
         setupUrl: error.authorizationUrl,
         errorMessage: error.message,
       });

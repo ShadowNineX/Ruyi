@@ -1,11 +1,11 @@
-import { z } from "zod";
-import { env } from "../env";
+import { z } from 'zod';
+import { env } from '../env';
 
-const OPENAI_COSTS_ENDPOINT = "https://api.openai.com/v1/organization/costs";
+const OPENAI_COSTS_ENDPOINT = 'https://api.openai.com/v1/organization/costs';
 const COSTS_PAGE_LIMIT = 31;
 const MAX_COSTS_PAGES = 6;
-export const OPENAI_BILLING_OVERVIEW_URL =
-  "https://platform.openai.com/settings/organization/billing/overview";
+export const OPENAI_BILLING_OVERVIEW_URL
+  = 'https://platform.openai.com/settings/organization/billing/overview';
 
 export interface OpenAICostTotal {
   currency: string;
@@ -26,7 +26,7 @@ export class OpenAIBillingError extends Error {
 
   constructor(message: string, status?: number) {
     super(message);
-    this.name = "OpenAIBillingError";
+    this.name = 'OpenAIBillingError';
     this.status = status;
   }
 }
@@ -58,7 +58,7 @@ interface CostsPage {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function asArray(value: unknown): unknown[] {
@@ -66,39 +66,39 @@ function asArray(value: unknown): unknown[] {
 }
 
 function asString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
+  return typeof value === 'string' ? value : null;
 }
 
 function asBoolean(value: unknown): boolean {
-  return typeof value === "boolean" ? value : false;
+  return typeof value === 'boolean' ? value : false;
 }
 
 function parseAmountValue(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value !== "string") return null;
+  if (typeof value === 'number' && Number.isFinite(value)) { return value; }
+  if (typeof value !== 'string') { return null; }
 
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
 function parseCostResult(result: unknown): OpenAICostTotal | null {
-  if (!isRecord(result) || !isRecord(result.amount)) return null;
+  if (!isRecord(result) || !isRecord(result.amount)) { return null; }
 
   const value = parseAmountValue(result.amount.value);
   const currency = asString(result.amount.currency)?.trim().toUpperCase();
-  if (value === null || !currency) return null;
+  if (value === null || !currency) { return null; }
 
   return { currency, value };
 }
 
 function parseCostsPage(body: unknown): CostsPage {
   if (!isRecord(body)) {
-    throw new OpenAIBillingError("OpenAI billing response was not an object");
+    throw new OpenAIBillingError('OpenAI billing response was not an object');
   }
 
   const buckets = asArray(body.data);
   if (!Array.isArray(body.data)) {
-    throw new OpenAIBillingError("OpenAI billing response did not include a data array");
+    throw new OpenAIBillingError('OpenAI billing response did not include a data array');
   }
 
   return {
@@ -148,15 +148,15 @@ function collectTotals(buckets: unknown[]): CostCollection {
 async function fetchCostsPage(url: URL): Promise<unknown> {
   const response = await fetch(url, {
     headers: {
-      Authorization: `Bearer ${env.OPENAI_ADMIN_KEY}`,
-      "Content-Type": "application/json",
+      'Authorization': `Bearer ${env.OPENAI_ADMIN_KEY}`,
+      'Content-Type': 'application/json',
     },
   });
 
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     throw new OpenAIBillingError(
-      getErrorMessage(body) ?? "OpenAI billing request failed",
+      getErrorMessage(body) ?? 'OpenAI billing request failed',
       response.status,
     );
   }
@@ -166,7 +166,7 @@ async function fetchCostsPage(url: URL): Promise<unknown> {
 
 function getErrorMessage(body: unknown): string | null {
   const parsed = openAIErrorBodySchema.safeParse(body);
-  if (!parsed.success) return null;
+  if (!parsed.success) { return null; }
   return parsed.data.message ?? parsed.data.error?.message ?? null;
 }
 
@@ -180,23 +180,23 @@ export async function fetchOpenAIMonthToDateCosts(
   now = new Date(),
 ): Promise<OpenAICostSummary> {
   if (!env.OPENAI_ADMIN_KEY) {
-    throw new OpenAIBillingError("OPENAI_ADMIN_KEY is not configured");
+    throw new OpenAIBillingError('OPENAI_ADMIN_KEY is not configured');
   }
 
   const startTime = getMonthStartUnixSeconds(now);
   const endTime = Math.floor(now.getTime() / 1000);
   const url = new URL(OPENAI_COSTS_ENDPOINT);
-  url.searchParams.set("start_time", String(startTime));
-  url.searchParams.set("end_time", String(endTime));
-  url.searchParams.set("bucket_width", "1d");
-  url.searchParams.set("limit", String(COSTS_PAGE_LIMIT));
+  url.searchParams.set('start_time', String(startTime));
+  url.searchParams.set('end_time', String(endTime));
+  url.searchParams.set('bucket_width', '1d');
+  url.searchParams.set('limit', String(COSTS_PAGE_LIMIT));
 
   const buckets: unknown[] = [];
   let nextPage: string | null = null;
   let pageCount = 0;
 
   do {
-    if (nextPage) url.searchParams.set("page", nextPage);
+    if (nextPage) { url.searchParams.set('page', nextPage); }
     const page = parseCostsPage(await fetchCostsPage(url));
     buckets.push(...page.buckets);
     nextPage = page.hasMore ? page.nextPage : null;

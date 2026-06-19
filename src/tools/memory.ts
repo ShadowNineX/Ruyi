@@ -1,37 +1,39 @@
-import { tool } from "@openai/agents";
-import { z } from "zod";
+import type { Guild, TextBasedChannel, TextChannel } from 'discord.js';
+import type { SteamCommentSearchMatch } from '../steam/comment-search';
+import type { UserMemoryFilter } from '../utils/memory-scope';
+import type { MessageMatchType, RankedMessageMatch, SearchableMessage } from '../utils/message-search';
+import { tool } from '@openai/agents';
 import {
   ChannelType,
+
   PermissionFlagsBits,
-  type Guild,
-  type TextBasedChannel,
-  type TextChannel,
-} from "discord.js";
-import { toolLogger } from "../logger";
-import { DiscordConversation, Memory } from "../db/models";
-import { toolContextManager, formatError } from "../utils/types";
-import { requesterHasChannelPermission } from "../discord/utils/discord-permissions";
+
+} from 'discord.js';
+import { z } from 'zod';
+import { USER_MEMORY_CAP } from '../constants';
+import { DiscordConversation, Memory } from '../db/models';
+import { requesterHasChannelPermission } from '../discord/utils/discord-permissions';
+import { toolLogger } from '../logger';
 import {
-  buildUserMemoryFilter,
-  formatUserMemoryContext,
-  type UserMemoryFilter,
-} from "../utils/memory-scope";
+  searchSteamProfileComments,
+
+} from '../steam/comment-search';
 import {
   sanitizeMemoryKey,
   truncateMemoryValue,
-} from "../utils/memory-normalization";
-import { USER_MEMORY_CAP } from "../constants";
+} from '../utils/memory-normalization';
 import {
+  buildUserMemoryFilter,
+  formatUserMemoryContext,
+
+} from '../utils/memory-scope';
+import {
+
   rankMessageMatches,
+
   summarizeMessageSearchMatches,
-  type MessageMatchType,
-  type RankedMessageMatch,
-  type SearchableMessage,
-} from "../utils/message-search";
-import {
-  searchSteamProfileComments,
-  type SteamCommentSearchMatch,
-} from "../steam/comment-search";
+} from '../utils/message-search';
+import { formatError, toolContextManager } from '../utils/types';
 
 type MemorySearchFilter = Record<string, unknown>;
 
@@ -41,7 +43,7 @@ interface MemoryUserIdentity {
   personId: string;
   username: string;
   canWriteMemory: boolean;
-  surface: "discord" | "steam";
+  surface: 'discord' | 'steam';
 }
 
 interface MemoryOwnerContext {
@@ -67,7 +69,7 @@ function getContextUserIdentity(): MemoryUserIdentity | null {
 }
 
 function normalizeMemoryKey(key: string | null): string | null {
-  const sanitized = sanitizeMemoryKey(key ?? "");
+  const sanitized = sanitizeMemoryKey(key ?? '');
   return sanitized || null;
 }
 
@@ -79,10 +81,10 @@ function resolveMemoryOwner(
   user: MemoryUserIdentity | null,
 ): MemoryOwnerContext | string {
   if (!user) {
-    return "User context required for memories";
+    return 'User context required for memories';
   }
   if (!user.canWriteMemory) {
-    return "Memory writes are disabled for this unlinked Steam commenter";
+    return 'Memory writes are disabled for this unlinked Steam commenter';
   }
 
   return {
@@ -99,7 +101,7 @@ function buildMemoryKeyFilter(
   user: MemoryUserIdentity | null,
 ): ({ key: string } & MemoryOwnerFilter) | string {
   const owner = resolveMemoryOwner(user);
-  return typeof owner === "string" ? owner : { key, ...owner.filter };
+  return typeof owner === 'string' ? owner : { key, ...owner.filter };
 }
 
 async function evictMemoryIfNeeded(
@@ -130,15 +132,15 @@ async function handleSaveMemory(
   pinned: boolean,
 ) {
   const normalizedKey = normalizeMemoryKey(key);
-  const normalizedValue = value?.trim() ?? "";
+  const normalizedValue = value?.trim() ?? '';
 
   if (!normalizedKey || !normalizedValue) {
-    return { error: "Key and value are required for save" };
+    return { error: 'Key and value are required for save' };
   }
 
   const truncatedValue = truncateMemoryValue(normalizedValue);
   const owner = resolveMemoryOwner(user);
-  if (typeof owner === "string") {
+  if (typeof owner === 'string') {
     return { error: owner };
   }
   const filter = { key: normalizedKey, ...owner.filter };
@@ -158,14 +160,14 @@ async function handleSaveMemory(
       username: owner.username,
       createdBy: owner.createdBy,
       pinned,
-      source: "user",
+      source: 'user',
     },
     { upsert: true },
   );
 
   return {
     success: true,
-    message: `${pinned ? "Pinned" : "Remembered"} "${normalizedKey}" for ${owner.label}`,
+    message: `${pinned ? 'Pinned' : 'Remembered'} "${normalizedKey}" for ${owner.label}`,
   };
 }
 
@@ -175,9 +177,9 @@ async function handlePinMemory(
   pinned: boolean,
 ) {
   const normalizedKey = normalizeMemoryKey(key);
-  if (!normalizedKey) return { error: "Key is required" };
+  if (!normalizedKey) { return { error: 'Key is required' }; }
   const filter = buildMemoryKeyFilter(normalizedKey, user);
-  if (typeof filter === "string") {
+  if (typeof filter === 'string') {
     return { error: filter };
   }
   const result = await Memory.updateOne(filter, { $set: { pinned } });
@@ -189,7 +191,7 @@ async function handlePinMemory(
   }
   return {
     success: true,
-    message: `${pinned ? "Pinned" : "Unpinned"} "${normalizedKey}"`,
+    message: `${pinned ? 'Pinned' : 'Unpinned'} "${normalizedKey}"`,
   };
 }
 
@@ -199,10 +201,10 @@ async function handleGetMemory(
 ) {
   const normalizedKey = normalizeMemoryKey(key);
   if (!normalizedKey) {
-    return { error: "Key is required for get" };
+    return { error: 'Key is required for get' };
   }
   const query = buildMemoryKeyFilter(normalizedKey, user);
-  if (typeof query === "string") {
+  if (typeof query === 'string') {
     return { error: query };
   }
   const item = await Memory.findOne(query);
@@ -226,10 +228,10 @@ async function handleDeleteMemory(
 ) {
   const normalizedKey = normalizeMemoryKey(key);
   if (!normalizedKey) {
-    return { error: "Key is required for delete" };
+    return { error: 'Key is required for delete' };
   }
   const query = buildMemoryKeyFilter(normalizedKey, user);
-  if (typeof query === "string") {
+  if (typeof query === 'string') {
     return { error: query };
   }
   const result = await Memory.deleteOne(query);
@@ -244,7 +246,7 @@ async function handleListMemories(
   user: MemoryUserIdentity | null,
 ) {
   const owner = resolveMemoryOwner(user);
-  if (typeof owner === "string") {
+  if (typeof owner === 'string') {
     return { error: owner };
   }
 
@@ -274,28 +276,28 @@ async function handleListMemories(
 }
 
 export const memoryStoreTool = tool({
-  name: "memory_store",
+  name: 'memory_store',
   description:
-    "Store, retrieve, pin, or delete memories. PINNED memories are always loaded into context (treat them as the user's persona/core facts). Use 'pin' to mark an existing memory as pinned, 'unpin' to remove that flag. The runtime user identity is automatically detected.",
+    'Store, retrieve, pin, or delete memories. PINNED memories are always loaded into context (treat them as the user\'s persona/core facts). Use \'pin\' to mark an existing memory as pinned, \'unpin\' to remove that flag. The runtime user identity is automatically detected.',
   parameters: z.object({
     action: z
-      .enum(["save", "get", "delete", "list", "pin", "unpin"])
-      .describe("The action to perform."),
+      .enum(['save', 'get', 'delete', 'list', 'pin', 'unpin'])
+      .describe('The action to perform.'),
     key: z
       .string()
       .nullable()
       .describe(
-        "A short identifier/name for the memory (e.g. 'name', 'lastfm_username').",
+        'A short identifier/name for the memory (e.g. \'name\', \'lastfm_username\').',
       ),
     value: z
       .string()
       .nullable()
-      .describe("The information to remember (e.g. 'Alexander', 'shadow123')."),
+      .describe('The information to remember (e.g. \'Alexander\', \'shadow123\').'),
     pinned: z
       .boolean()
       .nullable()
       .describe(
-        "For 'save': whether to pin the memory so it always appears in context. Defaults to false.",
+        'For \'save\': whether to pin the memory so it always appears in context. Defaults to false.',
       ),
   }),
   execute: async ({ action, key, value, pinned }) => {
@@ -309,27 +311,27 @@ export const memoryStoreTool = tool({
         username: user?.username,
         pinned,
       },
-      "Memory store operation",
+      'Memory store operation',
     );
 
     try {
       switch (action) {
-        case "save":
+        case 'save':
           return await handleSaveMemory(
             key,
             value,
             user,
             pinned ?? false,
           );
-        case "get":
+        case 'get':
           return await handleGetMemory(key, user);
-        case "delete":
+        case 'delete':
           return await handleDeleteMemory(key, user);
-        case "list":
+        case 'list':
           return await handleListMemories(user);
-        case "pin":
+        case 'pin':
           return await handlePinMemory(key, user, true);
-        case "unpin":
+        case 'unpin':
           return await handlePinMemory(key, user, false);
         default:
           return { error: `Unknown action: ${action}` };
@@ -338,7 +340,7 @@ export const memoryStoreTool = tool({
       const errorMessage = formatError(error);
       toolLogger.error(
         { error: errorMessage },
-        "Memory store operation failed",
+        'Memory store operation failed',
       );
       return { error: errorMessage };
     }
@@ -362,10 +364,10 @@ function collectMemoryLines(
   lines.push(header);
   length += header.length;
   for (const m of memories) {
-    const marker = m.pinned ? "[PINNED] " : "";
+    const marker = m.pinned ? '[PINNED] ' : '';
     const line = `• ${marker}${m.key}: ${m.value}`;
     if (length + line.length > maxLength) {
-      lines.push("... (truncated)");
+      lines.push('... (truncated)');
       break;
     }
     lines.push(line);
@@ -376,21 +378,21 @@ function collectMemoryLines(
 }
 
 export const memoryRecallTool = tool({
-  name: "memory_recall",
+  name: 'memory_recall',
   description:
-    "Recall a broad list of stored memories for the current runtime user. Use proactively when answering user-specific questions where older or non-loaded memories may matter, such as preferences, identity, accounts, relationships, hobbies, tailored advice, or 'what do you know/remember about me?'. Runtime identity is automatically detected.",
+    'Recall a broad list of stored memories for the current runtime user. Use proactively when answering user-specific questions where older or non-loaded memories may matter, such as preferences, identity, accounts, relationships, hobbies, tailored advice, or \'what do you know/remember about me?\'. Runtime identity is automatically detected.',
   parameters: z.object({}),
   execute: async () => {
     const user = getContextUserIdentity();
     toolLogger.info(
       { personId: user?.personId, surface: user?.surface, username: user?.username },
-      "Recalling memories",
+      'Recalling memories',
     );
 
     const maxTotalLength = 2000;
     const allLines: string[] = [];
     const owner = resolveMemoryOwner(user);
-    if (typeof owner === "string") {
+    if (typeof owner === 'string') {
       return { error: owner };
     }
 
@@ -407,10 +409,10 @@ export const memoryRecallTool = tool({
     allLines.push(...lines);
 
     if (allLines.length === 0) {
-      return { hasMemories: false, message: "No memories stored yet." };
+      return { hasMemories: false, message: 'No memories stored yet.' };
     }
 
-    const result = { hasMemories: true, summary: allLines.join("\n") };
+    const result = { hasMemories: true, summary: allLines.join('\n') };
     toolLogger.info(
       {
         personId: user?.personId,
@@ -418,32 +420,32 @@ export const memoryRecallTool = tool({
         username: user?.username,
         lineCount: allLines.length,
       },
-      "Memory recall complete",
+      'Memory recall complete',
     );
     return result;
   },
 });
 
 export const searchMemoryTool = tool({
-  name: "search_memory",
+  name: 'search_memory',
   description:
-    "Search stored memories for the current runtime user by keyword. Use proactively when the user asks about a specific remembered topic, person, place, account, preference, date, project, character, or relationship and the loaded context does not already contain the exact fact.",
+    'Search stored memories for the current runtime user by keyword. Use proactively when the user asks about a specific remembered topic, person, place, account, preference, date, project, character, or relationship and the loaded context does not already contain the exact fact.',
   parameters: z.object({
     query: z
       .string()
-      .describe("Search query to find in memory keys and values."),
+      .describe('Search query to find in memory keys and values.'),
   }),
   execute: async ({ query }) => {
     const user = getContextUserIdentity();
     toolLogger.info(
       { query, personId: user?.personId, surface: user?.surface, username: user?.username },
-      "Searching memories",
+      'Searching memories',
     );
 
     try {
-      const regex = new RegExp(escapeRegExp(query), "i");
+      const regex = new RegExp(escapeRegExp(query), 'i');
       const filter = buildMemorySearchFilter(regex, user);
-      if (typeof filter === "string") {
+      if (typeof filter === 'string') {
         return { error: filter };
       }
 
@@ -458,7 +460,7 @@ export const searchMemoryTool = tool({
         };
       }
 
-      const memories = results.map((m) => ({
+      const memories = results.map(m => ({
         key: m.key,
         value: m.value,
         createdBy: m.createdBy,
@@ -467,14 +469,14 @@ export const searchMemoryTool = tool({
       return { found: true, count: memories.length, memories };
     } catch (error) {
       const errorMessage = formatError(error);
-      toolLogger.error({ error: errorMessage }, "Memory search failed");
+      toolLogger.error({ error: errorMessage }, 'Memory search failed');
       return { error: errorMessage };
     }
   },
 });
 
 interface ConversationMatch {
-  source: "discord" | "steam";
+  source: 'discord' | 'steam';
   id: string;
   channelId?: string;
   profileId?: string;
@@ -529,14 +531,14 @@ function authorMatchesFilter(
   authorFilter: string | null,
 ): boolean {
   return (
-    !authorFilter ||
-    author.toLowerCase().includes(authorFilter.toLowerCase().trim())
+    !authorFilter
+    || author.toLowerCase().includes(authorFilter.toLowerCase().trim())
   );
 }
 
 function truncateContent(content: string, maxLen = 200): string {
   return content.length > maxLen
-    ? content.slice(0, maxLen - 3) + "..."
+    ? `${content.slice(0, maxLen - 3)}...`
     : content;
 }
 
@@ -554,7 +556,7 @@ function buildConversationContextMessage(
 function buildConversationContextWindow(
   messages: ConversationContextMessage[],
   index: number,
-): Pick<ConversationSearchDocument, "contextBefore" | "contextAfter"> {
+): Pick<ConversationSearchDocument, 'contextBefore' | 'contextAfter'> {
   return {
     contextBefore: messages
       .slice(Math.max(0, index - 2), index)
@@ -583,8 +585,8 @@ function buildConversationSearchDocuments(
   for (const conversation of conversations) {
     conversation.messages.forEach((message, index) => {
       if (
-        message.isBot ||
-        !authorMatchesFilter(message.author, authorFilter)
+        message.isBot
+        || !authorMatchesFilter(message.author, authorFilter)
       ) {
         return;
       }
@@ -608,7 +610,7 @@ function buildConversationMatch(
   match: RankedMessageMatch<ConversationSearchDocument>,
 ): ConversationMatch {
   return {
-    source: "discord",
+    source: 'discord',
     id: match.item.id,
     channelId: match.item.channelId,
     author: match.item.author,
@@ -627,7 +629,7 @@ function buildConversationMatch(
 }
 
 function buildSteamConversationContextMessage(
-  match: SteamCommentSearchMatch["contextBefore"][number],
+  match: SteamCommentSearchMatch['contextBefore'][number],
 ): ConversationContextMessage {
   return {
     author: match.author,
@@ -640,7 +642,7 @@ function buildSteamConversationMatch(
   match: SteamCommentSearchMatch,
 ): ConversationMatch {
   return {
-    source: "steam",
+    source: 'steam',
     id: match.id,
     profileId: match.profileId,
     author: match.author,
@@ -693,14 +695,14 @@ function resolveCurrentConversationChannel(
   requestedChannelId: string | null,
   channel: TextBasedChannel | null,
 ): string[] | string | null {
-  if (requestedChannelId && requestedChannelId !== channel?.id) return null;
+  if (requestedChannelId && requestedChannelId !== channel?.id) { return null; }
   if (!channel) {
-    return "Conversation search needs active Discord channel context";
+    return 'Conversation search needs active Discord channel context';
   }
 
   const permissionError = getConversationSearchPermissionError(
     channel,
-    "this channel",
+    'this channel',
   );
   return permissionError ?? [channel.id];
 }
@@ -710,22 +712,22 @@ async function resolveGuildConversationChannel(
   guild: Guild | null,
 ): Promise<string[] | string> {
   if (!guild) {
-    return "Cannot search another channel outside of a server";
+    return 'Cannot search another channel outside of a server';
   }
 
   try {
-    const guildChannel =
-      guild.channels.cache.get(requestedChannelId) ??
-      (await guild.channels.fetch(requestedChannelId));
+    const guildChannel
+      = guild.channels.cache.get(requestedChannelId)
+        ?? (await guild.channels.fetch(requestedChannelId));
     if (guildChannel?.guildId !== guild.id) {
-      return "Requested channel is not in the current server";
+      return 'Requested channel is not in the current server';
     }
     if (!guildChannel.isTextBased()) {
-      return "Requested channel does not have message history";
+      return 'Requested channel does not have message history';
     }
 
-    const channelLabel =
-      "name" in guildChannel ? `#${guildChannel.name}` : "that channel";
+    const channelLabel
+      = 'name' in guildChannel ? `#${guildChannel.name}` : 'that channel';
     const permissionError = getConversationSearchPermissionError(
       guildChannel,
       channelLabel,
@@ -738,9 +740,9 @@ async function resolveGuildConversationChannel(
         guildId: guild.id,
         error: error instanceof Error ? error.message : String(error),
       },
-      "Could not verify conversation search channel",
+      'Could not verify conversation search channel',
     );
-    return "Could not verify that channel belongs to the current server";
+    return 'Could not verify that channel belongs to the current server';
   }
 }
 
@@ -748,7 +750,7 @@ async function resolveAllGuildConversationChannels(
   guild: Guild | null,
 ): Promise<string[] | string> {
   if (!guild) {
-    return "Cannot search all archived channels outside of a server";
+    return 'Cannot search all archived channels outside of a server';
   }
 
   const channels = await guild.channels.fetch();
@@ -758,14 +760,14 @@ async function resolveAllGuildConversationChannels(
         channel?.type === ChannelType.GuildText,
     )
     .filter(
-      (channel) =>
+      channel =>
         getConversationSearchPermissionError(channel, channel.name) === null,
     )
-    .map((channel) => channel.id);
+    .map(channel => channel.id);
 
   return readableChannels.length > 0
     ? readableChannels
-    : "No readable server text channels were available for archived search.";
+    : 'No readable server text channels were available for archived search.';
 }
 
 async function resolveConversationSearchChannelIds(
@@ -779,8 +781,8 @@ async function resolveConversationSearchChannelIds(
       channel,
     );
     return (
-      currentChannel ??
-      resolveGuildConversationChannel(requestedChannelId, guild)
+      currentChannel
+      ?? resolveGuildConversationChannel(requestedChannelId, guild)
     );
   }
 
@@ -792,8 +794,8 @@ async function resolveConversationSearchChannelIds(
     null,
     channel,
   );
-  if (currentChannel) return currentChannel;
-  return "Conversation search needs active Discord channel context";
+  if (currentChannel) { return currentChannel; }
+  return 'Conversation search needs active Discord channel context';
 }
 
 function describeDiscordConversationSearchScope(
@@ -801,12 +803,12 @@ function describeDiscordConversationSearchScope(
   searchAllChannels: boolean | null,
 ): string {
   if (searchAllChannels) {
-    return "readable archived text channels in the current server";
+    return 'readable archived text channels in the current server';
   }
   if (channelId) {
-    return "verified archived channel in the current server";
+    return 'verified archived channel in the current server';
   }
-  return "current archived channel";
+  return 'current archived channel';
 }
 
 async function searchDiscordConversation(
@@ -820,7 +822,7 @@ async function searchDiscordConversation(
     channelId,
     searchAllChannels,
   );
-  if (typeof channelIds === "string") {
+  if (typeof channelIds === 'string') {
     return { error: channelIds };
   }
 
@@ -842,9 +844,9 @@ async function searchDiscordConversation(
         searched_channel_count: channelIds.length,
         scanned_message_count: search.scanned,
         result_limit: maxLimit,
-        source: "discord",
+        source: 'discord',
         limitation:
-          "Archived Discord search only covers messages Ruyi stored for readable scoped channels. Deleted or never-archived older Discord messages may be unavailable.",
+          'Archived Discord search only covers messages Ruyi stored for readable scoped channels. Deleted or never-archived older Discord messages may be unavailable.',
       },
     };
   }
@@ -861,13 +863,13 @@ async function searchDiscordConversation(
       searched_channel_count: channelIds.length,
       scanned_message_count: search.scanned,
       result_limit: maxLimit,
-      source: "discord",
+      source: 'discord',
       scope: describeDiscordConversationSearchScope(
         channelId,
         searchAllChannels,
       ),
       limitation:
-        "Archived Discord search only covers messages Ruyi stored for readable scoped channels. Deleted or never-archived older Discord messages may be unavailable.",
+        'Archived Discord search only covers messages Ruyi stored for readable scoped channels. Deleted or never-archived older Discord messages may be unavailable.',
     },
   };
 }
@@ -880,7 +882,7 @@ async function searchSteamConversation(
   const profileId = toolContextManager.get().steam?.profileId;
   if (!profileId) {
     return {
-      error: "Steam conversation search needs active Steam profile context",
+      error: 'Steam conversation search needs active Steam profile context',
     };
   }
 
@@ -899,9 +901,9 @@ async function searchSteamConversation(
       search_summary: {
         searched_comment_count: search.searchedCommentCount,
         result_limit: maxLimit,
-        source: "steam",
+        source: 'steam',
         limitation:
-          "Steam conversation search only covers recent comments fetched from the active Steam profile. Deleted, private, or older comments may be unavailable.",
+          'Steam conversation search only covers recent comments fetched from the active Steam profile. Deleted, private, or older comments may be unavailable.',
       },
     };
   }
@@ -917,39 +919,39 @@ async function searchSteamConversation(
       partial_match_count: search.summary.partialMatchCount,
       searched_comment_count: search.searchedCommentCount,
       result_limit: maxLimit,
-      source: "steam",
-      scope: "recent profile comments on the active Steam profile",
+      source: 'steam',
+      scope: 'recent profile comments on the active Steam profile',
       limitation:
-        "Steam conversation search only covers recent comments fetched from the active Steam profile. Deleted, private, or older comments may be unavailable.",
+        'Steam conversation search only covers recent comments fetched from the active Steam profile. Deleted, private, or older comments may be unavailable.',
     },
   };
 }
 
 export const searchConversationTool = tool({
-  name: "search_conversation",
+  name: 'search_conversation',
   description:
-    "Surface-aware fuzzy search for the current conversation. In Discord, searches stored Discord history for the current or verified server channel. In Steam, searches recent comments on the active Steam profile. The source is chosen by code and never crosses surfaces.",
+    'Surface-aware fuzzy search for the current conversation. In Discord, searches stored Discord history for the current or verified server channel. In Steam, searches recent comments on the active Steam profile. The source is chosen by code and never crosses surfaces.',
   parameters: z.object({
     query: z
       .string()
-      .describe("Exact phrase or fuzzy query to find in conversation messages."),
-    author: z.string().nullable().describe("Filter by message author."),
+      .describe('Exact phrase or fuzzy query to find in conversation messages.'),
+    author: z.string().nullable().describe('Filter by message author.'),
     channel_id: z
       .string()
       .nullable()
       .describe(
-        "Discord-only optional specific channel ID. If omitted, Discord searches the current channel only. Ignored for Steam.",
+        'Discord-only optional specific channel ID. If omitted, Discord searches the current channel only. Ignored for Steam.',
       ),
     search_all_channels: z
       .boolean()
       .nullable()
       .describe(
-        "Discord-only. If true, searches archived history for readable text channels in the current server. Not available in DMs. Ignored for Steam.",
+        'Discord-only. If true, searches archived history for readable text channels in the current server. Not available in DMs. Ignored for Steam.',
       ),
     limit: z
       .number()
       .nullable()
-      .describe("Maximum results to return (default 20, max 50)."),
+      .describe('Maximum results to return (default 20, max 50).'),
   }),
   execute: async ({ query, author, channel_id, search_all_channels, limit }) => {
     toolLogger.info(
@@ -960,13 +962,13 @@ export const searchConversationTool = tool({
         search_all_channels,
         limit,
       },
-      "Searching conversations",
+      'Searching conversations',
     );
 
     try {
       const maxLimit = Math.min(Math.max(Math.round(limit ?? 20), 1), 50);
       const ctx = toolContextManager.get();
-      if (ctx.surface === "steam") {
+      if (ctx.surface === 'steam') {
         return searchSteamConversation(query, author, maxLimit);
       }
 
@@ -979,7 +981,7 @@ export const searchConversationTool = tool({
       );
     } catch (error) {
       const errorMessage = formatError(error);
-      toolLogger.error({ error: errorMessage }, "Conversation search failed");
+      toolLogger.error({ error: errorMessage }, 'Conversation search failed');
       return { error: errorMessage };
     }
   },
@@ -994,7 +996,7 @@ function buildMemorySearchFilter(
   };
 
   const owner = resolveMemoryOwner(user);
-  return typeof owner === "string"
+  return typeof owner === 'string'
     ? owner
     : { $and: [textFilter, owner.filter] };
 }

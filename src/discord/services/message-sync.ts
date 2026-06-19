@@ -1,47 +1,48 @@
 import type {
   Client,
-  TextChannel,
   NewsChannel,
+  TextChannel,
   ThreadChannel,
-} from "discord.js";
+} from 'discord.js';
+import type { IDiscordConversation } from '../../db/models';
+import { sessionManager } from '../../ai/session';
 import {
   DiscordAgentSession,
   DiscordConversation,
-  type IDiscordConversation,
-} from "../../db/models";
-import { sessionManager } from "../../ai/session";
-import { syncLogger } from "../../logger";
+
+} from '../../db/models';
+import { syncLogger } from '../../logger';
 import {
   getMessageSyncInterval,
   isMessageSyncRunning,
   setMessageSyncInterval,
   setMessageSyncRunning,
-} from "../../stores";
+} from '../../stores';
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const BATCH_SIZE = 10;
 const BATCH_DELAY_MS = 1000;
 
 type MessageableChannel = TextChannel | NewsChannel | ThreadChannel;
-type MessagePresence = "exists" | "deleted" | "unknown";
-type SyncResult = { channelId: string; deleted: number; skipped: number };
-type SyncConversation = Pick<IDiscordConversation, "channelId" | "messages">;
-type SyncAgentSession = {
+type MessagePresence = 'exists' | 'deleted' | 'unknown';
+interface SyncResult { channelId: string; deleted: number; skipped: number }
+type SyncConversation = Pick<IDiscordConversation, 'channelId' | 'messages'>;
+interface SyncAgentSession {
   channelId: string;
   userMessageIds: string[];
   assistantMessageIds: string[];
-};
-type ChannelResolutionResult =
-  | { ok: true; channel: MessageableChannel }
-  | { ok: false; result: SyncResult };
+}
+type ChannelResolutionResult
+  = | { ok: true; channel: MessageableChannel }
+    | { ok: false; result: SyncResult };
 
 function isMessageableChannel(channel: unknown): channel is MessageableChannel {
   return (
-    channel !== null &&
-    typeof channel === "object" &&
-    "messages" in channel &&
-    typeof (channel as { messages: { fetch: unknown } }).messages?.fetch ===
-      "function"
+    channel !== null
+    && typeof channel === 'object'
+    && 'messages' in channel
+    && typeof (channel as { messages: { fetch: unknown } }).messages?.fetch
+    === 'function'
   );
 }
 
@@ -51,10 +52,10 @@ async function messageExists(
 ): Promise<MessagePresence> {
   try {
     await channel.messages.fetch(messageId);
-    return "exists";
+    return 'exists';
   } catch (error) {
     const code = (error as { code?: number | string }).code;
-    if (code === 10008) return "deleted";
+    if (code === 10008) { return 'deleted'; }
 
     syncLogger.debug(
       {
@@ -63,9 +64,9 @@ async function messageExists(
         channelId: channel.id,
         messageId,
       },
-      "Could not verify message during sync",
+      'Could not verify message during sync',
     );
-    return "unknown";
+    return 'unknown';
   }
 }
 
@@ -78,9 +79,9 @@ async function findDeletedMessages(
 
   for (const messageId of messageIds) {
     const presence = await messageExists(channel, messageId);
-    if (presence === "deleted") {
+    if (presence === 'deleted') {
       deleted.push(messageId);
-    } else if (presence === "unknown") {
+    } else if (presence === 'unknown') {
       skipped += 1;
     }
   }
@@ -89,11 +90,11 @@ async function findDeletedMessages(
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function normalizeMessageIds(messageIds: string[]): string[] {
-  return [...new Set(messageIds.map((id) => id.trim()).filter(Boolean))];
+  return [...new Set(messageIds.map(id => id.trim()).filter(Boolean))];
 }
 
 async function fetchMessageableChannel(
@@ -105,7 +106,7 @@ async function fetchMessageableChannel(
   try {
     const fetchedChannel = await client.channels.fetch(channelId);
     if (!isMessageableChannel(fetchedChannel)) {
-      syncLogger.debug({ channelId }, "Channel is not messageable, skipping");
+      syncLogger.debug({ channelId }, 'Channel is not messageable, skipping');
       return {
         ok: false,
         result: { channelId, deleted: 0, skipped: skippedMessageCount },
@@ -162,8 +163,8 @@ async function removeDeletedMessageReferences(
     { $pull: { messages: { messageId: { $in: normalizedIds } } } },
   );
   const conversationModified = result.modifiedCount > 0;
-  const sessionInvalidated =
-    await sessionManager.invalidateIfTrackedMessagesDeleted(
+  const sessionInvalidated
+    = await sessionManager.invalidateIfTrackedMessagesDeleted(
       channelId,
       normalizedIds,
     );
@@ -181,7 +182,7 @@ async function syncConversation(
 ): Promise<SyncResult> {
   const channelId = conversation.channelId;
   const messageIds = normalizeMessageIds(
-    conversation.messages.map((message) => message.messageId),
+    conversation.messages.map(message => message.messageId),
   );
 
   if (messageIds.length === 0) {
@@ -193,14 +194,14 @@ async function syncConversation(
       channelId,
       messageCount: messageIds.length,
     },
-    "Syncing channel",
+    'Syncing channel',
   );
 
   const channelResolution = await fetchMessageableChannel(
     client,
     channelId,
     messageIds.length,
-    "Could not fetch channel, skipping",
+    'Could not fetch channel, skipping',
   );
   if (!channelResolution.ok) {
     return channelResolution.result;
@@ -213,12 +214,12 @@ async function syncConversation(
   if (deletedIds.length > 0) {
     syncLogger.info(
       { channelId, deletedIds },
-      "Removing deleted messages from DB",
+      'Removing deleted messages from DB',
     );
     await removeDeletedMessageReferences(channelId, deletedIds);
     syncLogger.info(
       { channelId },
-      "Invalidated agent session after archived Discord messages were deleted",
+      'Invalidated agent session after archived Discord messages were deleted',
     );
   }
 
@@ -246,7 +247,7 @@ async function syncAgentSessionMessages(
     client,
     channelId,
     messageIds.length,
-    "Could not fetch channel for agent session message sync, skipping",
+    'Could not fetch channel for agent session message sync, skipping',
   );
   if (!channelResolution.ok) {
     return channelResolution.result;
@@ -269,23 +270,23 @@ async function syncAgentSessionMessages(
 class MessageSyncService {
   private async runSync(client: Client): Promise<void> {
     if (isMessageSyncRunning()) {
-      syncLogger.warn("Message sync already in progress; skipping sweep");
+      syncLogger.warn('Message sync already in progress; skipping sweep');
       return;
     }
 
     setMessageSyncRunning(true);
     const startTime = Date.now();
-    syncLogger.info("Starting message sync sweep");
+    syncLogger.info('Starting message sync sweep');
 
     try {
       const conversations = await DiscordConversation.find(
         {},
-        { channelId: 1, "messages.messageId": 1 },
+        { 'channelId': 1, 'messages.messageId': 1 },
       ).lean<SyncConversation[]>();
       const agentSessions = await DiscordAgentSession.find(
         {
           isActive: true,
-          provider: "openai-agents",
+          provider: 'openai-agents',
           $or: [
             { assistantMessageIds: { $exists: true, $ne: [] } },
             { userMessageIds: { $exists: true, $ne: [] } },
@@ -327,10 +328,10 @@ class MessageSyncService {
           skipped: totalSkipped,
           elapsed: `${elapsed}s`,
         },
-        "Message sync sweep completed",
+        'Message sync sweep completed',
       );
     } catch (error) {
-      syncLogger.error({ error }, "Message sync sweep failed");
+      syncLogger.error({ error }, 'Message sync sweep failed');
     } finally {
       setMessageSyncRunning(false);
     }
@@ -338,13 +339,13 @@ class MessageSyncService {
 
   start(client: Client): void {
     if (getMessageSyncInterval()) {
-      syncLogger.warn("Message sync already running");
+      syncLogger.warn('Message sync already running');
       return;
     }
 
     syncLogger.info(
       { intervalMs: SYNC_INTERVAL_MS },
-      "Starting message sync service",
+      'Starting message sync service',
     );
 
     void this.runSync(client);
@@ -360,7 +361,7 @@ class MessageSyncService {
     if (syncInterval) {
       clearInterval(syncInterval);
       setMessageSyncInterval(null);
-      syncLogger.info("Message sync service stopped");
+      syncLogger.info('Message sync service stopped');
     }
   }
 
@@ -374,32 +375,32 @@ class MessageSyncService {
 
   async deleteMessages(channelId: string, messageIds: string[]): Promise<void> {
     const normalizedIds = normalizeMessageIds(messageIds);
-    if (normalizedIds.length === 0) return;
+    if (normalizedIds.length === 0) { return; }
 
     try {
-      const { conversationModified, sessionInvalidated } =
-        await removeDeletedMessageReferences(channelId, normalizedIds);
+      const { conversationModified, sessionInvalidated }
+        = await removeDeletedMessageReferences(channelId, normalizedIds);
 
       if (conversationModified) {
         syncLogger.info(
           { channelId, messageIds: normalizedIds },
-          "Deleted archived Discord message and invalidated agent session",
+          'Deleted archived Discord message and invalidated agent session',
         );
       } else if (sessionInvalidated) {
         syncLogger.info(
           { channelId, messageIds: normalizedIds },
-          "Deleted tracked agent session message and invalidated agent session",
+          'Deleted tracked agent session message and invalidated agent session',
         );
       } else {
         syncLogger.debug(
           { channelId, messageIds: normalizedIds },
-          "Message not found in tracked DB state",
+          'Message not found in tracked DB state',
         );
       }
     } catch (error) {
       syncLogger.error(
         { error, channelId, messageIds: normalizedIds },
-        "Failed to delete message from DB",
+        'Failed to delete message from DB',
       );
     }
   }

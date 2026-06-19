@@ -1,13 +1,13 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import type { Message, TextBasedChannel, Guild } from "discord.js";
-import { toolLogger } from "../logger";
-import type { RuyiUserIdentity } from "./user-identity";
+import type { Guild, Message, TextBasedChannel } from 'discord.js';
+import type { RuyiUserIdentity } from './user-identity';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { toolLogger } from '../logger';
 
-type ReverseImageBudgetedTool =
-  | "reverse_image_search"
-  | "web_search"
-  | "fetch_url"
-  | "describe_image";
+type ReverseImageBudgetedTool
+  = | 'reverse_image_search'
+    | 'web_search'
+    | 'fetch_url'
+    | 'describe_image';
 
 type ToolCallCounts = Partial<Record<ReverseImageBudgetedTool, number>>;
 
@@ -18,7 +18,7 @@ interface ToolTurnBudget {
 }
 
 export interface ToolContext {
-  surface: "discord" | "steam";
+  surface: 'discord' | 'steam';
   identity: RuyiUserIdentity | null;
   message: Message | null;
   channel: TextBasedChannel | null;
@@ -32,13 +32,13 @@ export interface ToolContext {
 }
 
 // Shared result type for message resolution
-type MessageResolutionResult =
-  | { success: true; message: Message }
-  | { success: false; error: string };
+type MessageResolutionResult
+  = | { success: true; message: Message }
+    | { success: false; error: string };
 
-type ToolBudgetDecision =
-  | { allowed: true }
-  | {
+type ToolBudgetDecision
+  = | { allowed: true }
+    | {
       allowed: false;
       tool: ReverseImageBudgetedTool;
       limit: number;
@@ -47,7 +47,7 @@ type ToolBudgetDecision =
     };
 
 const EMPTY_CONTEXT: ToolContext = {
-  surface: "discord",
+  surface: 'discord',
   identity: null,
   message: null,
   channel: null,
@@ -115,12 +115,12 @@ class ToolContextFacade {
   }
 
   consumeToolCall(toolName: string): ToolBudgetDecision {
-    if (!isReverseImageBudgetedTool(toolName)) return { allowed: true };
+    if (!isReverseImageBudgetedTool(toolName)) { return { allowed: true }; }
 
     const budget = this.get().toolBudget;
-    if (!budget) return { allowed: true };
+    if (!budget) { return { allowed: true }; }
 
-    const isReverseImageSearch = toolName === "reverse_image_search";
+    const isReverseImageSearch = toolName === 'reverse_image_search';
     if (isReverseImageSearch) {
       budget.reverseImageWorkflowActive = true;
     } else if (!budget.reverseImageWorkflowActive) {
@@ -136,7 +136,7 @@ class ToolContextFacade {
         limit,
         used,
         instruction:
-          "Reverse image search follow-up budget exhausted. Stop calling tools for this image and answer using the evidence already gathered. If the origin is still unconfirmed, include the manual reverse-search links from reverse_image_search.",
+          'Reverse image search follow-up budget exhausted. Stop calling tools for this image and answer using the evidence already gathered. If the origin is still unconfirmed, include the manual reverse-search links from reverse_image_search.',
       };
     }
 
@@ -145,13 +145,13 @@ class ToolContextFacade {
   }
 
   refundToolCall(toolName: string): void {
-    if (!isReverseImageBudgetedTool(toolName)) return;
+    if (!isReverseImageBudgetedTool(toolName)) { return; }
 
     const budget = this.get().toolBudget;
-    if (!budget) return;
+    if (!budget) { return; }
 
     const used = budget.calls[toolName] ?? 0;
-    if (used <= 0) return;
+    if (used <= 0) { return; }
     budget.calls[toolName] = used - 1;
   }
 
@@ -165,23 +165,23 @@ class ToolContextFacade {
 
   rememberImageDescriptionFailure(imageUrl: string, error: string): number {
     const budget = this.get().toolBudget;
-    if (!budget) return 0;
+    if (!budget) { return 0; }
     budget.failedImageDescriptions[imageUrl] = error;
     return Object.keys(budget.failedImageDescriptions).length;
   }
 
   imageDescriptionFailureLimitExceeded(): boolean {
     const budget = this.get().toolBudget;
-    if (!budget) return false;
+    if (!budget) { return false; }
     return (
-      Object.keys(budget.failedImageDescriptions).length >=
-      IMAGE_DESCRIPTION_DOWNLOAD_FAILURE_LIMIT
+      Object.keys(budget.failedImageDescriptions).length
+      >= IMAGE_DESCRIPTION_DOWNLOAD_FAILURE_LIMIT
     );
   }
 
   budgetDeniedResult(decision: Exclude<ToolBudgetDecision, { allowed: true }>) {
     return {
-      error: "Tool budget exhausted",
+      error: 'Tool budget exhausted',
       budget_exhausted: true,
       final_answer_required: true,
       tool: decision.tool,
@@ -198,26 +198,26 @@ class ToolContextFacade {
     const ctx = this.get();
     if (!ctx.channel) {
       toolLogger.warn(`No channel context available for ${toolName}`);
-      return { success: false, error: "No channel context available" };
+      return { success: false, error: 'No channel context available' };
     }
 
     const channel = ctx.channel;
-    if (!("messages" in channel)) {
+    if (!('messages' in channel)) {
       return {
         success: false,
-        error: "Cannot access messages in this channel type",
+        error: 'Cannot access messages in this channel type',
       };
     }
 
     try {
       let targetMessage: Message | null | undefined;
 
-      if (messageId === "replied") {
+      if (messageId === 'replied') {
         targetMessage = ctx.referencedMessage;
         if (!targetMessage) {
           return {
             success: false,
-            error: "The user did not reply to any message",
+            error: 'The user did not reply to any message',
           };
         }
       } else if (messageId) {
@@ -227,13 +227,13 @@ class ToolContextFacade {
       }
 
       if (!targetMessage) {
-        return { success: false, error: "Could not find the target message" };
+        return { success: false, error: 'Could not find the target message' };
       }
 
       return { success: true, message: targetMessage };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      const errorMessage
+        = error instanceof Error ? error.message : 'Unknown error';
       return { success: false, error: errorMessage };
     }
   }
@@ -243,5 +243,5 @@ export const toolContextManager = new ToolContextFacade();
 
 // Format error for JSON response
 export function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : "Unknown error";
+  return error instanceof Error ? error.message : 'Unknown error';
 }

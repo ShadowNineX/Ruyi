@@ -1,76 +1,78 @@
+import type { ChatInputCommandInteraction } from 'discord.js';
+import type { ConfigScope } from '../../config';
 import {
+
   EmbedBuilder,
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-} from "discord.js";
+} from 'discord.js';
 import {
   configManager,
+
   formatConfigScope,
   userConfigScope,
-  type ConfigScope,
-} from "../../config";
+} from '../../config';
 import {
   AWAY_MESSAGE_MAX_COOLDOWN_HOURS,
   AWAY_MESSAGE_MAX_DELAY_MINUTES,
   AWAY_MESSAGE_MIN_COOLDOWN_HOURS,
   AWAY_MESSAGE_MIN_DELAY_MINUTES,
-} from "../../constants";
-import { botLogger } from "../../logger";
+} from '../../constants';
+import { botLogger } from '../../logger';
 
 const AWAY_COLORS = {
-  neutral: 0x5865f2,
-  success: 0x57f287,
-  warning: 0xffaa00,
-  error: 0xcc3333,
+  neutral: 0x5865F2,
+  success: 0x57F287,
+  warning: 0xFFAA00,
+  error: 0xCC3333,
 } as const;
 
 export const awayCommand = new SlashCommandBuilder()
-  .setName("away")
-  .setDescription("Configure c.ai-style away messages")
-  .addSubcommand((subcommand) =>
-    subcommand.setName("status").setDescription("Show away message settings"),
+  .setName('away')
+  .setDescription('Configure c.ai-style away messages')
+  .addSubcommand(subcommand =>
+    subcommand.setName('status').setDescription('Show away message settings'),
   )
-  .addSubcommand((subcommand) =>
+  .addSubcommand(subcommand =>
     subcommand
-      .setName("enable")
-      .setDescription("Opt yourself into away-message pings"),
+      .setName('enable')
+      .setDescription('Opt yourself into away-message pings'),
   )
-  .addSubcommand((subcommand) =>
+  .addSubcommand(subcommand =>
     subcommand
-      .setName("disable")
-      .setDescription("Opt yourself out of away-message pings"),
+      .setName('disable')
+      .setDescription('Opt yourself out of away-message pings'),
   )
-  .addSubcommandGroup((group) =>
+  .addSubcommandGroup(group =>
     group
-      .setName("server")
-      .setDescription("Manage server-wide away message settings")
-      .addSubcommand((subcommand) =>
+      .setName('server')
+      .setDescription('Manage server-wide away message settings')
+      .addSubcommand(subcommand =>
         subcommand
-          .setName("enable")
-          .setDescription("Enable away messages server-wide"),
+          .setName('enable')
+          .setDescription('Enable away messages server-wide'),
       )
-      .addSubcommand((subcommand) =>
+      .addSubcommand(subcommand =>
         subcommand
-          .setName("disable")
-          .setDescription("Disable away messages server-wide"),
+          .setName('disable')
+          .setDescription('Disable away messages server-wide'),
       )
-      .addSubcommand((subcommand) =>
+      .addSubcommand(subcommand =>
         subcommand
-          .setName("timing")
-          .setDescription("Set away message delay and cooldown")
-          .addIntegerOption((option) =>
+          .setName('timing')
+          .setDescription('Set away message delay and cooldown')
+          .addIntegerOption(option =>
             option
-              .setName("delay_minutes")
-              .setDescription("Quiet time before an away ping")
+              .setName('delay_minutes')
+              .setDescription('Quiet time before an away ping')
               .setMinValue(AWAY_MESSAGE_MIN_DELAY_MINUTES)
               .setMaxValue(AWAY_MESSAGE_MAX_DELAY_MINUTES),
           )
-          .addIntegerOption((option) =>
+          .addIntegerOption(option =>
             option
-              .setName("cooldown_hours")
-              .setDescription("Minimum time between away pings for a user")
+              .setName('cooldown_hours')
+              .setDescription('Minimum time between away pings for a user')
               .setMinValue(AWAY_MESSAGE_MIN_COOLDOWN_HOURS)
               .setMaxValue(AWAY_MESSAGE_MAX_COOLDOWN_HOURS),
           ),
@@ -84,11 +86,11 @@ function hasManageGuild(interaction: ChatInputCommandInteraction): boolean {
 }
 
 function formatEnabled(enabled: boolean): string {
-  return enabled ? "Enabled" : "Disabled";
+  return enabled ? 'Enabled' : 'Disabled';
 }
 
 function formatLastSent(lastSentAt: number | null): string {
-  if (!lastSentAt) return "Never";
+  if (!lastSentAt) { return 'Never'; }
   return `<t:${Math.floor(lastSentAt / 1000)}:R>`;
 }
 
@@ -111,32 +113,32 @@ async function buildStatusEmbed(
   const settings = configManager.getAwaySettings(scope);
   const userEnabled = await configManager.isAwayEnabledForUser(scope, userId);
   const lastSentAt = await configManager.getAwayLastSentAt(scope, userId);
-  const scopeLabel =
-    scope.kind === "discord:guild"
-      ? "Server away messages"
-      : "Private-chat away messages";
+  const scopeLabel
+    = scope.kind === 'discord:guild'
+      ? 'Server away messages'
+      : 'Private-chat away messages';
 
   return buildAwayEmbed(
-    "Away Messages",
+    'Away Messages',
     `Current away-message settings for ${formatConfigScope(scope)}.`,
     AWAY_COLORS.neutral,
   ).addFields(
     {
-      name: "Status",
+      name: 'Status',
       value: [
         `${scopeLabel}: ${formatEnabled(settings.scopeEnabled)}`,
         `Your away pings: ${formatEnabled(userEnabled)}`,
-      ].join("\n"),
+      ].join('\n'),
     },
     {
-      name: "Timing",
+      name: 'Timing',
       value: [
         `Delay: ${settings.delayMinutes} minutes`,
         `Cooldown: ${settings.cooldownHours} hours`,
-      ].join("\n"),
+      ].join('\n'),
     },
     {
-      name: "Last ping to you",
+      name: 'Last ping to you',
       value: formatLastSent(lastSentAt),
     },
   );
@@ -144,16 +146,16 @@ async function buildStatusEmbed(
 
 function buildPermissionEmbed(): EmbedBuilder {
   return buildAwayEmbed(
-    "Away Messages",
-    "You need Manage Server to change server-wide away settings.",
+    'Away Messages',
+    'You need Manage Server to change server-wide away settings.',
     AWAY_COLORS.warning,
   );
 }
 
 function buildServerOnlyEmbed(): EmbedBuilder {
   return buildAwayEmbed(
-    "Away Messages",
-    "Server-wide away settings can only be changed in a server.",
+    'Away Messages',
+    'Server-wide away settings can only be changed in a server.',
     AWAY_COLORS.warning,
   );
 }
@@ -163,8 +165,8 @@ function buildScopeToggleEmbed(
   scopeLabel: string,
 ): EmbedBuilder {
   return buildAwayEmbed(
-    "Away Messages",
-    `${scopeLabel} are now ${enabled ? "enabled" : "disabled"}.`,
+    'Away Messages',
+    `${scopeLabel} are now ${enabled ? 'enabled' : 'disabled'}.`,
     AWAY_COLORS.success,
   );
 }
@@ -172,15 +174,15 @@ function buildScopeToggleEmbed(
 function buildTimingEmbed(scope: ConfigScope): EmbedBuilder {
   const settings = configManager.getAwaySettings(scope);
   return buildAwayEmbed(
-    "Away Message Timing Updated",
+    'Away Message Timing Updated',
     `Away-message timing for ${formatConfigScope(scope)} has been updated.`,
     AWAY_COLORS.success,
   ).addFields({
-    name: "Timing",
+    name: 'Timing',
     value: [
       `Delay: ${settings.delayMinutes} minutes`,
       `Cooldown: ${settings.cooldownHours} hours`,
-    ].join("\n"),
+    ].join('\n'),
   });
 }
 
@@ -190,11 +192,11 @@ function buildUserToggleEmbed(scope: ConfigScope, enabled: boolean): EmbedBuilde
     : `Away pings are disabled for you in ${formatConfigScope(scope)}.`;
 
   return buildAwayEmbed(
-    "Away Messages",
+    'Away Messages',
     description,
     enabled ? AWAY_COLORS.success : AWAY_COLORS.warning,
   ).addFields({
-    name: "Your away pings",
+    name: 'Your away pings',
     value: formatEnabled(enabled),
     inline: true,
   });
@@ -202,8 +204,8 @@ function buildUserToggleEmbed(scope: ConfigScope, enabled: boolean): EmbedBuilde
 
 function buildErrorEmbed(): EmbedBuilder {
   return buildAwayEmbed(
-    "Away Messages Unavailable",
-    "Forgive me, my lord - I could not update away message settings.",
+    'Away Messages Unavailable',
+    'Forgive me, my lord - I could not update away message settings.',
     AWAY_COLORS.error,
   );
 }
@@ -211,7 +213,7 @@ function buildErrorEmbed(): EmbedBuilder {
 async function requireManageGuild(
   interaction: ChatInputCommandInteraction,
 ): Promise<boolean> {
-  if (hasManageGuild(interaction)) return true;
+  if (hasManageGuild(interaction)) { return true; }
 
   await interaction.reply({
     embeds: [buildPermissionEmbed()],
@@ -234,23 +236,23 @@ async function handleServerSubcommand(
   }
 
   const scope = userConfigScope(guildId, interaction.user.id);
-  if (!(await requireManageGuild(interaction))) return;
+  if (!(await requireManageGuild(interaction))) { return; }
 
-  if (subcommand === "enable" || subcommand === "disable") {
-    const enabled = subcommand === "enable";
+  if (subcommand === 'enable' || subcommand === 'disable') {
+    const enabled = subcommand === 'enable';
     await configManager.setAwayScopeEnabled(scope, enabled);
     await interaction.reply({
-      embeds: [buildScopeToggleEmbed(enabled, "Server away messages")],
+      embeds: [buildScopeToggleEmbed(enabled, 'Server away messages')],
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
   const settings = configManager.getAwaySettings(scope);
-  const delayMinutes =
-    interaction.options.getInteger("delay_minutes") ?? settings.delayMinutes;
-  const cooldownHours =
-    interaction.options.getInteger("cooldown_hours") ?? settings.cooldownHours;
+  const delayMinutes
+    = interaction.options.getInteger('delay_minutes') ?? settings.delayMinutes;
+  const cooldownHours
+    = interaction.options.getInteger('cooldown_hours') ?? settings.cooldownHours;
   await configManager.setAwayTiming(scope, delayMinutes, cooldownHours);
 
   await interaction.reply({
@@ -267,12 +269,12 @@ export async function handleAwayCommand(
     const subcommand = interaction.options.getSubcommand();
     const scope = userConfigScope(interaction.guildId, interaction.user.id);
 
-    if (group === "server") {
+    if (group === 'server') {
       await handleServerSubcommand(interaction, subcommand);
       return;
     }
 
-    if (subcommand === "status") {
+    if (subcommand === 'status') {
       await interaction.reply({
         embeds: [await buildStatusEmbed(scope, interaction.user.id)],
         flags: MessageFlags.Ephemeral,
@@ -280,7 +282,7 @@ export async function handleAwayCommand(
       return;
     }
 
-    const enabled = subcommand === "enable";
+    const enabled = subcommand === 'enable';
     await configManager.setAwayUserEnabled(scope, interaction.user.id, enabled);
     await interaction.reply({
       embeds: [buildUserToggleEmbed(scope, enabled)],
@@ -295,7 +297,7 @@ export async function handleAwayCommand(
         name: err.name,
         user: interaction.user.username,
       },
-      "Away command failed",
+      'Away command failed',
     );
 
     const embed = buildErrorEmbed();

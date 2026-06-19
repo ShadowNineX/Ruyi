@@ -1,22 +1,14 @@
+import type { AgentInputItem, ModelSettings, OpenAIResponsesCompactionArgs, Session } from '@openai/agents';
+import type { UpdateQuery } from 'mongoose';
+import type { IDiscordAgentSession, ISteamAgentSession } from '../db/models';
+import type { ConversationSurface } from './context';
 import {
   Agent,
+
   assistant,
+
   user,
-  type AgentInputItem,
-  type ModelSettings,
-  type OpenAIResponsesCompactionArgs,
-  type Session,
-} from "@openai/agents";
-import type { UpdateQuery } from "mongoose";
-import { aiLogger } from "../logger";
-import {
-  DiscordAgentSession,
-  DiscordConversation,
-  SteamAgentSession,
-  SteamConversation,
-} from "../db/models";
-import type { IDiscordAgentSession, ISteamAgentSession } from "../db/models";
-import type { ConversationSurface } from "./context";
+} from '@openai/agents';
 import {
   AGENT_SESSION_COMPACTION_ITEM_MAX_LEN,
   AGENT_SESSION_COMPACTION_TIMEOUT_MS,
@@ -25,9 +17,14 @@ import {
   AGENT_SESSION_RECENT_ITEM_KEEP,
   AGENT_SESSION_SEED_MESSAGE_LIMIT,
   AGENT_SESSION_SUMMARY_MAX_LEN,
-} from "../constants";
-import { agentsRuntimeManager } from "./client";
-import { systemPromptVersion } from "./prompt";
+} from '../constants';
+import {
+  DiscordAgentSession,
+  DiscordConversation,
+  SteamAgentSession,
+  SteamConversation,
+} from '../db/models';
+import { aiLogger } from '../logger';
 import {
   clearCachedAgentSessions,
   deleteCachedAgentSession,
@@ -35,23 +32,25 @@ import {
   getCachedAgentSessionCount,
   getCachedAgentSessions,
   setCachedAgentSession,
-} from "../stores";
+} from '../stores';
+import { agentsRuntimeManager } from './client';
+import { systemPromptVersion } from './prompt';
 
 const TRACKED_MESSAGE_ID_CAP = 200;
 
 type PersistedAgentSession = IDiscordAgentSession | ISteamAgentSession;
-type SessionUpdate =
-  | UpdateQuery<IDiscordAgentSession>
-  | UpdateQuery<ISteamAgentSession>;
-type SessionUpdateOptions = {
+type SessionUpdate
+  = | UpdateQuery<IDiscordAgentSession>
+    | UpdateQuery<ISteamAgentSession>;
+interface SessionUpdateOptions {
   upsert?: boolean;
-};
+}
 
 function getSessionFilter(
   surface: ConversationSurface,
   conversationId: string,
 ): { channelId: string } | { profileId: string } {
-  return surface === "discord"
+  return surface === 'discord'
     ? { channelId: conversationId }
     : { profileId: conversationId };
 }
@@ -62,7 +61,7 @@ async function updateSessionDocument(
   update: SessionUpdate,
   options?: SessionUpdateOptions,
 ): Promise<void> {
-  if (surface === "discord") {
+  if (surface === 'discord') {
     await DiscordAgentSession.updateOne(
       getSessionFilter(surface, conversationId),
       update,
@@ -82,18 +81,18 @@ async function findActiveSessionDocument(
   surface: ConversationSurface,
   conversationId: string,
 ): Promise<PersistedAgentSession | null> {
-  if (surface === "discord") {
+  if (surface === 'discord') {
     return DiscordAgentSession.findOne({
       channelId: conversationId,
       isActive: true,
-      provider: "openai-agents",
+      provider: 'openai-agents',
     });
   }
 
   return SteamAgentSession.findOne({
     profileId: conversationId,
     isActive: true,
-    provider: "openai-agents",
+    provider: 'openai-agents',
   });
 }
 
@@ -102,7 +101,7 @@ async function upsertSessionDocument(
   conversationId: string,
   update: SessionUpdate,
 ): Promise<void> {
-  if (surface === "discord") {
+  if (surface === 'discord') {
     await DiscordAgentSession.findOneAndUpdate(
       { channelId: conversationId },
       update,
@@ -135,73 +134,73 @@ Prune:
 Write in concise bullets or short paragraphs. Preserve enough context that a future assistant can answer follow-ups without seeing the old raw items.`;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return null;
   }
   return value as Record<string, unknown>;
 }
 
 function truncateText(value: string, maxLength: number): string {
-  if (value.length <= maxLength) return value;
-  return value.slice(0, Math.max(0, maxLength - 3)) + "...";
+  if (value.length <= maxLength) { return value; }
+  return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
 function stringifyUnknown(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value === undefined) return "";
+  if (typeof value === 'string') { return value; }
+  if (value === undefined) { return ''; }
 
   try {
     return JSON.stringify(value);
   } catch (error) {
-    aiLogger.debug({ error }, "Failed to serialize content value");
-    return "[unserializable value]";
+    aiLogger.debug({ error }, 'Failed to serialize content value');
+    return '[unserializable value]';
   }
 }
 
 function contentPartToText(part: unknown): string {
-  if (typeof part === "string") return part;
+  if (typeof part === 'string') { return part; }
 
   const record = asRecord(part);
-  if (!record) return stringifyUnknown(part);
+  if (!record) { return stringifyUnknown(part); }
 
-  if (typeof record.text === "string") return record.text;
-  if (typeof record.refusal === "string") return `[refusal] ${record.refusal}`;
-  if (typeof record.image === "string") return "[image]";
+  if (typeof record.text === 'string') { return record.text; }
+  if (typeof record.refusal === 'string') { return `[refusal] ${record.refusal}`; }
+  if (typeof record.image === 'string') { return '[image]'; }
 
   return stringifyUnknown(record);
 }
 
 function contentToText(content: unknown): string {
   if (Array.isArray(content)) {
-    return content.map(contentPartToText).filter(Boolean).join(" ");
+    return content.map(contentPartToText).filter(Boolean).join(' ');
   }
   return stringifyUnknown(content);
 }
 
 function itemLabel(record: Record<string, unknown>): string {
-  if (typeof record.role === "string") return record.role;
-  if (typeof record.type === "string") return record.type;
-  return "item";
+  if (typeof record.role === 'string') { return record.role; }
+  if (typeof record.type === 'string') { return record.type; }
+  return 'item';
 }
 
 function itemBody(record: Record<string, unknown>): string {
-  const name = typeof record.name === "string" ? record.name : "unknown";
+  const name = typeof record.name === 'string' ? record.name : 'unknown';
 
-  if (record.type === "function_call") {
+  if (record.type === 'function_call') {
     return `${name} args=${truncateText(
       stringifyUnknown(record.arguments),
       500,
     )}`;
   }
 
-  if (record.type === "function_call_result") {
+  if (record.type === 'function_call_result') {
     return `${name} output=${truncateText(
       stringifyUnknown(record.output),
       900,
     )}`;
   }
 
-  if ("content" in record) return contentToText(record.content);
+  if ('content' in record) { return contentToText(record.content); }
 
   return stringifyUnknown(record);
 }
@@ -209,7 +208,7 @@ function itemBody(record: Record<string, unknown>): string {
 function formatItemForSummary(item: AgentInputItem, index: number): string {
   const record = asRecord(item);
   const body = record ? itemBody(record) : stringifyUnknown(item);
-  const label = record ? itemLabel(record) : "item";
+  const label = record ? itemLabel(record) : 'item';
 
   return `${index}. ${label}: ${truncateText(
     body,
@@ -220,26 +219,26 @@ function formatItemForSummary(item: AgentInputItem, index: number): string {
 function serializeItemsForSummary(items: AgentInputItem[]): string {
   return items
     .map((item, index) => formatItemForSummary(item, index + 1))
-    .join("\n");
+    .join('\n');
 }
 
 function itemType(item: AgentInputItem): string | null {
   const type = asRecord(item)?.type;
-  return typeof type === "string" ? type : null;
+  return typeof type === 'string' ? type : null;
 }
 
 function callIdForItem(item: AgentInputItem): string | null {
   const record = asRecord(item);
   const callId = record?.callId ?? record?.call_id;
-  return typeof callId === "string" && callId.length > 0 ? callId : null;
+  return typeof callId === 'string' && callId.length > 0 ? callId : null;
 }
 
 function isFunctionCall(item: AgentInputItem): boolean {
-  return itemType(item) === "function_call";
+  return itemType(item) === 'function_call';
 }
 
 function isFunctionCallResult(item: AgentInputItem): boolean {
-  return itemType(item) === "function_call_result";
+  return itemType(item) === 'function_call_result';
 }
 
 function callIdsForItems(
@@ -250,7 +249,7 @@ function callIdsForItems(
 
   for (const item of items) {
     const callId = callIdForItem(item);
-    if (callId && predicate(item)) callIds.add(callId);
+    if (callId && predicate(item)) { callIds.add(callId); }
   }
 
   return callIds;
@@ -280,11 +279,11 @@ function moveStartBeforeMissingCalls(
   while (missingCallIds.size > 0 && start > 0) {
     start -= 1;
     const item = items[start];
-    if (!item) continue;
+    if (!item) { continue; }
     const callId = callIdForItem(item);
-    if (!callId) continue;
-    if (isFunctionCall(item)) missingCallIds.delete(callId);
-    if (isFunctionCallResult(item)) missingCallIds.add(callId);
+    if (!callId) { continue; }
+    if (isFunctionCall(item)) { missingCallIds.delete(callId); }
+    if (isFunctionCallResult(item)) { missingCallIds.add(callId); }
   }
 
   return start;
@@ -305,7 +304,7 @@ function buildSummaryPrompt(
 ): string {
   const previousSummary = existingSummary
     ? truncateText(existingSummary, AGENT_SESSION_SUMMARY_MAX_LEN)
-    : "(none)";
+    : '(none)';
 
   return `Previous compacted summary:
 ${previousSummary}
@@ -330,7 +329,7 @@ async function summarizeCompactedItems(
 
   try {
     const agent = new Agent({
-      name: "Ruyi channel summarizer",
+      name: 'Ruyi channel summarizer',
       instructions: SUMMARY_SYSTEM_PROMPT,
       model,
       modelSettings,
@@ -343,9 +342,9 @@ async function summarizeCompactedItems(
         signal: abortController.signal,
       });
 
-    const raw =
-      typeof result.finalOutput === "string" ? result.finalOutput.trim() : "";
-    if (!raw) throw new Error("Summary compaction returned empty output");
+    const raw
+      = typeof result.finalOutput === 'string' ? result.finalOutput.trim() : '';
+    if (!raw) { throw new Error('Summary compaction returned empty output'); }
 
     return truncateText(raw, AGENT_SESSION_SUMMARY_MAX_LEN);
   } finally {
@@ -371,7 +370,7 @@ async function compactItemsIntoSummary(
   modelSettings: ModelSettings,
 ): Promise<SessionCompactionResult | null> {
   const start = retainedStartIndex(items);
-  if (start <= 0) return null;
+  if (start <= 0) { return null; }
 
   const compactedItems = items.slice(0, start);
   const retainedItems = items.slice(start);
@@ -417,36 +416,36 @@ class MongoAgentSession implements Session {
   }
 
   async getItems(limit?: number): Promise<AgentInputItem[]> {
-    if (this.invalidated) return [];
-    if (limit === undefined) return [...this.items];
+    if (this.invalidated) { return []; }
+    if (limit === undefined) { return [...this.items]; }
     return this.items.slice(-limit);
   }
 
   async addItems(items: AgentInputItem[]): Promise<void> {
-    if (this.invalidated) return;
+    if (this.invalidated) { return; }
     this.items = [...this.items, ...items];
     await this.persist();
   }
 
   async popItem(): Promise<AgentInputItem | undefined> {
-    if (this.invalidated) return undefined;
+    if (this.invalidated) { return undefined; }
     const item = this.items.pop();
     await this.persist();
     return item;
   }
 
   async clearSession(): Promise<void> {
-    if (this.invalidated) return;
+    if (this.invalidated) { return; }
     this.items = [];
     await this.persist();
   }
 
   async runCompaction(args?: OpenAIResponsesCompactionArgs): Promise<void> {
-    if (this.invalidated) return;
+    if (this.invalidated) { return; }
 
-    const shouldCompact =
-      args?.force === true ||
-      this.items.length > AGENT_SESSION_COMPACTION_TRIGGER_ITEMS;
+    const shouldCompact
+      = args?.force === true
+        || this.items.length > AGENT_SESSION_COMPACTION_TRIGGER_ITEMS;
     if (!shouldCompact) {
       return;
     }
@@ -458,7 +457,7 @@ class MongoAgentSession implements Session {
         this.model,
         this.modelSettings,
       );
-      if (!result) return;
+      if (!result) { return; }
 
       this.summary = result.summary;
       this.items = result.items;
@@ -472,7 +471,7 @@ class MongoAgentSession implements Session {
           retainedCount: result.items.length,
           summaryLength: result.summary.length,
         },
-        "Agent session compacted into conversation summary",
+        'Agent session compacted into conversation summary',
       );
     } catch (error) {
       await this.trimAfterFailedCompaction();
@@ -485,13 +484,13 @@ class MongoAgentSession implements Session {
           conversationId: this.conversationId,
           itemCount: this.items.length,
         },
-        "Agent session compaction failed; retaining raw session items",
+        'Agent session compaction failed; retaining raw session items',
       );
     }
   }
 
   private async persist(): Promise<void> {
-    if (this.invalidated) return;
+    if (this.invalidated) { return; }
 
     await updateSessionDocument(
       this.surface,
@@ -499,7 +498,7 @@ class MongoAgentSession implements Session {
       {
         $set: {
           sessionId: this.sessionId,
-          provider: "openai-agents",
+          provider: 'openai-agents',
           model: this.model,
           items: this.items,
           lastUsed: new Date(),
@@ -513,11 +512,11 @@ class MongoAgentSession implements Session {
   }
 
   private async persistCompaction(): Promise<void> {
-    if (this.invalidated) return;
+    if (this.invalidated) { return; }
 
     await updateSessionDocument(this.surface, this.conversationId, {
       $set: {
-        summary: this.summary ?? "",
+        summary: this.summary ?? '',
         summaryUpdatedAt: new Date(),
         items: this.items,
         lastUsed: new Date(),
@@ -528,8 +527,8 @@ class MongoAgentSession implements Session {
   }
 
   private async trimAfterFailedCompaction(): Promise<void> {
-    if (this.invalidated) return;
-    if (this.items.length <= AGENT_SESSION_ITEM_CAP) return;
+    if (this.invalidated) { return; }
+    if (this.items.length <= AGENT_SESSION_ITEM_CAP) { return; }
 
     const originalCount = this.items.length;
     this.items = this.items.slice(-AGENT_SESSION_ITEM_CAP);
@@ -542,7 +541,7 @@ class MongoAgentSession implements Session {
         originalCount,
         retainedCount: this.items.length,
       },
-      "Agent session exceeded hard cap after failed compaction; trimmed raw items",
+      'Agent session exceeded hard cap after failed compaction; trimmed raw items',
     );
   }
 }
@@ -570,7 +569,7 @@ async function compactPersistedItemsIfNeeded(
       model,
       modelSettings,
     );
-    if (!result) return { items, summary: existingSummary };
+    if (!result) { return { items, summary: existingSummary }; }
 
     await updateSessionDocument(surface, conversationId, {
       $set: {
@@ -591,7 +590,7 @@ async function compactPersistedItemsIfNeeded(
         retainedCount: result.items.length,
         summaryLength: result.summary.length,
       },
-      "Compacted loaded agent session before replay",
+      'Compacted loaded agent session before replay',
     );
 
     return { items: result.items, summary: result.summary };
@@ -605,7 +604,7 @@ async function compactPersistedItemsIfNeeded(
         conversationId,
         itemCount: items.length,
       },
-      "Failed to compact loaded agent session; using existing raw items",
+      'Failed to compact loaded agent session; using existing raw items',
     );
     return {
       items: items.slice(-AGENT_SESSION_ITEM_CAP),
@@ -619,16 +618,16 @@ function normalizeMessageIds(messageIds: Array<string | undefined>): string[] {
 }
 
 function upsertAssistantReplyLink(
-  replies: IDiscordAgentSession["assistantReplies"],
+  replies: IDiscordAgentSession['assistantReplies'],
   userMessageId: string,
   assistantMessageIds: string[],
-): IDiscordAgentSession["assistantReplies"] {
+): IDiscordAgentSession['assistantReplies'] {
   const now = new Date();
   const nextReplies = replies.filter(
-    (reply) => reply.userMessageId !== userMessageId,
+    reply => reply.userMessageId !== userMessageId,
   );
   const existing = replies.find(
-    (reply) => reply.userMessageId === userMessageId,
+    reply => reply.userMessageId === userMessageId,
   );
 
   nextReplies.push({
@@ -646,7 +645,7 @@ async function buildSeedSessionData(
   conversationId: string,
   currentMessageId?: string,
 ): Promise<SeedSessionData> {
-  if (surface === "steam") {
+  if (surface === 'steam') {
     const conversation = await SteamConversation.findOne({
       profileId: conversationId,
     });
@@ -655,7 +654,7 @@ async function buildSeedSessionData(
     }
 
     const messages = conversation.messages
-      .filter((message) => message.commentId !== currentMessageId)
+      .filter(message => message.commentId !== currentMessageId)
       .slice(-AGENT_SESSION_SEED_MESSAGE_LIMIT);
 
     return {
@@ -664,7 +663,7 @@ async function buildSeedSessionData(
         return message.isBot ? assistant(content) : user(content);
       }),
       messageIds: normalizeMessageIds(
-        messages.map((message) => message.commentId),
+        messages.map(message => message.commentId),
       ),
     };
   }
@@ -677,7 +676,7 @@ async function buildSeedSessionData(
   }
 
   const messages = conversation.messages
-    .filter((message) => message.messageId !== currentMessageId)
+    .filter(message => message.messageId !== currentMessageId)
     .slice(-AGENT_SESSION_SEED_MESSAGE_LIMIT);
 
   const items = messages.map((message) => {
@@ -688,7 +687,7 @@ async function buildSeedSessionData(
   return {
     items,
     messageIds: normalizeMessageIds(
-      messages.map((message) => message.messageId),
+      messages.map(message => message.messageId),
     ),
   };
 }
@@ -702,10 +701,10 @@ class SessionManager {
       ]);
       aiLogger.info(
         { discordCount, steamCount },
-        "Agent sessions are persisted in Mongo and will be loaded lazily",
+        'Agent sessions are persisted in Mongo and will be loaded lazily',
       );
     } catch (error) {
-      aiLogger.error({ error }, "Failed to inspect persisted agent sessions");
+      aiLogger.error({ error }, 'Failed to inspect persisted agent sessions');
     }
   }
 
@@ -721,7 +720,7 @@ class SessionManager {
     currentMessageId?: string,
     model = agentsRuntimeManager.model,
     modelSettings = agentsRuntimeManager.modelSettings,
-    surface: ConversationSurface = "discord",
+    surface: ConversationSurface = 'discord',
   ): Promise<MongoAgentSession> {
     const cacheKey = this.cacheKey(surface, conversationId);
     const existingSession = getCachedAgentSession<MongoAgentSession>(cacheKey);
@@ -729,7 +728,7 @@ class SessionManager {
       if (existingSession.matchesModel(model)) {
         aiLogger.debug(
           { surface, conversationId },
-          "Using cached agent session",
+          'Using cached agent session',
         );
         await this.touchSession(
           surface,
@@ -747,7 +746,7 @@ class SessionManager {
       });
       aiLogger.info(
         { surface, conversationId, currentModel: model },
-        "Cached agent session model changed; creating fresh agent session",
+        'Cached agent session model changed; creating fresh agent session',
       );
     }
 
@@ -757,9 +756,9 @@ class SessionManager {
     );
 
     if (persistedSession) {
-      const promptVersionMatches =
-        !persistedSession.promptVersion ||
-        persistedSession.promptVersion === systemPromptVersion;
+      const promptVersionMatches
+        = !persistedSession.promptVersion
+          || persistedSession.promptVersion === systemPromptVersion;
       const modelMatches = persistedSession.model === model;
 
       if (promptVersionMatches && modelMatches) {
@@ -790,7 +789,7 @@ class SessionManager {
 
         aiLogger.debug(
           { surface, conversationId, sessionId: persistedSession.sessionId },
-          "Loaded agent session from Mongo",
+          'Loaded agent session from Mongo',
         );
         return session;
       }
@@ -805,7 +804,7 @@ class SessionManager {
           storedModel: persistedSession.model,
           currentModel: model,
         },
-        "Agent session configuration changed; creating fresh agent session",
+        'Agent session configuration changed; creating fresh agent session',
       );
       await updateSessionDocument(surface, conversationId, {
         $set: { isActive: false },
@@ -832,15 +831,15 @@ class SessionManager {
       null,
     );
 
-    const setFields =
-      surface === "discord"
+    const setFields
+      = surface === 'discord'
         ? { userMessageIds }
         : { processedCommentIds: userMessageIds };
 
     await upsertSessionDocument(surface, conversationId, {
       $set: {
         sessionId,
-        provider: "openai-agents",
+        provider: 'openai-agents',
         model,
         items: seedData.items,
         ...setFields,
@@ -855,7 +854,7 @@ class SessionManager {
 
     aiLogger.info(
       { surface, conversationId, sessionId, seedCount: seedData.items.length },
-      "Created new agent session",
+      'Created new agent session',
     );
 
     return session;
@@ -867,10 +866,10 @@ class SessionManager {
     model: string,
     currentMessageId?: string,
   ): Promise<void> {
-    const idArrayField =
-      surface === "discord" ? "userMessageIds" : "processedCommentIds";
-    const update =
-      currentMessageId && currentMessageId.length > 0
+    const idArrayField
+      = surface === 'discord' ? 'userMessageIds' : 'processedCommentIds';
+    const update
+      = currentMessageId && currentMessageId.length > 0
         ? {
             $push: {
               [idArrayField]: {
@@ -895,7 +894,7 @@ class SessionManager {
 
   async invalidate(
     conversationId: string,
-    surface: ConversationSurface = "discord",
+    surface: ConversationSurface = 'discord',
   ): Promise<void> {
     const cacheKey = this.cacheKey(surface, conversationId);
     getCachedAgentSession(cacheKey)?.markInvalidated();
@@ -905,7 +904,7 @@ class SessionManager {
       $set: { isActive: false },
     });
 
-    aiLogger.debug({ surface, conversationId }, "Agent session invalidated");
+    aiLogger.debug({ surface, conversationId }, 'Agent session invalidated');
   }
 
   async invalidateAll(reason: string): Promise<void> {
@@ -917,11 +916,11 @@ class SessionManager {
 
     const [discordResult, steamResult] = await Promise.all([
       DiscordAgentSession.updateMany(
-        { isActive: true, provider: "openai-agents" },
+        { isActive: true, provider: 'openai-agents' },
         { $set: { isActive: false } },
       ),
       SteamAgentSession.updateMany(
-        { isActive: true, provider: "openai-agents" },
+        { isActive: true, provider: 'openai-agents' },
         { $set: { isActive: false } },
       ),
     ]);
@@ -932,7 +931,7 @@ class SessionManager {
         activeCount,
         modifiedCount: discordResult.modifiedCount + steamResult.modifiedCount,
       },
-      "All active agent sessions invalidated",
+      'All active agent sessions invalidated',
     );
   }
 
@@ -941,14 +940,14 @@ class SessionManager {
     userMessageId: string,
     messageIds: string[],
   ): Promise<void> {
-    if (messageIds.length === 0) return;
+    if (messageIds.length === 0) { return; }
 
     const session = await DiscordAgentSession.findOne({
       channelId,
       isActive: true,
-      provider: "openai-agents",
+      provider: 'openai-agents',
     });
-    if (!session) return;
+    if (!session) { return; }
 
     session.assistantMessageIds = normalizeMessageIds([
       ...session.assistantMessageIds,
@@ -970,10 +969,10 @@ class SessionManager {
     const session = await DiscordAgentSession.findOne(
       {
         channelId,
-        provider: "openai-agents",
-        "assistantReplies.userMessageId": userMessageId,
+        'provider': 'openai-agents',
+        'assistantReplies.userMessageId': userMessageId,
       },
-      { "assistantReplies.$": 1 },
+      { 'assistantReplies.$': 1 },
     ).sort({ lastUsed: -1 });
     return session?.assistantReplies[0]?.assistantMessageIds ?? [];
   }
@@ -985,15 +984,15 @@ class SessionManager {
     const session = await DiscordAgentSession.exists({
       channelId,
       isActive: true,
-      provider: "openai-agents",
+      provider: 'openai-agents',
       userMessageIds: messageId,
     });
-    if (!session) return false;
+    if (!session) { return false; }
 
     await this.invalidate(channelId);
     aiLogger.info(
       { channelId, messageId },
-      "Invalidated agent session because a tracked Discord message was edited",
+      'Invalidated agent session because a tracked Discord message was edited',
     );
     return true;
   }
@@ -1017,24 +1016,24 @@ class SessionManager {
     messageIds: string[],
   ): Promise<boolean> {
     const uniqueMessageIds = [...new Set(messageIds)].filter(Boolean);
-    if (uniqueMessageIds.length === 0) return false;
+    if (uniqueMessageIds.length === 0) { return false; }
 
     const session = await DiscordAgentSession.exists({
       channelId,
       isActive: true,
-      provider: "openai-agents",
+      provider: 'openai-agents',
       $or: [
         { assistantMessageIds: { $in: uniqueMessageIds } },
         { userMessageIds: { $in: uniqueMessageIds } },
       ],
     });
 
-    if (!session) return false;
+    if (!session) { return false; }
 
     await this.invalidate(channelId);
     aiLogger.info(
       { channelId, messageIds: uniqueMessageIds },
-      "Invalidated agent session because tracked Discord messages were deleted",
+      'Invalidated agent session because tracked Discord messages were deleted',
     );
     return true;
   }

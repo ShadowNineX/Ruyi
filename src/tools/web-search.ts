@@ -1,29 +1,29 @@
-import OpenAI from "openai";
 import type {
   Response,
   ResponseOutputItem,
   ResponseOutputMessage,
   ResponseOutputText,
-} from "openai/resources/responses/responses";
-import { tool } from "@openai/agents";
-import { z } from "zod";
-import { env } from "../env";
-import { toolLogger } from "../logger";
-import { formatError, toolContextManager } from "../utils/types";
-import { getCurrentToolConfigScope } from "../utils/tool-config-scope";
+} from 'openai/resources/responses/responses';
+import type { ConfigScope, SearchProvider } from '../config';
+import { tool } from '@openai/agents';
+import OpenAI from 'openai';
+import { z } from 'zod';
 import {
   configManager,
-  type ConfigScope,
-  type SearchProvider,
-} from "../config";
 
-const OPENAI_PROVIDER = "openai" satisfies SearchProvider;
-const TAVILY_PROVIDER = "tavily" satisfies SearchProvider;
+} from '../config';
+import { env } from '../env';
+import { toolLogger } from '../logger';
+import { getCurrentToolConfigScope } from '../utils/tool-config-scope';
+import { formatError, toolContextManager } from '../utils/types';
+
+const OPENAI_PROVIDER = 'openai' satisfies SearchProvider;
+const TAVILY_PROVIDER = 'tavily' satisfies SearchProvider;
 const OPENAI_SOURCE_MINIMUM = 1;
 const OPENAI_ANSWER_MIN_LENGTH = 40;
-const TAVILY_SEARCH_URL = "https://api.tavily.com/search";
+const TAVILY_SEARCH_URL = 'https://api.tavily.com/search';
 
-type SearchMode = "answer" | "research";
+type SearchMode = 'answer' | 'research';
 
 interface SearchSource {
   provider: SearchProvider;
@@ -69,7 +69,7 @@ interface TavilyResponse {
 const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
 
 function clampMaxResults(value: number | null): number {
-  if (value === null || !Number.isFinite(value)) return 5;
+  if (value === null || !Number.isFinite(value)) { return 5; }
   return Math.min(Math.max(Math.trunc(value), 1), 10);
 }
 
@@ -82,7 +82,7 @@ function getProviderOrder(
   scope: ConfigScope | null,
 ): SearchProvider[] {
   const preferredProvider = configManager.getSearchProvider(scope);
-  if (mode === "research") {
+  if (mode === 'research') {
     return uniqueProviders([
       TAVILY_PROVIDER,
       preferredProvider,
@@ -97,19 +97,19 @@ function getProviderOrder(
 }
 
 function resultHasGoodSources(result: WebSearchResult): boolean {
-  if (result.provider !== "openai") return result.sources.length > 0;
+  if (result.provider !== 'openai') { return result.sources.length > 0; }
   return (
-    result.sources.length >= OPENAI_SOURCE_MINIMUM &&
-    (result.answer?.trim().length ?? 0) >= OPENAI_ANSWER_MIN_LENGTH
+    result.sources.length >= OPENAI_SOURCE_MINIMUM
+    && (result.answer?.trim().length ?? 0) >= OPENAI_ANSWER_MIN_LENGTH
   );
 }
 
 function isOutputMessage(item: ResponseOutputItem): item is ResponseOutputMessage {
-  return item.type === "message";
+  return item.type === 'message';
 }
 
-function isOutputText(content: ResponseOutputMessage["content"][number]): content is ResponseOutputText {
-  return content.type === "output_text";
+function isOutputText(content: ResponseOutputMessage['content'][number]): content is ResponseOutputText {
+  return content.type === 'output_text';
 }
 
 function sourceKey(source: SearchSource): string {
@@ -121,7 +121,7 @@ function dedupeSources(sources: SearchSource[]): SearchSource[] {
   const deduped: SearchSource[] = [];
   for (const source of sources) {
     const key = sourceKey(source);
-    if (seen.has(key)) continue;
+    if (seen.has(key)) { continue; }
     seen.add(key);
     deduped.push(source);
   }
@@ -132,13 +132,13 @@ function collectOpenAICitations(response: Response): SearchSource[] {
   const sources: SearchSource[] = [];
 
   for (const item of response.output) {
-    if (!isOutputMessage(item)) continue;
+    if (!isOutputMessage(item)) { continue; }
     for (const content of item.content) {
-      if (!isOutputText(content)) continue;
+      if (!isOutputText(content)) { continue; }
       for (const annotation of content.annotations) {
-        if (annotation.type !== "url_citation") continue;
+        if (annotation.type !== 'url_citation') { continue; }
         sources.push({
-          provider: "openai",
+          provider: 'openai',
           title: annotation.title || undefined,
           url: annotation.url,
         });
@@ -152,10 +152,10 @@ function collectOpenAICitations(response: Response): SearchSource[] {
 function collectOpenAIWebSearchSources(response: Response): SearchSource[] {
   const sources: SearchSource[] = [];
   for (const item of response.output) {
-    if (item.type !== "web_search_call") continue;
-    if (item.action.type !== "search") continue;
+    if (item.type !== 'web_search_call') { continue; }
+    if (item.action.type !== 'search') { continue; }
     for (const source of item.action.sources ?? []) {
-      sources.push({ provider: "openai", url: source.url });
+      sources.push({ provider: 'openai', url: source.url });
     }
   }
   return sources;
@@ -165,24 +165,24 @@ async function openAIWebSearch(
   query: string,
   mode: SearchMode,
   scope: ConfigScope | null,
-): Promise<Omit<WebSearchResult, "attempts">> {
+): Promise<Omit<WebSearchResult, 'attempts'>> {
   const response = await openai.responses.create({
     model: configManager.getChatModel(scope),
     instructions:
-      "Answer using current web information. Include concise citations in the response when sources are available.",
+      'Answer using current web information. Include concise citations in the response when sources are available.',
     input: query,
-    include: ["web_search_call.action.sources"],
+    include: ['web_search_call.action.sources'],
     tools: [
       {
-        type: "web_search",
-        search_context_size: mode === "research" ? "high" : "medium",
+        type: 'web_search',
+        search_context_size: mode === 'research' ? 'high' : 'medium',
         user_location: {
-          type: "approximate",
-          country: "US",
+          type: 'approximate',
+          country: 'US',
         },
       },
     ],
-    max_output_tokens: mode === "research" ? 1200 : 700,
+    max_output_tokens: mode === 'research' ? 1200 : 700,
     store: false,
   });
 
@@ -192,7 +192,7 @@ async function openAIWebSearch(
   ]);
 
   return {
-    provider: "openai",
+    provider: 'openai',
     query,
     mode,
     answer: response.output_text.trim() || null,
@@ -201,22 +201,22 @@ async function openAIWebSearch(
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function asOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
+  return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
 function asOptionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function parseTavilyImage(value: unknown): SearchImage | null {
-  if (typeof value === "string" && value.trim()) return { url: value };
-  if (!isRecord(value)) return null;
+  if (typeof value === 'string' && value.trim()) { return { url: value }; }
+  if (!isRecord(value)) { return null; }
   const url = asOptionalString(value.url);
-  if (!url) return null;
+  if (!url) { return null; }
   return {
     url,
     description: asOptionalString(value.description),
@@ -224,7 +224,7 @@ function parseTavilyImage(value: unknown): SearchImage | null {
 }
 
 function parseTavilyImages(value: unknown): SearchImage[] {
-  if (!Array.isArray(value)) return [];
+  if (!Array.isArray(value)) { return []; }
   return value.flatMap((item) => {
     const image = parseTavilyImage(item);
     return image ? [image] : [];
@@ -232,9 +232,9 @@ function parseTavilyImages(value: unknown): SearchImage[] {
 }
 
 function parseTavilyResult(value: unknown): TavilyResult | null {
-  if (!isRecord(value)) return null;
+  if (!isRecord(value)) { return null; }
   const url = asOptionalString(value.url);
-  if (!url) return null;
+  if (!url) { return null; }
   return {
     title: asOptionalString(value.title),
     url,
@@ -245,12 +245,12 @@ function parseTavilyResult(value: unknown): TavilyResult | null {
 }
 
 function parseTavilyResponse(value: unknown): TavilyResponse {
-  if (!isRecord(value)) return {};
+  if (!isRecord(value)) { return {}; }
   const rawResults = Array.isArray(value.results) ? value.results : [];
   return {
     query: asOptionalString(value.query),
     answer:
-      typeof value.answer === "string" || value.answer === null
+      typeof value.answer === 'string' || value.answer === null
         ? value.answer
         : undefined,
     results: rawResults.flatMap((result) => {
@@ -267,25 +267,25 @@ async function tavilySearch(
   query: string,
   mode: SearchMode,
   maxResults: number,
-): Promise<Omit<WebSearchResult, "attempts">> {
+): Promise<Omit<WebSearchResult, 'attempts'>> {
   if (!env.TAVILY_API_KEY) {
-    throw new Error("TAVILY_API_KEY is not configured.");
+    throw new Error('TAVILY_API_KEY is not configured.');
   }
 
   const response = await fetch(TAVILY_SEARCH_URL, {
-    method: "POST",
+    method: 'POST',
     headers: {
-      Authorization: `Bearer ${env.TAVILY_API_KEY}`,
-      "Content-Type": "application/json",
+      'Authorization': `Bearer ${env.TAVILY_API_KEY}`,
+      'Content-Type': 'application/json',
     },
     body: JSON.stringify({
       query,
-      search_depth: mode === "research" ? "advanced" : "basic",
+      search_depth: mode === 'research' ? 'advanced' : 'basic',
       max_results: maxResults,
-      include_answer: mode === "research" ? "advanced" : true,
+      include_answer: mode === 'research' ? 'advanced' : true,
       include_raw_content: false,
-      include_images: mode === "research",
-      include_image_descriptions: mode === "research",
+      include_images: mode === 'research',
+      include_image_descriptions: mode === 'research',
       include_favicon: true,
     }),
   });
@@ -299,12 +299,12 @@ async function tavilySearch(
   const results = data.results ?? [];
 
   return {
-    provider: "tavily",
+    provider: 'tavily',
     query: data.query ?? query,
     mode,
     answer: data.answer?.trim() || null,
-    sources: results.map((result) => ({
-      provider: "tavily",
+    sources: results.map(result => ({
+      provider: 'tavily',
       title: result.title,
       url: result.url,
       snippet: result.content,
@@ -312,7 +312,7 @@ async function tavilySearch(
     })),
     images: [
       ...(data.images ?? []),
-      ...results.flatMap((result) => result.images ?? []),
+      ...results.flatMap(result => result.images ?? []),
     ],
   };
 }
@@ -323,8 +323,8 @@ async function runProvider(
   mode: SearchMode,
   maxResults: number,
   scope: ConfigScope | null,
-): Promise<Omit<WebSearchResult, "attempts">> {
-  return provider === "openai"
+): Promise<Omit<WebSearchResult, 'attempts'>> {
+  return provider === 'openai'
     ? openAIWebSearch(query, mode, scope)
     : tavilySearch(query, mode, maxResults);
 }
@@ -337,7 +337,7 @@ async function searchWeb(
 ): Promise<WebSearchResult> {
   const attempts: string[] = [];
   let fallbackReason: string | undefined;
-  let weakResult: Omit<WebSearchResult, "attempts"> | null = null;
+  let weakResult: Omit<WebSearchResult, 'attempts'> | null = null;
 
   for (const provider of getProviderOrder(mode, scope)) {
     try {
@@ -362,7 +362,7 @@ async function searchWeb(
       fallbackReason = `${provider} failed: ${errorMessage}`;
       toolLogger.warn(
         { provider, mode, query, error: errorMessage },
-        "Web search provider failed",
+        'Web search provider failed',
       );
     }
   }
@@ -371,35 +371,35 @@ async function searchWeb(
     return { ...weakResult, attempts, fallbackReason };
   }
 
-  throw new Error(`All web search providers failed. Attempts: ${attempts.join("; ")}`);
+  throw new Error(`All web search providers failed. Attempts: ${attempts.join('; ')}`);
 }
 
 export const webSearchTool = tool({
-  name: "web_search",
+  name: 'web_search',
   description:
-    "Search the web using OpenAI Web Search for direct current-information answers, with Tavily fallback. Use mode=research for sources, links, broad research, comparisons, or finding pages.",
+    'Search the web using OpenAI Web Search for direct current-information answers, with Tavily fallback. Use mode=research for sources, links, broad research, comparisons, or finding pages.',
   parameters: z.object({
-    query: z.string().min(1).describe("The web search query."),
+    query: z.string().min(1).describe('The web search query.'),
     mode: z
-      .enum(["answer", "research"])
+      .enum(['answer', 'research'])
       .nullable()
       .describe(
-        "Use answer for normal current-info questions. Use research when the user asks for sources, links, comparisons, broad research, or pages to inspect.",
+        'Use answer for normal current-info questions. Use research when the user asks for sources, links, comparisons, broad research, or pages to inspect.',
       ),
     max_results: z
       .number()
       .int()
       .nullable()
-      .describe("Maximum Tavily results to return when Tavily is used. Defaults to 5; capped at 10."),
+      .describe('Maximum Tavily results to return when Tavily is used. Defaults to 5; capped at 10.'),
   }),
   execute: async ({ query, mode, max_results }) => {
     const scope = getCurrentToolConfigScope();
-    const budgetDecision = toolContextManager.consumeToolCall("web_search");
+    const budgetDecision = toolContextManager.consumeToolCall('web_search');
     if (!budgetDecision.allowed) {
       return toolContextManager.budgetDeniedResult(budgetDecision);
     }
 
-    const searchMode = mode ?? "answer";
+    const searchMode = mode ?? 'answer';
     const maxResults = toolContextManager.isReverseImageWorkflowActive()
       ? Math.min(clampMaxResults(max_results), 3)
       : clampMaxResults(max_results);
@@ -418,7 +418,7 @@ export const webSearchTool = tool({
           sourceCount: result.sources.length,
           fallbackReason: result.fallbackReason,
         },
-        "Web search complete",
+        'Web search complete',
       );
       return {
         success: true,
@@ -428,9 +428,9 @@ export const webSearchTool = tool({
       const errorMessage = formatError(error);
       toolLogger.error(
         { query, mode: searchMode, error: errorMessage },
-        "Web search failed",
+        'Web search failed',
       );
-      return { error: "Web search failed", details: errorMessage };
+      return { error: 'Web search failed', details: errorMessage };
     }
   },
 });

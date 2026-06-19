@@ -1,39 +1,42 @@
+import type { ChatMessage } from '../ai';
+import type { SteamProfileComment } from './client';
+import type { SteamCommentWindow } from './comment-sync';
 import {
+
   chatService,
   conversationContext,
   sessionManager,
-  type ChatMessage,
-} from "../ai";
-import { steamProfileConfigScope } from "../config";
+} from '../ai';
+import { steamProfileConfigScope } from '../config';
 import {
   SteamAgentSession,
   SteamCommentState,
   SteamConversation,
-} from "../db/models";
-import { botLogger } from "../logger";
-import { runWithToolContext } from "../utils/types";
+} from '../db/models';
+import { env } from '../env';
+import { botLogger } from '../logger';
+import { runWithToolContext } from '../utils/types';
 import {
   buildSteamUserIdentity,
   steamIntegrationEnabled,
-} from "../utils/user-identity";
-import { env } from "../env";
+} from '../utils/user-identity';
 import {
   steamCommunityClient,
-  type SteamProfileComment,
-} from "./client";
-import { normalizeSteamProfileComment } from "./comment-format";
+
+} from './client';
+import { normalizeSteamProfileComment } from './comment-format';
 import {
   findDeletedSteamCommentIds,
-  type SteamCommentWindow,
-} from "./comment-sync";
-import { HeadlessChatSession } from "./headless-session";
+
+} from './comment-sync';
+import { HeadlessChatSession } from './headless-session';
 
 const STEAM_COMMENT_CHECK_OVERLAP_MS = 2 * 60_000;
 const STEAM_COMMENT_FETCH_COUNT = 100;
 const STEAM_CHAT_HISTORY_LIMIT = 25;
 const SEEN_COMMENT_CAP = 500;
 
-type CommentCheckReason = "startup" | "notification" | "queued";
+type CommentCheckReason = 'startup' | 'notification' | 'queued';
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -53,7 +56,7 @@ function toSteamCommentWindow(
 ): SteamCommentWindow {
   return {
     totalCount,
-    comments: comments.map((comment) => ({
+    comments: comments.map(comment => ({
       id: comment.id,
       date: comment.date,
     })),
@@ -78,7 +81,7 @@ function steamCommentToChatMessage(
 ): ChatMessage {
   const isBot = comment.authorSteamId === profileId;
   return {
-    author: isBot ? "Ruyi" : comment.authorName,
+    author: isBot ? 'Ruyi' : comment.authorName,
     content: comment.text,
     isBot,
   };
@@ -91,16 +94,16 @@ export function buildSteamChatHistory(
 ): ChatMessage[] {
   const sortedComments = sortCommentsOldestFirst(comments);
   const currentIndex = sortedComments.findIndex(
-    (comment) => comment.id === currentCommentId,
+    comment => comment.id === currentCommentId,
   );
-  const previousComments =
-    currentIndex >= 0
+  const previousComments
+    = currentIndex >= 0
       ? sortedComments.slice(0, currentIndex)
-      : sortedComments.filter((comment) => comment.id !== currentCommentId);
+      : sortedComments.filter(comment => comment.id !== currentCommentId);
 
   return previousComments
     .slice(-STEAM_CHAT_HISTORY_LIMIT)
-    .map((comment) => steamCommentToChatMessage(profileId, comment));
+    .map(comment => steamCommentToChatMessage(profileId, comment));
 }
 
 function commentWasAlreadyHandled(
@@ -108,13 +111,13 @@ function commentWasAlreadyHandled(
   seenIds: Set<string>,
   lastCheckedAt: Date,
 ): boolean {
-  const cutoff =
-    seenIds.size > 0
+  const cutoff
+    = seenIds.size > 0
       ? lastCheckedAt.getTime() - STEAM_COMMENT_CHECK_OVERLAP_MS
       : lastCheckedAt.getTime();
   return (
-    seenIds.has(comment.id) ||
-    comment.date.getTime() <= cutoff
+    seenIds.has(comment.id)
+    || comment.date.getTime() <= cutoff
   );
 }
 
@@ -126,20 +129,20 @@ class SteamProfileCommentService {
 
   async start(): Promise<void> {
     if (!steamIntegrationEnabled()) {
-      botLogger.info("Steam profile comment chat disabled");
+      botLogger.info('Steam profile comment chat disabled');
       return;
     }
-    if (this.running) return;
+    if (this.running) { return; }
     this.running = true;
 
     try {
       await steamCommunityClient.start();
       this.subscribeToCommentNotifications();
-      await this.checkComments("startup");
+      await this.checkComments('startup');
     } catch (error) {
       botLogger.error(
         { error: getErrorMessage(error) },
-        "Steam profile comment service failed during startup",
+        'Steam profile comment service failed during startup',
       );
     }
   }
@@ -153,16 +156,16 @@ class SteamProfileCommentService {
   }
 
   private subscribeToCommentNotifications(): void {
-    if (this.unsubscribeCommentNotifications) return;
+    if (this.unsubscribeCommentNotifications) { return; }
 
-    this.unsubscribeCommentNotifications =
-      steamCommunityClient.onCommentNotification((count, myItems, discussions) => {
+    this.unsubscribeCommentNotifications
+      = steamCommunityClient.onCommentNotification((count, myItems, discussions) => {
         botLogger.debug(
           { count, myItems, discussions },
-          "Steam comment notification received",
+          'Steam comment notification received',
         );
-        if (myItems <= 0) return;
-        void this.checkComments("notification");
+        if (myItems <= 0) { return; }
+        void this.checkComments('notification');
       });
   }
 
@@ -176,19 +179,19 @@ class SteamProfileCommentService {
     try {
       const profileId = env.STEAM_BOT_STEAM_ID64;
       if (!profileId) {
-        throw new TypeError("Steam bot profile ID is not configured");
+        throw new TypeError('Steam bot profile ID is not configured');
       }
       await this.processProfileComments(profileId, reason);
     } catch (error) {
       botLogger.error(
         { reason, error: getErrorMessage(error) },
-        "Steam profile comment check failed",
+        'Steam profile comment check failed',
       );
     } finally {
       this.processing = false;
       if (this.pendingCheck && this.running) {
         this.pendingCheck = false;
-        void this.checkComments("queued");
+        void this.checkComments('queued');
       }
     }
   }
@@ -202,7 +205,7 @@ class SteamProfileCommentService {
       STEAM_COMMENT_FETCH_COUNT,
     );
     const { comments, totalCount } = page;
-    const commentIds = comments.map((comment) => comment.id);
+    const commentIds = comments.map(comment => comment.id);
     const deletedIds = await this.syncDeletedProfileComments(
       profileId,
       toSteamCommentWindow(comments, totalCount),
@@ -217,7 +220,7 @@ class SteamProfileCommentService {
       });
       botLogger.info(
         { profileId, reason },
-        "Initialized Steam profile comment state",
+        'Initialized Steam profile comment state',
       );
       return;
     }
@@ -262,7 +265,7 @@ class SteamProfileCommentService {
         replied: processedIds.length,
         deleted: deletedIds.length,
       },
-      "Steam profile comments checked",
+      'Steam profile comments checked',
     );
   }
 
@@ -274,21 +277,21 @@ class SteamProfileCommentService {
       { profileId },
       { messages: 1 },
     );
-    if (!conversation || conversation.messages.length === 0) return [];
+    if (!conversation || conversation.messages.length === 0) { return []; }
 
     const deletedIds = findDeletedSteamCommentIds(
-      conversation.messages.map((message) => ({
+      conversation.messages.map(message => ({
         commentId: message.commentId,
         timestamp: message.timestamp,
       })),
       visibleWindow,
     );
-    if (deletedIds.length === 0) return [];
+    if (deletedIds.length === 0) { return []; }
 
     const activeSessionMatchesDeletedComment = await SteamAgentSession.exists({
       profileId,
       isActive: true,
-      provider: "openai-agents",
+      provider: 'openai-agents',
       processedCommentIds: { $in: deletedIds },
     });
 
@@ -311,7 +314,7 @@ class SteamProfileCommentService {
     ]);
 
     if (activeSessionMatchesDeletedComment) {
-      await sessionManager.invalidate(profileId, "steam");
+      await sessionManager.invalidate(profileId, 'steam');
     }
 
     botLogger.info(
@@ -320,7 +323,7 @@ class SteamProfileCommentService {
         deletedCommentIds: deletedIds,
         invalidatedSession: Boolean(activeSessionMatchesDeletedComment),
       },
-      "Removed deleted Steam comments from local context",
+      'Removed deleted Steam comments from local context',
     );
 
     return deletedIds;
@@ -339,7 +342,7 @@ class SteamProfileCommentService {
 
     const reply = await runWithToolContext(
       {
-        surface: "steam",
+        surface: 'steam',
         identity,
         message: null,
         channel: null,
@@ -349,8 +352,8 @@ class SteamProfileCommentService {
       },
       () =>
         chatService.chat({
-          surface: "steam",
-          surfaceLabel: "Steam profile comments on Ruyi's bot profile",
+          surface: 'steam',
+          surfaceLabel: 'Steam profile comments on Ruyi\'s bot profile',
           identity,
           userMessage,
           username: authorName,
@@ -372,7 +375,7 @@ class SteamProfileCommentService {
     if (!reply) {
       botLogger.warn(
         { profileId, commentId, authorSteamId },
-        "Steam profile comment produced no reply",
+        'Steam profile comment produced no reply',
       );
       return;
     }
@@ -386,7 +389,7 @@ class SteamProfileCommentService {
     if (!steamReply) {
       botLogger.warn(
         { profileId, commentId, authorSteamId },
-        "Steam profile comment reply was empty after normalization",
+        'Steam profile comment reply was empty after normalization',
       );
       return;
     }
@@ -398,7 +401,7 @@ class SteamProfileCommentService {
     await conversationContext.rememberSteamMessage({
       profileId,
       authorSteamId: profileId,
-      authorName: "Ruyi",
+      authorName: 'Ruyi',
       content: steamReply,
       isBot: true,
       commentId:
@@ -414,7 +417,7 @@ class SteamProfileCommentService {
         removedUnsupportedFormatting,
         convertedAlignmentSpaces,
       },
-      "Replied to Steam profile comment",
+      'Replied to Steam profile comment',
     );
   }
 }

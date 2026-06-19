@@ -1,9 +1,10 @@
-import mongoose, { Schema, type Model } from "mongoose";
+import type { Model } from 'mongoose';
+import mongoose, { Schema } from 'mongoose';
 
 export interface IDiscordAgentSession {
   channelId: string;
   sessionId: string;
-  provider: "openai-agents";
+  provider: 'openai-agents';
   model: string;
   summary?: string;
   summaryUpdatedAt?: Date;
@@ -24,8 +25,8 @@ export interface IDiscordAssistantReplyLink {
   updatedAt: Date;
 }
 
-const DiscordAssistantReplyLinkSchema =
-  new Schema<IDiscordAssistantReplyLink>(
+const DiscordAssistantReplyLinkSchema
+  = new Schema<IDiscordAssistantReplyLink>(
     {
       userMessageId: { type: String, required: true, index: true },
       assistantMessageIds: { type: [String], default: [] },
@@ -38,7 +39,7 @@ const DiscordAssistantReplyLinkSchema =
 const DiscordAgentSessionSchema = new Schema<IDiscordAgentSession>({
   channelId: { type: String, required: true, unique: true, index: true },
   sessionId: { type: String, required: true },
-  provider: { type: String, enum: ["openai-agents"], default: "openai-agents" },
+  provider: { type: String, enum: ['openai-agents'], default: 'openai-agents' },
   model: { type: String, required: true },
   summary: { type: String },
   summaryUpdatedAt: { type: Date },
@@ -52,12 +53,12 @@ const DiscordAgentSessionSchema = new Schema<IDiscordAgentSession>({
   promptVersion: { type: String },
 });
 
-export const DiscordAgentSession: Model<IDiscordAgentSession> =
-  (mongoose.models.DiscordAgentSession as
-    | Model<IDiscordAgentSession>
-    | undefined) ??
-  mongoose.model<IDiscordAgentSession>(
-    "DiscordAgentSession",
-    DiscordAgentSessionSchema,
-    "discord_agent_sessions",
-  );
+export const DiscordAgentSession: Model<IDiscordAgentSession>
+  = (mongoose.models.DiscordAgentSession as
+  | Model<IDiscordAgentSession>
+  | undefined)
+?? mongoose.model<IDiscordAgentSession>(
+  'DiscordAgentSession',
+  DiscordAgentSessionSchema,
+  'discord_agent_sessions',
+);

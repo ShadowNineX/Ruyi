@@ -1,11 +1,11 @@
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
-import { Readability, isProbablyReaderable } from "@mozilla/readability";
-import { tool } from "@openai/agents";
-import { JSDOM, VirtualConsole } from "jsdom";
-import { z } from "zod";
-import { toolLogger } from "../logger";
-import { formatError, toolContextManager } from "../utils/types";
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
+import { isProbablyReaderable, Readability } from '@mozilla/readability';
+import { tool } from '@openai/agents';
+import { JSDOM, VirtualConsole } from 'jsdom';
+import { z } from 'zod';
+import { toolLogger } from '../logger';
+import { formatError, toolContextManager } from '../utils/types';
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 5;
@@ -14,44 +14,44 @@ const REVERSE_IMAGE_MAX_RESPONSE_BYTES = 256 * 1024;
 const DEFAULT_TEXT_CHARS = 8_000;
 const MAX_TEXT_CHARS = 12_000;
 const REVERSE_IMAGE_FETCH_MAX_TEXT_CHARS = 3_000;
-const USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-  "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
+const USER_AGENT
+  = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+    + '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';
 const BROWSER_HEADERS = {
-  Accept:
-    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif," +
-    "image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-  "Accept-Language": "en-US,en;q=0.9",
-  "Cache-Control": "no-cache",
-  Pragma: "no-cache",
-  Priority: "u=0, i",
-  "Sec-CH-UA": `"Google Chrome";v="149", "Chromium";v="149", "Not_A Brand";v="99"`,
-  "Sec-CH-UA-Mobile": "?0",
-  "Sec-CH-UA-Platform": `"Windows"`,
-  "Sec-Fetch-Dest": "document",
-  "Sec-Fetch-Mode": "navigate",
-  "Sec-Fetch-Site": "none",
-  "Sec-Fetch-User": "?1",
-  "Upgrade-Insecure-Requests": "1",
-  "User-Agent": USER_AGENT,
+  'Accept':
+    'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,'
+    + 'image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Cache-Control': 'no-cache',
+  'Pragma': 'no-cache',
+  'Priority': 'u=0, i',
+  'Sec-CH-UA': `"Google Chrome";v="149", "Chromium";v="149", "Not_A Brand";v="99"`,
+  'Sec-CH-UA-Mobile': '?0',
+  'Sec-CH-UA-Platform': `"Windows"`,
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'Upgrade-Insecure-Requests': '1',
+  'User-Agent': USER_AGENT,
 } as const satisfies HeadersInit;
 const HTML_FALLBACK_REMOVE_SELECTORS = [
-  "script",
-  "style",
-  "noscript",
-  "template",
-  "svg",
-  "canvas",
-  "iframe",
-  "nav",
-  "aside",
-  "form",
-  "button",
-  "select",
-  "textarea",
-  "header",
-  "footer",
-].join(",");
+  'script',
+  'style',
+  'noscript',
+  'template',
+  'svg',
+  'canvas',
+  'iframe',
+  'nav',
+  'aside',
+  'form',
+  'button',
+  'select',
+  'textarea',
+  'header',
+  'footer',
+].join(',');
 
 interface FetchResponse {
   response: Response;
@@ -68,7 +68,7 @@ interface ReadTextResult {
 interface PreparedTextResult {
   text: string;
   charTruncated: boolean;
-  extractionMethod: "raw" | "readability" | "dom_text" | "plain_text";
+  extractionMethod: 'raw' | 'readability' | 'dom_text' | 'plain_text';
   title?: string | null;
   excerpt?: string | null;
   byline?: string | null;
@@ -86,20 +86,20 @@ function clampMaxChars(value: number | null): number {
 
 function parseHttpUrl(value: string): URL {
   const url = new URL(value.trim());
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Only http and https URLs can be fetched");
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('Only http and https URLs can be fetched');
   }
   if (url.username || url.password) {
-    throw new Error("URLs with embedded credentials are not allowed");
+    throw new Error('URLs with embedded credentials are not allowed');
   }
   return url;
 }
 
 function parseIPv4(value: string): number[] | null {
-  const parts = value.split(".").map((part) => Number.parseInt(part, 10));
+  const parts = value.split('.').map(part => Number.parseInt(part, 10));
   if (
-    parts.length !== 4 ||
-    parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)
+    parts.length !== 4
+    || parts.some(part => Number.isNaN(part) || part < 0 || part > 255)
   ) {
     return null;
   }
@@ -108,75 +108,75 @@ function parseIPv4(value: string): number[] | null {
 
 function isBlockedIPv4(value: string): boolean {
   const parts = parseIPv4(value);
-  if (!parts) return true;
+  if (!parts) { return true; }
 
   const [a, b] = parts;
-  if (a === undefined || b === undefined) return true;
+  if (a === undefined || b === undefined) { return true; }
 
   return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && (b === 0 || b === 168)) ||
-    (a === 198 && (b === 18 || b === 19)) ||
-    a >= 224
+    a === 0
+    || a === 10
+    || a === 127
+    || (a === 100 && b >= 64 && b <= 127)
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && (b === 0 || b === 168))
+    || (a === 198 && (b === 18 || b === 19))
+    || a >= 224
   );
 }
 
 function isBlockedIPv6(value: string): boolean {
   const normalized = value.toLowerCase();
-  if (normalized === "::" || normalized === "::1") return true;
-  if (normalized.startsWith("::ffff:")) {
-    return isBlockedIp(normalized.slice("::ffff:".length));
+  if (normalized === '::' || normalized === '::1') { return true; }
+  if (normalized.startsWith('::ffff:')) {
+    return isBlockedIp(normalized.slice('::ffff:'.length));
   }
 
-  const firstSegment = normalized.split(":")[0] ?? "";
-  const first = Number.parseInt(firstSegment || "0", 16);
-  if (Number.isNaN(first)) return true;
+  const firstSegment = normalized.split(':')[0] ?? '';
+  const first = Number.parseInt(firstSegment || '0', 16);
+  if (Number.isNaN(first)) { return true; }
 
   return (
-    normalized.startsWith("2001:db8") ||
-    (first & 0xfe00) === 0xfc00 ||
-    (first & 0xffc0) === 0xfe80 ||
-    (first & 0xff00) === 0xff00
+    normalized.startsWith('2001:db8')
+    || (first & 0xFE00) === 0xFC00
+    || (first & 0xFFC0) === 0xFE80
+    || (first & 0xFF00) === 0xFF00
   );
 }
 
 function isBlockedIp(value: string): boolean {
   const ipVersion = isIP(value);
-  if (ipVersion === 4) return isBlockedIPv4(value);
-  if (ipVersion === 6) return isBlockedIPv6(value);
+  if (ipVersion === 4) { return isBlockedIPv4(value); }
+  if (ipVersion === 6) { return isBlockedIPv6(value); }
   return true;
 }
 
 async function assertPublicHostname(hostname: string): Promise<void> {
   const normalized = hostname.toLowerCase();
   if (
-    normalized === "localhost" ||
-    normalized.endsWith(".localhost") ||
-    normalized === "ip6-localhost"
+    normalized === 'localhost'
+    || normalized.endsWith('.localhost')
+    || normalized === 'ip6-localhost'
   ) {
-    throw new Error("Localhost URLs are not allowed");
+    throw new Error('Localhost URLs are not allowed');
   }
 
   if (isIP(normalized) !== 0) {
     if (isBlockedIp(normalized)) {
-      throw new Error("Private, local, or reserved IP URLs are not allowed");
+      throw new Error('Private, local, or reserved IP URLs are not allowed');
     }
     return;
   }
 
   const addresses = await lookup(normalized, { all: true });
   if (addresses.length === 0) {
-    throw new Error("Could not resolve URL hostname");
+    throw new Error('Could not resolve URL hostname');
   }
 
-  const blocked = addresses.find((address) => isBlockedIp(address.address));
+  const blocked = addresses.find(address => isBlockedIp(address.address));
   if (blocked) {
-    throw new Error("URL resolves to a private, local, or reserved address");
+    throw new Error('URL resolves to a private, local, or reserved address');
   }
 }
 
@@ -200,8 +200,8 @@ async function fetchOnce(url: URL): Promise<Response> {
   const { controller, timeout } = timeoutSignal(FETCH_TIMEOUT_MS);
   try {
     return await fetch(url, {
-      method: "GET",
-      redirect: "manual",
+      method: 'GET',
+      redirect: 'manual',
       signal: controller.signal,
       headers: BROWSER_HEADERS,
     });
@@ -215,7 +215,7 @@ async function fetchWithRedirects(url: string): Promise<FetchResponse> {
 
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
     const response = await fetchOnce(currentUrl);
-    const location = response.headers.get("location");
+    const location = response.headers.get('location');
     const isRedirect = response.status >= 300 && response.status < 400;
 
     if (!isRedirect || !location) {
@@ -233,20 +233,20 @@ async function fetchWithRedirects(url: string): Promise<FetchResponse> {
 }
 
 function isTextualContentType(contentType: string): boolean {
-  const mediaType = contentType.split(";")[0]?.trim().toLowerCase() ?? "";
-  if (!mediaType) return true;
-  if (mediaType.startsWith("text/")) return true;
-  if (mediaType.endsWith("+json") || mediaType.endsWith("+xml")) return true;
+  const mediaType = contentType.split(';')[0]?.trim().toLowerCase() ?? '';
+  if (!mediaType) { return true; }
+  if (mediaType.startsWith('text/')) { return true; }
+  if (mediaType.endsWith('+json') || mediaType.endsWith('+xml')) { return true; }
 
   return [
-    "application/json",
-    "application/javascript",
-    "application/x-javascript",
-    "application/xml",
-    "application/xhtml+xml",
-    "application/rss+xml",
-    "application/atom+xml",
-    "image/svg+xml",
+    'application/json',
+    'application/javascript',
+    'application/x-javascript',
+    'application/xml',
+    'application/xhtml+xml',
+    'application/rss+xml',
+    'application/atom+xml',
+    'image/svg+xml',
   ].includes(mediaType);
 }
 
@@ -255,7 +255,7 @@ async function readResponseText(
   maxResponseBytes = MAX_RESPONSE_BYTES,
 ): Promise<ReadTextResult> {
   if (!response.body) {
-    return { text: "", bytesRead: 0, byteTruncated: false };
+    return { text: '', bytesRead: 0, byteTruncated: false };
   }
 
   const reader = response.body.getReader();
@@ -265,8 +265,8 @@ async function readResponseText(
 
   while (bytesRead < maxResponseBytes) {
     const { value, done } = await reader.read();
-    if (done) break;
-    if (!value) continue;
+    if (done) { break; }
+    if (!value) { continue; }
 
     const remaining = maxResponseBytes - bytesRead;
     if (value.byteLength > remaining) {
@@ -294,24 +294,24 @@ async function readResponseText(
   }
 
   return {
-    text: new TextDecoder("utf-8", { fatal: false }).decode(bytes),
+    text: new TextDecoder('utf-8', { fatal: false }).decode(bytes),
     bytesRead,
     byteTruncated,
   };
 }
 
 function normalizeWhitespace(value: string): string {
-  let result = "";
+  let result = '';
   let pendingSpace = false;
   let pendingNewlines = 0;
 
   for (const char of value) {
-    if (char === " " || char === "\t") {
+    if (char === ' ' || char === '\t') {
       pendingSpace = true;
       continue;
     }
 
-    if (char === "\n") {
+    if (char === '\n') {
       pendingSpace = false;
       pendingNewlines = Math.min(pendingNewlines + 1, 2);
       continue;
@@ -319,11 +319,11 @@ function normalizeWhitespace(value: string): string {
 
     if (pendingNewlines > 0) {
       result = result.trimEnd();
-      result += pendingNewlines === 1 ? "\n" : "\n\n";
+      result += pendingNewlines === 1 ? '\n' : '\n\n';
       pendingNewlines = 0;
       pendingSpace = false;
     } else if (pendingSpace && result.length > 0) {
-      result += " ";
+      result += ' ';
       pendingSpace = false;
     }
 
@@ -334,14 +334,14 @@ function normalizeWhitespace(value: string): string {
 }
 
 function normalizeText(value: string): string {
-  return normalizeWhitespace(value.replaceAll("\r", ""));
+  return normalizeWhitespace(value.replaceAll('\r', ''));
 }
 
 function parseHtmlDocument(html: string, finalUrl: string): Document {
   const virtualConsole = new VirtualConsole();
   const dom = new JSDOM(html, {
     url: finalUrl,
-    contentType: "text/html",
+    contentType: 'text/html',
     virtualConsole,
   });
   return dom.window.document;
@@ -355,13 +355,13 @@ function removeNoisyFallbackNodes(document: Document): void {
 
 function getFallbackDocumentText(document: Document): string {
   removeNoisyFallbackNodes(document);
-  return document.body?.textContent ?? document.documentElement.textContent ?? "";
+  return document.body?.textContent ?? document.documentElement.textContent ?? '';
 }
 
 function extractReadableHtmlText(
   html: string,
   finalUrl: string,
-): Omit<PreparedTextResult, "charTruncated"> {
+): Omit<PreparedTextResult, 'charTruncated'> {
   const document = parseHtmlDocument(html, finalUrl);
   const readerable = isProbablyReaderable(document, {
     minContentLength: 80,
@@ -370,12 +370,12 @@ function extractReadableHtmlText(
   const article = new Readability(document.cloneNode(true) as Document, {
     charThreshold: 200,
   }).parse();
-  const articleText = normalizeText(article?.textContent ?? "");
+  const articleText = normalizeText(article?.textContent ?? '');
 
   if (articleText && (readerable || articleText.length >= 200)) {
     return {
       text: articleText,
-      extractionMethod: "readability",
+      extractionMethod: 'readability',
       title: article?.title ?? null,
       excerpt: article?.excerpt ?? null,
       byline: article?.byline ?? null,
@@ -388,7 +388,7 @@ function extractReadableHtmlText(
   const fallbackText = normalizeText(getFallbackDocumentText(document));
   return {
     text: fallbackText,
-    extractionMethod: "dom_text",
+    extractionMethod: 'dom_text',
   };
 }
 
@@ -399,18 +399,18 @@ function prepareText(
   maxChars: number,
   finalUrl: string,
 ): PreparedTextResult {
-  let prepared: Omit<PreparedTextResult, "charTruncated">;
+  let prepared: Omit<PreparedTextResult, 'charTruncated'>;
   if (raw) {
     prepared = {
       text: text.trim(),
-      extractionMethod: "raw",
+      extractionMethod: 'raw',
     };
-  } else if (contentType.includes("html")) {
+  } else if (contentType.includes('html')) {
     prepared = extractReadableHtmlText(text, finalUrl);
   } else {
     prepared = {
       text: normalizeText(text),
-      extractionMethod: "plain_text",
+      extractionMethod: 'plain_text',
     };
   }
 
@@ -442,20 +442,20 @@ function logFetchResponse(result: {
   contentType: string | null;
   contentLength: number | null;
 }): void {
-  const level = result.ok ? "info" : "warn";
-  toolLogger[level](result, "URL fetch response received");
+  const level = result.ok ? 'info' : 'warn';
+  toolLogger[level](result, 'URL fetch response received');
 }
 
 export const fetchUrlTool = tool({
-  name: "fetch_url",
+  name: 'fetch_url',
   description:
-    "Fetch text content from a specific public HTTP/HTTPS URL. Use this when the user gives a URL and asks you to read, summarize, inspect, or quote from that page. For finding URLs, use web search first.",
+    'Fetch text content from a specific public HTTP/HTTPS URL. Use this when the user gives a URL and asks you to read, summarize, inspect, or quote from that page. For finding URLs, use web search first.',
   parameters: z.object({
     url: z
       .string()
       .min(1)
       .max(2048)
-      .describe("The public http or https URL to fetch."),
+      .describe('The public http or https URL to fetch.'),
     max_chars: z
       .number()
       .nullable()
@@ -465,22 +465,22 @@ export const fetchUrlTool = tool({
     raw: z
       .boolean()
       .nullable()
-      .describe("If true, return raw text/HTML instead of cleaned page text."),
+      .describe('If true, return raw text/HTML instead of cleaned page text.'),
     include_headers: z
       .boolean()
       .nullable()
-      .describe("Whether to include response headers. Defaults to false."),
+      .describe('Whether to include response headers. Defaults to false.'),
   }),
   timeoutMs: FETCH_TIMEOUT_MS + 5_000,
-  timeoutBehavior: "error_as_result",
+  timeoutBehavior: 'error_as_result',
   execute: async ({ url, max_chars, raw, include_headers }) => {
-    const budgetDecision = toolContextManager.consumeToolCall("fetch_url");
+    const budgetDecision = toolContextManager.consumeToolCall('fetch_url');
     if (!budgetDecision.allowed) {
       return toolContextManager.budgetDeniedResult(budgetDecision);
     }
 
-    const reverseImageWorkflow =
-      toolContextManager.isReverseImageWorkflowActive();
+    const reverseImageWorkflow
+      = toolContextManager.isReverseImageWorkflowActive();
     const maxChars = reverseImageWorkflow
       ? Math.min(clampMaxChars(max_chars), REVERSE_IMAGE_FETCH_MAX_TEXT_CHARS)
       : clampMaxChars(max_chars);
@@ -489,12 +489,12 @@ export const fetchUrlTool = tool({
     try {
       toolLogger.info(
         { url, maxChars, reverseImageWorkflow },
-        "Fetching URL",
+        'Fetching URL',
       );
 
       const { response, finalUrl, redirectCount } = await fetchWithRedirects(url);
-      const contentType = response.headers.get("content-type") ?? "";
-      const contentLength = response.headers.get("content-length");
+      const contentType = response.headers.get('content-type') ?? '';
+      const contentLength = response.headers.get('content-length');
       const baseResult = {
         success: true,
         requestedUrl: url,
@@ -527,13 +527,13 @@ export const fetchUrlTool = tool({
             contentType: baseResult.contentType,
             contentLength: baseResult.contentLength,
           },
-          "URL fetch skipped non-text body",
+          'URL fetch skipped non-text body',
         );
 
         return {
           ...baseResult,
           text: null,
-          note: "Response is not a recognized text content type, so the body was not returned.",
+          note: 'Response is not a recognized text content type, so the body was not returned.',
         };
       }
 
@@ -563,7 +563,7 @@ export const fetchUrlTool = tool({
           textChars: prepared.text.length,
           extractionMethod: prepared.extractionMethod,
         },
-        "URL fetch body processed",
+        'URL fetch body processed',
       );
 
       return {
@@ -582,8 +582,8 @@ export const fetchUrlTool = tool({
       };
     } catch (error) {
       const errorMessage = formatError(error);
-      toolLogger.error({ url, error: errorMessage }, "URL fetch failed");
-      return { error: "Failed to fetch URL", details: errorMessage };
+      toolLogger.error({ url, error: errorMessage }, 'URL fetch failed');
+      return { error: 'Failed to fetch URL', details: errorMessage };
     }
   },
 });

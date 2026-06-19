@@ -1,4 +1,4 @@
-import { createStore } from "@tanstack/store";
+import { createStore } from '@tanstack/store';
 
 export interface ActiveChatTurn {
   controller: AbortController;
@@ -28,7 +28,7 @@ export function getActivePresenceSession(): symbol | null {
 }
 
 export function setActivePresenceSession(session: symbol | null): void {
-  botStore.setState((state) => ({ ...state, activePresenceSession: session }));
+  botStore.setState(state => ({ ...state, activePresenceSession: session }));
 }
 
 export function getPresenceResetTimer(): PresenceResetTimer | null {
@@ -36,7 +36,7 @@ export function getPresenceResetTimer(): PresenceResetTimer | null {
 }
 
 export function setPresenceResetTimer(timer: PresenceResetTimer | null): void {
-  botStore.setState((state) => ({ ...state, presenceResetTimer: timer }));
+  botStore.setState(state => ({ ...state, presenceResetTimer: timer }));
 }
 
 export function getActiveChatTurn(

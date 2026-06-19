@@ -1,11 +1,11 @@
-import { z } from "zod";
-import { env } from "../env";
-import { formatError } from "../utils/types";
+import { z } from 'zod';
+import { env } from '../env';
+import { formatError } from '../utils/types';
 
-const SCRAPECREATORS_BASE_URL = "https://api.scrapecreators.com";
+const SCRAPECREATORS_BASE_URL = 'https://api.scrapecreators.com';
 const SCRAPECREATORS_TIMEOUT_MS = 20_000;
 
-export const SCRAPECREATORS_DASHBOARD_URL = "https://app.scrapecreators.com/";
+export const SCRAPECREATORS_DASHBOARD_URL = 'https://app.scrapecreators.com/';
 
 type ScrapeCreatorsParamValue = string | number | boolean | undefined;
 
@@ -28,7 +28,7 @@ export class ScrapeCreatorsApiError extends Error {
 
   constructor(message: string, status?: number) {
     super(message);
-    this.name = "ScrapeCreatorsApiError";
+    this.name = 'ScrapeCreatorsApiError';
     this.status = status;
   }
 }
@@ -44,7 +44,7 @@ function buildScrapeCreatorsUrl(
   const url = new URL(path, SCRAPECREATORS_BASE_URL);
 
   for (const [key, value] of Object.entries(params)) {
-    if (value === undefined) continue;
+    if (value === undefined) { continue; }
     url.searchParams.set(key, String(value));
   }
 
@@ -53,7 +53,7 @@ function buildScrapeCreatorsUrl(
 
 function getScrapeCreatorsErrorMessage(body: unknown): string | null {
   const parsed = scrapeCreatorsErrorSchema.safeParse(body);
-  if (!parsed.success) return null;
+  if (!parsed.success) { return null; }
   return parsed.data.message ?? parsed.data.error ?? null;
 }
 
@@ -61,10 +61,10 @@ function formatZodIssues(error: z.ZodError): string {
   return error.issues
     .slice(0, 5)
     .map((issue) => {
-      const path = issue.path.length > 0 ? issue.path.join(".") : "<root>";
+      const path = issue.path.length > 0 ? issue.path.join('.') : '<root>';
       return `${path}: ${issue.message}`;
     })
-    .join("; ");
+    .join('; ');
 }
 
 export function parseScrapeCreatorsSchema<T>(
@@ -73,7 +73,7 @@ export function parseScrapeCreatorsSchema<T>(
   context: string,
 ): T {
   const parsed = schema.safeParse(body);
-  if (parsed.success) return parsed.data;
+  if (parsed.success) { return parsed.data; }
 
   throw new ScrapeCreatorsApiError(
     `ScrapeCreators ${context} response had an unexpected shape: ${formatZodIssues(parsed.error)}`,
@@ -82,7 +82,7 @@ export function parseScrapeCreatorsSchema<T>(
 
 async function parseJsonResponse(
   response: Response,
-  options: Pick<ScrapeCreatorsFetchOptions, "logDebug" | "nonJsonLogMessage">,
+  options: Pick<ScrapeCreatorsFetchOptions, 'logDebug' | 'nonJsonLogMessage'>,
 ): Promise<unknown> {
   try {
     return (await response.json()) as unknown;
@@ -106,8 +106,8 @@ export async function fetchScrapeCreatorsJson(
     buildScrapeCreatorsUrl(options.path, options.params),
     {
       headers: {
-        Accept: "application/json",
-        "x-api-key": env.SCRAPECREATORS_API_KEY,
+        'Accept': 'application/json',
+        'x-api-key': env.SCRAPECREATORS_API_KEY,
       },
       signal: AbortSignal.timeout(SCRAPECREATORS_TIMEOUT_MS),
     },

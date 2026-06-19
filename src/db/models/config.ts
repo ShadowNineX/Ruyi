@@ -1,4 +1,5 @@
-import mongoose, { Schema, type Document } from "mongoose";
+import type { Document } from 'mongoose';
+import mongoose, { Schema } from 'mongoose';
 
 interface IConfig extends Document {
   key: string;
@@ -15,7 +16,7 @@ const ConfigSchema = new Schema<IConfig>({
   value: { type: String, required: true },
 });
 
-const Config = mongoose.model<IConfig>("Config", ConfigSchema);
+const Config = mongoose.model<IConfig>('Config', ConfigSchema);
 
 export async function getConfigValue(
   key: string,
@@ -41,7 +42,7 @@ export async function getConfigValuesByPrefix(
     { key: 1, value: 1, _id: 0 },
   ).lean();
 
-  return configs.map((config) => ({
+  return configs.map(config => ({
     key: config.key,
     value: config.value,
   }));

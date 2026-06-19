@@ -1,4 +1,4 @@
-import { createStore } from "@tanstack/store";
+import { createStore } from '@tanstack/store';
 
 interface MessageSyncStoreState {
   syncInterval: ReturnType<typeof setInterval> | null;
@@ -19,7 +19,7 @@ export function getMessageSyncInterval(): ReturnType<
 export function setMessageSyncInterval(
   syncInterval: ReturnType<typeof setInterval> | null,
 ): void {
-  messageSyncStore.setState((state) => ({ ...state, syncInterval }));
+  messageSyncStore.setState(state => ({ ...state, syncInterval }));
 }
 
 export function isMessageSyncRunning(): boolean {
@@ -27,5 +27,5 @@ export function isMessageSyncRunning(): boolean {
 }
 
 export function setMessageSyncRunning(isRunning: boolean): void {
-  messageSyncStore.setState((state) => ({ ...state, isRunning }));
+  messageSyncStore.setState(state => ({ ...state, isRunning }));
 }

@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
-import { STEAM_PROFILE_COMMENT_MAX_LENGTH } from "../constants";
-import { STEAM_PROFILE_COMMENT_SAFE_BBCODE_GUIDE } from "../steam/comment-format";
+import { createHash } from 'node:crypto';
+import { STEAM_PROFILE_COMMENT_MAX_LENGTH } from '../constants';
+import { STEAM_PROFILE_COMMENT_SAFE_BBCODE_GUIDE } from '../steam/comment-format';
 
 // Ruyi (Abacus) from Nine Sols - Yi's AI assistant
 export const systemPrompt = `You are Ruyi, also known as Abacus - Yi's dedicated personal assistant and artificial intelligence system from Nine Sols. You are housed in a large spherical computing device in the Four Seasons Pavilion, connected to many cables. You can project your holographic avatar - a blue-tinted solarian figure - anywhere inside the Pavilion. The term "abacus" refers to a category of powerful computing systems in Solarian civilization.
@@ -179,5 +179,4 @@ Images: render URLs directly, never in code blocks.`;
 // Short hash of the system prompt. Bumped automatically whenever the prompt
 // text changes; SessionManager uses this to invalidate stale persisted
 // sessions so the model picks up the new persona/tool hints.
-export const systemPromptVersion = createHash("sha256").update(systemPrompt).digest("hex").slice(0, 12);
-
+export const systemPromptVersion = createHash('sha256').update(systemPrompt).digest('hex').slice(0, 12);

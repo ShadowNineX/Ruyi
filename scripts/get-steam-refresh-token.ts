@@ -1,23 +1,23 @@
-import { stdin, stdout } from "node:process";
-import { createInterface } from "node:readline/promises";
-import { toString as qrToString } from "qrcode";
+import type { ApiRequest, ApiResponse, ITransport } from 'steam-session';
+import { stdin, stdout } from 'node:process';
+import { createInterface } from 'node:readline/promises';
+import { toString as qrToString } from 'qrcode';
 import {
   EAuthSessionGuardType,
   EAuthTokenPlatformType,
   LoginSession,
-} from "steam-session";
-import type { ApiRequest, ApiResponse, ITransport } from "steam-session";
+} from 'steam-session';
 
 const TOKEN_WAIT_TIMEOUT_MS = 90_000;
 const START_LOGIN_TIMEOUT_MS = 60_000;
 const START_LOGIN_STATUS_INTERVAL_MS = 10_000;
-const STEAM_WEB_API_BASE_URL = "https://api.steampowered.com";
-const MASKED_INPUT_FALLBACK_WARNING =
-  "Password input is not hidden because this terminal is not interactive.";
+const STEAM_WEB_API_BASE_URL = 'https://api.steampowered.com';
+const MASKED_INPUT_FALLBACK_WARNING
+  = 'Password input is not hidden because this terminal is not interactive.';
 
-const GET_REQUESTS = new Set(["IAuthenticationService/GetPasswordRSAPublicKey/v1"]);
+const GET_REQUESTS = new Set(['IAuthenticationService/GetPasswordRSAPublicKey/v1']);
 
-type LoginMode = "qr" | "password";
+type LoginMode = 'qr' | 'password';
 
 interface LoginCredentials {
   accountName: string;
@@ -25,13 +25,13 @@ interface LoginCredentials {
   guardCode: string | null;
 }
 
-type StartCredentialsResponse = Awaited<ReturnType<LoginSession["startWithCredentials"]>>;
-type StartQrResponse = Awaited<ReturnType<LoginSession["startWithQR"]>>;
+type StartCredentialsResponse = Awaited<ReturnType<LoginSession['startWithCredentials']>>;
+type StartQrResponse = Awaited<ReturnType<LoginSession['startWithQR']>>;
 type StartSessionResponse = StartCredentialsResponse | StartQrResponse;
 
 interface AuthenticationWaiter {
   promise: Promise<void>;
-  cancel(): void;
+  cancel: () => void;
 }
 
 class SteamWebApiTransport implements ITransport {
@@ -43,27 +43,27 @@ class SteamWebApiTransport implements ITransport {
     let body: FormData | undefined;
 
     if (request.accessToken) {
-      url.searchParams.set("access_token", request.accessToken);
+      url.searchParams.set('access_token', request.accessToken);
     }
 
     if (request.requestData && request.requestData.length > 0) {
-      const encodedRequest = Buffer.from(request.requestData).toString("base64");
+      const encodedRequest = Buffer.from(request.requestData).toString('base64');
       if (isGetRequest) {
-        url.searchParams.set("input_protobuf_encoded", encodedRequest);
+        url.searchParams.set('input_protobuf_encoded', encodedRequest);
       } else {
         body = new FormData();
-        body.set("input_protobuf_encoded", encodedRequest);
+        body.set('input_protobuf_encoded', encodedRequest);
       }
     }
 
     const response = await fetch(url, {
-      method: isGetRequest ? "GET" : "POST",
+      method: isGetRequest ? 'GET' : 'POST',
       headers,
       body,
     });
 
-    const resultHeader = response.headers.get("x-eresult");
-    const errorMessage = response.headers.get("x-error_message") ?? undefined;
+    const resultHeader = response.headers.get('x-eresult');
+    const errorMessage = response.headers.get('x-error_message') ?? undefined;
     if (!response.ok) {
       throw new Error(`Steam Web API returned HTTP ${response.status}`);
     }
@@ -82,13 +82,13 @@ class SteamWebApiTransport implements ITransport {
 
 function getArgValue(name: string): string | null {
   const prefix = `--${name}=`;
-  const value = process.argv.find((arg) => arg.startsWith(prefix));
+  const value = process.argv.find(arg => arg.startsWith(prefix));
   return value ? value.slice(prefix.length).trim() : null;
 }
 
 function getLoginMode(): LoginMode {
-  const mode = getArgValue("mode") ?? "qr";
-  if (mode === "qr" || mode === "password") return mode;
+  const mode = getArgValue('mode') ?? 'qr';
+  if (mode === 'qr' || mode === 'password') { return mode; }
   throw new Error('Unsupported mode. Use "--mode=qr" or "--mode=password".');
 }
 
@@ -109,30 +109,30 @@ async function readHiddenLine(prompt: string): Promise<string> {
 
   return new Promise<string>((resolve, reject) => {
     const wasRaw = stdin.isRaw;
-    let value = "";
+    let value = '';
 
     const cleanup = (): void => {
-      stdin.off("data", onData);
+      stdin.off('data', onData);
       stdin.setRawMode(wasRaw);
       stdin.pause();
-      stdout.write("\n");
+      stdout.write('\n');
     };
 
     const onData = (chunk: Buffer): void => {
-      for (const char of chunk.toString("utf8")) {
-        if (char === "\u0003") {
+      for (const char of chunk.toString('utf8')) {
+        if (char === '\u0003') {
           cleanup();
-          reject(new Error("Cancelled by user"));
+          reject(new Error('Cancelled by user'));
           return;
         }
 
-        if (char === "\r" || char === "\n") {
+        if (char === '\r' || char === '\n') {
           cleanup();
           resolve(value);
           return;
         }
 
-        if (char === "\u007f" || char === "\b") {
+        if (char === '\u007F' || char === '\b') {
           value = value.slice(0, -1);
           continue;
         }
@@ -144,38 +144,38 @@ async function readHiddenLine(prompt: string): Promise<string> {
     stdout.write(prompt);
     stdin.setRawMode(true);
     stdin.resume();
-    stdin.on("data", onData);
+    stdin.on('data', onData);
   });
 }
 
 async function getCredentials(): Promise<LoginCredentials> {
-  const accountName =
-    getArgValue("account") ?? (await readLine("Steam account name: "));
+  const accountName
+    = getArgValue('account') ?? (await readLine('Steam account name: '));
   if (!accountName) {
-    throw new Error("Steam account name is required");
+    throw new Error('Steam account name is required');
   }
 
-  const password =
-    getArgValue("password") ?? (await readHiddenLine("Steam password: "));
+  const password
+    = getArgValue('password') ?? (await readHiddenLine('Steam password: '));
   if (!password) {
-    throw new Error("Steam password is required");
+    throw new Error('Steam password is required');
   }
 
-  return { accountName, password, guardCode: getArgValue("guard-code") };
+  return { accountName, password, guardCode: getArgValue('guard-code') };
 }
 
 function getJwtExpiry(token: string): Date | null {
-  const payloadSegment = token.split(".")[1];
-  if (!payloadSegment) return null;
+  const payloadSegment = token.split('.')[1];
+  if (!payloadSegment) { return null; }
 
   try {
     const payload: unknown = JSON.parse(
-      Buffer.from(payloadSegment, "base64url").toString("utf8"),
+      Buffer.from(payloadSegment, 'base64url').toString('utf8'),
     );
-    if (payload === null || typeof payload !== "object") return null;
+    if (payload === null || typeof payload !== 'object') { return null; }
 
     const exp = (payload as { exp?: unknown }).exp;
-    return typeof exp === "number" ? new Date(exp * 1000) : null;
+    return typeof exp === 'number' ? new Date(exp * 1000) : null;
   } catch {
     return null;
   }
@@ -184,8 +184,8 @@ function getJwtExpiry(token: string): Date | null {
 function printToken(refreshToken: string, steamId64: string): void {
   const expiresAt = getJwtExpiry(refreshToken);
 
-  stdout.write("\nSteam refresh token created.\n\n");
-  stdout.write("Add these to .env:\n\n");
+  stdout.write('\nSteam refresh token created.\n\n');
+  stdout.write('Add these to .env:\n\n');
   stdout.write(`STEAM_REFRESH_TOKEN=${refreshToken}\n`);
   stdout.write(`STEAM_BOT_STEAM_ID64=${steamId64}\n`);
 
@@ -194,7 +194,7 @@ function printToken(refreshToken: string, steamId64: string): void {
   }
 
   stdout.write(
-    "\nKeep this token private. It can log in as this Steam account.\n",
+    '\nKeep this token private. It can log in as this Steam account.\n',
   );
 }
 
@@ -207,7 +207,7 @@ function getElapsedSeconds(startedAt: number): number {
 }
 
 async function startWithQr(session: LoginSession): Promise<StartQrResponse> {
-  printStatus("Creating Steam QR login challenge.");
+  printStatus('Creating Steam QR login challenge.');
   return session.startWithQR();
 }
 
@@ -234,7 +234,7 @@ async function startWithCredentials(
         timeout = setTimeout(() => {
           reject(
             new Error(
-              "Timed out waiting for Steam to answer the login request. Steam may be slow, blocked, or unreachable from this terminal.",
+              'Timed out waiting for Steam to answer the login request. Steam may be slow, blocked, or unreachable from this terminal.',
             ),
           );
         }, START_LOGIN_TIMEOUT_MS);
@@ -255,13 +255,13 @@ async function startWithCredentials(
 function formatGuardAction(type: EAuthSessionGuardType): string {
   switch (type) {
     case EAuthSessionGuardType.EmailCode:
-      return "email code";
+      return 'email code';
     case EAuthSessionGuardType.DeviceCode:
-      return "Steam mobile app code";
+      return 'Steam mobile app code';
     case EAuthSessionGuardType.DeviceConfirmation:
-      return "Steam mobile app approval";
+      return 'Steam mobile app approval';
     case EAuthSessionGuardType.EmailConfirmation:
-      return "email approval";
+      return 'email approval';
     default:
       return EAuthSessionGuardType[type] ?? `guard type ${type}`;
   }
@@ -271,35 +271,35 @@ function hasGuardAction(
   response: StartSessionResponse,
   type: EAuthSessionGuardType,
 ): boolean {
-  return response.validActions?.some((action) => action.type === type) ?? false;
+  return response.validActions?.some(action => action.type === type) ?? false;
 }
 
 function formatGuardActions(response: StartSessionResponse): string {
   const actions = response.validActions ?? [];
-  if (actions.length === 0) return "none";
+  if (actions.length === 0) { return 'none'; }
 
   return actions
     .map((action) => {
       const label = formatGuardAction(action.type);
       return action.detail ? `${label} (${action.detail})` : label;
     })
-    .join(", ");
+    .join(', ');
 }
 
 async function printQrLogin(response: StartQrResponse): Promise<void> {
   if (!response.qrChallengeUrl) {
-    throw new Error("Steam did not return a QR challenge URL");
+    throw new Error('Steam did not return a QR challenge URL');
   }
 
   const qrCode = await qrToString(response.qrChallengeUrl, {
-    type: "terminal",
+    type: 'terminal',
     small: true,
     margin: 1,
   });
-  stdout.write("\n");
+  stdout.write('\n');
   stdout.write(qrCode);
-  stdout.write("\n");
-  stdout.write("Scan this QR code with the Steam mobile app.\n");
+  stdout.write('\n');
+  stdout.write('Scan this QR code with the Steam mobile app.\n');
   stdout.write(`Fallback URL: ${response.qrChallengeUrl}\n\n`);
 }
 
@@ -310,9 +310,9 @@ function createAuthenticationWaiter(session: LoginSession): AuthenticationWaiter
   const promise = new Promise<void>((resolve, reject) => {
     resolveWait = resolve;
     cleanup = (): void => {
-      session.off("authenticated", onAuthenticated);
-      session.off("timeout", onTimeout);
-      session.off("error", onError);
+      session.off('authenticated', onAuthenticated);
+      session.off('timeout', onTimeout);
+      session.off('error', onError);
     };
 
     const onAuthenticated = (): void => {
@@ -322,7 +322,7 @@ function createAuthenticationWaiter(session: LoginSession): AuthenticationWaiter
 
     const onTimeout = (): void => {
       cleanup();
-      reject(new Error("Timed out waiting for Steam authentication approval"));
+      reject(new Error('Timed out waiting for Steam authentication approval'));
     };
 
     const onError = (error: Error): void => {
@@ -330,9 +330,9 @@ function createAuthenticationWaiter(session: LoginSession): AuthenticationWaiter
       reject(error);
     };
 
-    session.once("authenticated", onAuthenticated);
-    session.once("timeout", onTimeout);
-    session.once("error", onError);
+    session.once('authenticated', onAuthenticated);
+    session.once('timeout', onTimeout);
+    session.once('error', onError);
   });
 
   return {
@@ -350,60 +350,60 @@ async function submitCodeIfNeeded(
   suppliedCode: string | null,
 ): Promise<void> {
   if (suppliedCode) {
-    printStatus("Submitting Steam Guard code from --guard-code.");
+    printStatus('Submitting Steam Guard code from --guard-code.');
     await session.submitSteamGuardCode(suppliedCode);
     return;
   }
 
-  const canApproveExternally =
-    hasGuardAction(response, EAuthSessionGuardType.DeviceConfirmation) ||
-    hasGuardAction(response, EAuthSessionGuardType.EmailConfirmation);
-  if (canApproveExternally) return;
+  const canApproveExternally
+    = hasGuardAction(response, EAuthSessionGuardType.DeviceConfirmation)
+      || hasGuardAction(response, EAuthSessionGuardType.EmailConfirmation);
+  if (canApproveExternally) { return; }
 
-  const needsCode =
-    hasGuardAction(response, EAuthSessionGuardType.EmailCode) ||
-    hasGuardAction(response, EAuthSessionGuardType.DeviceCode);
-  if (!needsCode) return;
+  const needsCode
+    = hasGuardAction(response, EAuthSessionGuardType.EmailCode)
+      || hasGuardAction(response, EAuthSessionGuardType.DeviceCode);
+  if (!needsCode) { return; }
 
-  const code = await readLine("Enter Steam Guard code: ");
+  const code = await readLine('Enter Steam Guard code: ');
   if (!code) {
-    throw new Error("Steam Guard code is required for this login");
+    throw new Error('Steam Guard code is required for this login');
   }
 
-  printStatus("Submitting Steam Guard code.");
+  printStatus('Submitting Steam Guard code.');
   await session.submitSteamGuardCode(code);
 }
 
 async function main(): Promise<void> {
-  printStatus("Starting one-time Steam refresh token login.");
+  printStatus('Starting one-time Steam refresh token login.');
   const mode = getLoginMode();
-  let guardCode = getArgValue("guard-code");
+  let guardCode = getArgValue('guard-code');
   printStatus(`Login mode: ${mode}.`);
 
   const session = new LoginSession(EAuthTokenPlatformType.SteamClient, {
-    machineFriendlyName: "Ruyi refresh token helper",
+    machineFriendlyName: 'Ruyi refresh token helper',
     transport: new SteamWebApiTransport(),
   });
   session.loginTimeout = TOKEN_WAIT_TIMEOUT_MS;
 
-  session.once("polling", () => {
-    printStatus("Waiting for Steam authentication to complete.");
+  session.once('polling', () => {
+    printStatus('Waiting for Steam authentication to complete.');
   });
-  session.once("remoteInteraction", () => {
-    printStatus("Steam mobile approval prompt was opened.");
+  session.once('remoteInteraction', () => {
+    printStatus('Steam mobile approval prompt was opened.');
   });
-  session.once("steamGuardMachineToken", () => {
-    printStatus("Steam issued a machine token for this device.");
+  session.once('steamGuardMachineToken', () => {
+    printStatus('Steam issued a machine token for this device.');
   });
-  session.on("debug", (message: unknown) => {
-    if (typeof message !== "string") return;
+  session.on('debug', (message: unknown) => {
+    if (typeof message !== 'string') { return; }
     printStatus(`Steam session: ${message}`);
   });
 
   const authentication = createAuthenticationWaiter(session);
   let response: StartSessionResponse;
 
-  if (mode === "qr") {
+  if (mode === 'qr') {
     try {
       response = await startWithQr(session);
       await printQrLogin(response);
@@ -415,7 +415,7 @@ async function main(): Promise<void> {
     const credentials = await getCredentials();
     guardCode = credentials.guardCode;
     printStatus(`Using Steam account "${credentials.accountName}".`);
-    printStatus("Submitting login to Steam.");
+    printStatus('Submitting login to Steam.');
     try {
       response = await startWithCredentials(session, credentials);
     } catch (error: unknown) {
@@ -427,21 +427,21 @@ async function main(): Promise<void> {
   if (response.actionRequired) {
     printStatus(`Steam Guard options: ${formatGuardActions(response)}.`);
     if (hasGuardAction(response, EAuthSessionGuardType.DeviceConfirmation)) {
-      printStatus("Approve this login in the Steam mobile app.");
+      printStatus('Approve this login in the Steam mobile app.');
     }
     if (hasGuardAction(response, EAuthSessionGuardType.EmailConfirmation)) {
-      printStatus("Approve the Steam login confirmation email.");
+      printStatus('Approve the Steam login confirmation email.');
     }
     await submitCodeIfNeeded(session, response, guardCode);
   } else {
-    printStatus("No Steam Guard action is required.");
+    printStatus('No Steam Guard action is required.');
   }
 
   await authentication.promise;
-  printStatus("Steam authentication accepted.");
+  printStatus('Steam authentication accepted.');
 
   if (!session.refreshToken || !session.steamID) {
-    throw new Error("Steam authenticated but did not return a refresh token");
+    throw new Error('Steam authenticated but did not return a refresh token');
   }
 
   printToken(session.refreshToken, session.steamID.getSteamID64());

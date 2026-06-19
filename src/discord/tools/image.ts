@@ -1,21 +1,21 @@
-import OpenAI from "openai";
-import { z } from "zod";
-import { AttachmentBuilder, EmbedBuilder, PermissionFlagsBits } from "discord.js";
-import { tool } from "@openai/agents";
-import { toolLogger } from "../../logger";
-import { toolContextManager, formatError } from "../../utils/types";
-import { env } from "../../env";
-import { requesterHasChannelPermission } from "../utils/discord-permissions";
+import { tool } from '@openai/agents';
+import { AttachmentBuilder, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
+import OpenAI from 'openai';
+import { z } from 'zod';
+import { env } from '../../env';
+import { toolLogger } from '../../logger';
+import { formatError, toolContextManager } from '../../utils/types';
+import { requesterHasChannelPermission } from '../utils/discord-permissions';
 
-type OpenAIImageSize = "auto" | "1024x1024" | "1536x1024" | "1024x1536";
-type OpenAIImageQuality = "auto" | "low" | "medium" | "high";
-type OpenAIImageBackground = "auto" | "transparent" | "opaque";
-type OpenAIImageFormat = "png" | "jpeg" | "webp";
+type OpenAIImageSize = 'auto' | '1024x1024' | '1536x1024' | '1024x1536';
+type OpenAIImageQuality = 'auto' | 'low' | 'medium' | 'high';
+type OpenAIImageBackground = 'auto' | 'transparent' | 'opaque';
+type OpenAIImageFormat = 'png' | 'jpeg' | 'webp';
 
 interface ImageSizeChoice {
   size: OpenAIImageSize;
   requested: string | null;
-  source: "image_size" | "aspect_ratio" | "default";
+  source: 'image_size' | 'aspect_ratio' | 'default';
 }
 
 interface ImageOutputDetails {
@@ -27,63 +27,63 @@ interface ImageOutputDetails {
 
 const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
 const SUPPORTED_NATIVE_SIZES = new Set<OpenAIImageSize>([
-  "auto",
-  "1024x1024",
-  "1536x1024",
-  "1024x1536",
+  'auto',
+  '1024x1024',
+  '1536x1024',
+  '1024x1536',
 ]);
 
 const SIZE_ALIASES: Record<string, OpenAIImageSize> = {
-  square: "1024x1024",
-  avatar: "1024x1024",
-  icon: "1024x1024",
-  logo: "1024x1024",
-  profile: "1024x1024",
-  album_cover: "1024x1024",
-  cover_art: "1024x1024",
-  instagram_post: "1024x1024",
-  social_post: "1024x1024",
+  square: '1024x1024',
+  avatar: '1024x1024',
+  icon: '1024x1024',
+  logo: '1024x1024',
+  profile: '1024x1024',
+  album_cover: '1024x1024',
+  cover_art: '1024x1024',
+  instagram_post: '1024x1024',
+  social_post: '1024x1024',
 
-  landscape: "1536x1024",
-  wide: "1536x1024",
-  desktop: "1536x1024",
-  wallpaper: "1536x1024",
-  desktop_wallpaper: "1536x1024",
-  banner: "1536x1024",
-  header: "1536x1024",
-  cover_photo: "1536x1024",
-  youtube_thumbnail: "1536x1024",
-  presentation: "1536x1024",
-  slide: "1536x1024",
-  twitter_header: "1536x1024",
-  x_header: "1536x1024",
-  facebook_cover: "1536x1024",
-  linkedin_banner: "1536x1024",
+  landscape: '1536x1024',
+  wide: '1536x1024',
+  desktop: '1536x1024',
+  wallpaper: '1536x1024',
+  desktop_wallpaper: '1536x1024',
+  banner: '1536x1024',
+  header: '1536x1024',
+  cover_photo: '1536x1024',
+  youtube_thumbnail: '1536x1024',
+  presentation: '1536x1024',
+  slide: '1536x1024',
+  twitter_header: '1536x1024',
+  x_header: '1536x1024',
+  facebook_cover: '1536x1024',
+  linkedin_banner: '1536x1024',
 
-  portrait: "1024x1536",
-  tall: "1024x1536",
-  phone: "1024x1536",
-  phone_wallpaper: "1024x1536",
-  mobile_wallpaper: "1024x1536",
-  story: "1024x1536",
-  instagram_story: "1024x1536",
-  reel: "1024x1536",
-  shorts: "1024x1536",
-  tiktok: "1024x1536",
-  poster: "1024x1536",
-  book_cover: "1024x1536",
-  pinterest: "1024x1536",
+  portrait: '1024x1536',
+  tall: '1024x1536',
+  phone: '1024x1536',
+  phone_wallpaper: '1024x1536',
+  mobile_wallpaper: '1024x1536',
+  story: '1024x1536',
+  instagram_story: '1024x1536',
+  reel: '1024x1536',
+  shorts: '1024x1536',
+  tiktok: '1024x1536',
+  poster: '1024x1536',
+  book_cover: '1024x1536',
+  pinterest: '1024x1536',
 };
 
 function normalizeToken(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, "_").replaceAll("-", "_");
+  return value.trim().toLowerCase().replace(/\s+/g, '_').replaceAll('-', '_');
 }
 
 function parseDimensions(
   value: string,
 ): { width: number; height: number } | null {
   const match = /^(\d{2,5})\s*x\s*(\d{2,5})$/i.exec(value.trim());
-  if (!match?.[1] || !match[2]) return null;
+  if (!match?.[1] || !match[2]) { return null; }
 
   return {
     width: Number.parseInt(match[1], 10),
@@ -110,10 +110,10 @@ function parseRatio(value: string): number | null {
 }
 
 function sizeFromRatio(ratio: number | null): OpenAIImageSize {
-  if (!ratio || !Number.isFinite(ratio) || ratio <= 0) return "auto";
-  if (ratio >= 1.15) return "1536x1024";
-  if (ratio <= 0.87) return "1024x1536";
-  return "1024x1024";
+  if (!ratio || !Number.isFinite(ratio) || ratio <= 0) { return 'auto'; }
+  if (ratio >= 1.15) { return '1536x1024'; }
+  if (ratio <= 0.87) { return '1024x1536'; }
+  return '1024x1024';
 }
 
 function normalizeImageSize(
@@ -128,18 +128,18 @@ function normalizeImageSize(
       return {
         size: token as OpenAIImageSize,
         requested,
-        source: "image_size",
+        source: 'image_size',
       };
     }
 
     const aliasSize = SIZE_ALIASES[token];
     if (aliasSize) {
-      return { size: aliasSize, requested, source: "image_size" };
+      return { size: aliasSize, requested, source: 'image_size' };
     }
 
     const ratioSize = sizeFromRatio(parseRatio(requested));
-    if (ratioSize !== "auto") {
-      return { size: ratioSize, requested, source: "image_size" };
+    if (ratioSize !== 'auto') {
+      return { size: ratioSize, requested, source: 'image_size' };
     }
   }
 
@@ -148,39 +148,39 @@ function normalizeImageSize(
     const token = normalizeToken(requested);
     const aliasSize = SIZE_ALIASES[token];
     if (aliasSize) {
-      return { size: aliasSize, requested, source: "aspect_ratio" };
+      return { size: aliasSize, requested, source: 'aspect_ratio' };
     }
 
     return {
       size: sizeFromRatio(parseRatio(requested)),
       requested,
-      source: "aspect_ratio",
+      source: 'aspect_ratio',
     };
   }
 
-  return { size: "auto", requested: null, source: "default" };
+  return { size: 'auto', requested: null, source: 'default' };
 }
 
 function normalizeOutputFormat(
   outputFormat: OpenAIImageFormat | null,
   background: OpenAIImageBackground,
 ): OpenAIImageFormat {
-  if (background === "transparent" && outputFormat === "jpeg") {
-    return "png";
+  if (background === 'transparent' && outputFormat === 'jpeg') {
+    return 'png';
   }
-  return outputFormat ?? "png";
+  return outputFormat ?? 'png';
 }
 
 function normalizeCompression(
   compression: number | null,
   outputFormat: OpenAIImageFormat,
 ): number | undefined {
-  if (outputFormat === "png" || compression === null) return undefined;
+  if (outputFormat === 'png' || compression === null) { return undefined; }
   return Math.min(Math.max(Math.round(compression), 0), 100);
 }
 
 function extensionForFormat(outputFormat: OpenAIImageFormat): string {
-  return outputFormat === "jpeg" ? "jpg" : outputFormat;
+  return outputFormat === 'jpeg' ? 'jpg' : outputFormat;
 }
 
 async function imageUrlToBuffer(imageUrl: string): Promise<Buffer> {
@@ -202,8 +202,8 @@ async function sendImageToChannel(
   const attachment = new AttachmentBuilder(imageBuffer, { name: fileName });
 
   const embed = new EmbedBuilder()
-    .setColor(0x5865f2)
-    .setTitle("Generated Image")
+    .setColor(0x5865F2)
+    .setTitle('Generated Image')
     .setDescription(prompt.length > 200 ? `${prompt.slice(0, 197)}...` : prompt)
     .setImage(`attachment://${fileName}`)
     .setFooter({
@@ -215,46 +215,46 @@ async function sendImageToChannel(
 }
 
 export const generateImageTool = tool({
-  name: "generate_image",
+  name: 'generate_image',
   description:
-    "Generate an image using AI. ONLY use when user EXPLICITLY requests image creation with words like 'draw', 'generate image', 'create a picture', 'make art', 'illustrate'. Do NOT use for descriptions, explanations, or when user is just discussing images/art conceptually.",
+    'Generate an image using AI. ONLY use when user EXPLICITLY requests image creation with words like \'draw\', \'generate image\', \'create a picture\', \'make art\', \'illustrate\'. Do NOT use for descriptions, explanations, or when user is just discussing images/art conceptually.',
   parameters: z.object({
     prompt: z
       .string()
-      .describe("A detailed description of the image to generate."),
+      .describe('A detailed description of the image to generate.'),
     aspect_ratio: z
       .string()
       .nullable()
-      .describe("Aspect ratio: '1:1', '16:9', '9:16', '4:3', etc."),
+      .describe('Aspect ratio: \'1:1\', \'16:9\', \'9:16\', \'4:3\', etc.'),
     image_size: z
       .string()
       .nullable()
       .describe(
-        "Native size or common preset. Accepts 'auto', '1024x1024', '1536x1024', '1024x1536', common pixel sizes like '1920x1080' or '1080x1920' (mapped to nearest native size), or presets like 'wallpaper', 'phone wallpaper', 'youtube thumbnail', 'banner', 'poster', 'book cover', 'album cover', 'avatar'.",
+        'Native size or common preset. Accepts \'auto\', \'1024x1024\', \'1536x1024\', \'1024x1536\', common pixel sizes like \'1920x1080\' or \'1080x1920\' (mapped to nearest native size), or presets like \'wallpaper\', \'phone wallpaper\', \'youtube thumbnail\', \'banner\', \'poster\', \'book cover\', \'album cover\', \'avatar\'.',
       ),
     quality: z
-      .enum(["auto", "low", "medium", "high"])
+      .enum(['auto', 'low', 'medium', 'high'])
       .nullable()
       .describe(
-        "Image quality. Use 'auto' unless the user asks for high detail or faster/lower quality.",
+        'Image quality. Use \'auto\' unless the user asks for high detail or faster/lower quality.',
       ),
     background: z
-      .enum(["auto", "opaque", "transparent"])
+      .enum(['auto', 'opaque', 'transparent'])
       .nullable()
       .describe(
-        "Background mode. Use transparent for logos/stickers/icons when requested.",
+        'Background mode. Use transparent for logos/stickers/icons when requested.',
       ),
     output_format: z
-      .enum(["png", "jpeg", "webp"])
+      .enum(['png', 'jpeg', 'webp'])
       .nullable()
       .describe(
-        "Output file format. Defaults to png. Use jpeg/webp for smaller files if requested.",
+        'Output file format. Defaults to png. Use jpeg/webp for smaller files if requested.',
       ),
     compression: z
       .number()
       .nullable()
       .describe(
-        "Compression from 0-100 for jpeg/webp outputs. Leave null for default.",
+        'Compression from 0-100 for jpeg/webp outputs. Leave null for default.',
       ),
   }),
   execute: async ({
@@ -268,8 +268,8 @@ export const generateImageTool = tool({
   }) => {
     const ctx = toolContextManager.get();
 
-    if (!ctx.channel || !("send" in ctx.channel)) {
-      return { error: "No valid channel context available" };
+    if (!ctx.channel || !('send' in ctx.channel)) {
+      return { error: 'No valid channel context available' };
     }
     if (
       !requesterHasChannelPermission(ctx.channel, [
@@ -280,7 +280,7 @@ export const generateImageTool = tool({
     ) {
       return {
         error:
-          "You need Send Messages, Attach Files, and Embed Links permission in this channel to ask Ruyi to generate images here.",
+          'You need Send Messages, Attach Files, and Embed Links permission in this channel to ask Ruyi to generate images here.',
       };
     }
 
@@ -288,13 +288,13 @@ export const generateImageTool = tool({
       send: (options: unknown) => Promise<unknown>;
     };
     const sizeChoice = normalizeImageSize(aspect_ratio, image_size);
-    const effectiveBackground = background ?? "auto";
+    const effectiveBackground = background ?? 'auto';
     const outputFormat = normalizeOutputFormat(
       output_format,
       effectiveBackground,
     );
     const compressionValue = normalizeCompression(compression, outputFormat);
-    const effectiveQuality: OpenAIImageQuality = quality ?? "auto";
+    const effectiveQuality: OpenAIImageQuality = quality ?? 'auto';
 
     toolLogger.info(
       {
@@ -306,12 +306,12 @@ export const generateImageTool = tool({
         background: effectiveBackground,
         outputFormat,
       },
-      "Generating image",
+      'Generating image',
     );
 
     try {
       const response = await openai.images.generate({
-        model: "gpt-image-1.5",
+        model: 'gpt-image-1.5',
         prompt,
         n: 1,
         background: effectiveBackground,
@@ -325,13 +325,13 @@ export const generateImageTool = tool({
       let imageBuffer: Buffer | null = null;
 
       if (image?.b64_json) {
-        imageBuffer = Buffer.from(image.b64_json, "base64");
+        imageBuffer = Buffer.from(image.b64_json, 'base64');
       } else if (image?.url) {
         imageBuffer = await imageUrlToBuffer(image.url);
       }
 
       if (!imageBuffer) {
-        return { error: "The image model did not return image data" };
+        return { error: 'The image model did not return image data' };
       }
 
       await sendImageToChannel(channel, imageBuffer, prompt, {
@@ -348,7 +348,7 @@ export const generateImageTool = tool({
           requestedSize: sizeChoice.requested,
           bytes: imageBuffer.length,
         },
-        "Image generated and sent",
+        'Image generated and sent',
       );
 
       return {
@@ -364,8 +364,8 @@ export const generateImageTool = tool({
       };
     } catch (error) {
       const errorMessage = formatError(error);
-      const status =
-        typeof error === "object" && error !== null && "status" in error
+      const status
+        = typeof error === 'object' && error !== null && 'status' in error
           ? error.status
           : undefined;
       toolLogger.error(
@@ -373,9 +373,9 @@ export const generateImageTool = tool({
           error: errorMessage,
           status,
         },
-        "Failed to generate image",
+        'Failed to generate image',
       );
-      return { error: "Failed to generate image", details: errorMessage };
+      return { error: 'Failed to generate image', details: errorMessage };
     }
   },
 });

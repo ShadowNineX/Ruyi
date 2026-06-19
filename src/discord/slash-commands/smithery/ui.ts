@@ -1,3 +1,4 @@
+import type { SmitheryServerId } from '../../../db/models';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -5,48 +6,47 @@ import {
   EmbedBuilder,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
-} from "discord.js";
-import type { SmitheryServerId } from "../../../db/models";
+} from 'discord.js';
 import {
   DISCORD_BUTTON_URL_MAX_LENGTH,
   DISCORD_EMBED_DESCRIPTION_MAX_LENGTH,
   SMITHERY_SERVERS,
-} from "./constants";
+} from './constants';
 
 export function buildSmitheryManagerEmbed(
   linkedServerIds: SmitheryServerId[],
   needsSetupServerIds: SmitheryServerId[],
   unlinkedServerIds: SmitheryServerId[],
 ): EmbedBuilder {
-  const linkedText =
-    linkedServerIds.length > 0
-      ? linkedServerIds.map(formatServerName).join("\n")
-      : "No services linked yet.";
-  const setupText =
-    needsSetupServerIds.length > 0
-      ? needsSetupServerIds.map(formatServerName).join("\n")
-      : "No services are waiting for setup.";
-  const unlinkedText =
-    unlinkedServerIds.length > 0
-      ? unlinkedServerIds.map(formatServerName).join("\n")
-      : "All supported services are already linked.";
+  const linkedText
+    = linkedServerIds.length > 0
+      ? linkedServerIds.map(formatServerName).join('\n')
+      : 'No services linked yet.';
+  const setupText
+    = needsSetupServerIds.length > 0
+      ? needsSetupServerIds.map(formatServerName).join('\n')
+      : 'No services are waiting for setup.';
+  const unlinkedText
+    = unlinkedServerIds.length > 0
+      ? unlinkedServerIds.map(formatServerName).join('\n')
+      : 'All supported services are already linked.';
 
   const embed = new EmbedBuilder()
-    .setTitle("🔐 Smithery Connections")
+    .setTitle('🔐 Smithery Connections')
     .setDescription(
-      "**Linked services:**\n" +
-        `${linkedText}\n\n` +
-        "**Needs setup:**\n" +
-        `${setupText}\n\n` +
-        "**Available to link:**\n" +
-        `${unlinkedText}\n\n` +
-        "Authorize a service to let Ruyi use its MCP tools. Unlinking removes Ruyi's saved Smithery connection for that service.",
+      '**Linked services:**\n'
+      + `${linkedText}\n\n`
+      + '**Needs setup:**\n'
+      + `${setupText}\n\n`
+      + '**Available to link:**\n'
+      + `${unlinkedText}\n\n`
+      + 'Authorize a service to let Ruyi use its MCP tools. Unlinking removes Ruyi\'s saved Smithery connection for that service.',
     )
-    .setColor(0x5865f2);
+    .setColor(0x5865F2);
 
   if (unlinkedServerIds.length > 0 || needsSetupServerIds.length > 0) {
     embed.setFooter({
-      text: "Linked services are hidden from the setup menu",
+      text: 'Linked services are hidden from the setup menu',
     });
   }
 
@@ -66,8 +66,8 @@ export function buildSmitheryManagerRows(
     rows.push(
       new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
         new StringSelectMenuBuilder()
-          .setCustomId("smithery_select_server")
-          .setPlaceholder("Choose a service to set up...")
+          .setCustomId('smithery_select_server')
+          .setPlaceholder('Choose a service to set up...')
           .addOptions(setupServerIds.map(buildServerOption)),
       ),
     );
@@ -77,8 +77,8 @@ export function buildSmitheryManagerRows(
     rows.push(
       new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
         new StringSelectMenuBuilder()
-          .setCustomId("smithery_unlink_server")
-          .setPlaceholder("Choose a service to unlink...")
+          .setCustomId('smithery_unlink_server')
+          .setPlaceholder('Choose a service to unlink...')
           .addOptions(unlinkServerIds.map(buildUnlinkServerOption)),
       ),
     );
@@ -88,19 +88,19 @@ export function buildSmitheryManagerRows(
 }
 
 export function buildAuthorizationDescription(authUrl: string): string {
-  const description =
-    `**Step 1:** Open [Smithery setup](${authUrl})\n` +
-    "**Step 2:** Finish the Smithery permission screen\n" +
-    "**Step 3:** Come back here and click Check Status";
+  const description
+    = `**Step 1:** Open [Smithery setup](${authUrl})\n`
+      + '**Step 2:** Finish the Smithery permission screen\n'
+      + '**Step 3:** Come back here and click Check Status';
 
   if (description.length <= DISCORD_EMBED_DESCRIPTION_MAX_LENGTH) {
     return description;
   }
 
   return (
-    "**Step 1:** Open the Smithery setup URL from the bot logs\n" +
-    "**Step 2:** Finish the Smithery permission screen\n" +
-    "**Step 3:** Come back here and click Check Status"
+    '**Step 1:** Open the Smithery setup URL from the bot logs\n'
+    + '**Step 2:** Finish the Smithery permission screen\n'
+    + '**Step 3:** Come back here and click Check Status'
   );
 }
 
@@ -112,7 +112,7 @@ export function addAuthorizationButtons(
   if (authUrl.length <= DISCORD_BUTTON_URL_MAX_LENGTH) {
     row.addComponents(
       new ButtonBuilder()
-        .setLabel("Open Smithery Setup")
+        .setLabel('Open Smithery Setup')
         .setStyle(ButtonStyle.Link)
         .setURL(authUrl),
     );
@@ -121,16 +121,16 @@ export function addAuthorizationButtons(
   row.addComponents(
     new ButtonBuilder()
       .setCustomId(`smithery_check:${serverId}`)
-      .setLabel("Check Status")
+      .setLabel('Check Status')
       .setStyle(ButtonStyle.Success),
   );
 }
 
 export function buildInvalidSmitheryServerEmbed(serverId: string): EmbedBuilder {
   return new EmbedBuilder()
-    .setTitle("❌ Invalid Server")
+    .setTitle('❌ Invalid Server')
     .setDescription(`Unknown server: ${serverId}`)
-    .setColor(0xff0000);
+    .setColor(0xFF0000);
 }
 
 function buildServerOption(

@@ -1,19 +1,19 @@
-import type { Attachment, Message, TextBasedChannel } from "discord.js";
-import type { ChatMessage } from "../../ai";
-import { botLogger } from "../../logger";
+import type { Attachment, Message, TextBasedChannel } from 'discord.js';
+import type { ChatMessage } from '../../ai';
+import { botLogger } from '../../logger';
 
 const MAX_ATTACHMENT_DESCRIPTION_LENGTH = 120;
 const MAX_EMBED_DESCRIPTION_LENGTH = 240;
 const MAX_EMBED_FIELD_LENGTH = 120;
 const DISCORD_UNKNOWN_MESSAGE_CODE = 10008;
 const DISCORD_INVALID_FORM_BODY_CODE = 50035;
-const MENTION_ONLY_PROMPT =
-  "[The user mentioned Ruyi without any additional text. Infer their intent from the replied message and recent channel context instead of treating the mention as content.]";
+const MENTION_ONLY_PROMPT
+  = '[The user mentioned Ruyi without any additional text. Infer their intent from the replied message and recent channel context instead of treating the mention as content.]';
 
 export interface MessageImageInput {
   url: string;
   source: string;
-  detail: "auto" | "low" | "high";
+  detail: 'auto' | 'low' | 'high';
 }
 
 const IMAGE_EXTENSION_REGEX = /\.(?:avif|bmp|gif|jpe?g|png|webp)(?:[?#].*)?$/i;
@@ -24,22 +24,22 @@ function isImageAttachmentName(name: string): boolean {
 
 function isImageAttachment(attachment: Attachment): boolean {
   return (
-    attachment.contentType?.startsWith("image/") === true ||
-    Boolean(attachment.width && attachment.height) ||
-    isImageAttachmentName(attachment.name)
+    attachment.contentType?.startsWith('image/') === true
+    || Boolean(attachment.width && attachment.height)
+    || isImageAttachmentName(attachment.name)
   );
 }
 
 export function getMessageImageInputs(
   message: Message,
-  sourceLabel = "message",
+  sourceLabel = 'message',
 ): MessageImageInput[] {
   const attachmentImages = [...message.attachments.values()]
     .filter(isImageAttachment)
     .map((attachment, index) => ({
       url: attachment.url,
       source: `${sourceLabel} attachment ${index + 1}: ${attachment.name}`,
-      detail: "auto" as const,
+      detail: 'auto' as const,
     }));
 
   const embedImages = message.embeds.flatMap((embed, embedIndex) => {
@@ -49,7 +49,7 @@ export function getMessageImageInputs(
     return urls.map((url, imageIndex) => ({
       url,
       source: `${sourceLabel} embed ${embedIndex + 1} image ${imageIndex + 1}`,
-      detail: "auto" as const,
+      detail: 'auto' as const,
     }));
   });
 
@@ -57,13 +57,13 @@ export function getMessageImageInputs(
 }
 
 function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024) { return `${bytes} B`; }
+  if (bytes < 1024 * 1024) { return `${(bytes / 1024).toFixed(1)} KB`; }
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function truncateMetadata(value: string, maxLength: number): string {
-  if (value.length <= maxLength) return value;
+  if (value.length <= maxLength) { return value; }
   return `${value.slice(0, maxLength - 3)}...`;
 }
 
@@ -73,14 +73,14 @@ function escapeRegExp(value: string): string {
 
 function removeBotMention(message: Message, content: string): string {
   const botId = message.client.user?.id;
-  if (!botId) return content;
+  if (!botId) { return content; }
 
-  return content.replace(new RegExp(`<@!?${escapeRegExp(botId)}>`, "g"), "");
+  return content.replace(new RegExp(`<@!?${escapeRegExp(botId)}>`, 'g'), '');
 }
 
 function isOnlyBotMention(message: Message, content: string): boolean {
   const botId = message.client.user?.id;
-  if (!botId) return false;
+  if (!botId) { return false; }
 
   const mentionsBot = new RegExp(`<@!?${escapeRegExp(botId)}>`).test(content);
   return mentionsBot && removeBotMention(message, content).trim().length === 0;
@@ -91,7 +91,7 @@ function normalizeDiscordMentions(message: Message, content: string): string {
 
   for (const [userId, user] of message.mentions.users) {
     normalized = normalized.replace(
-      new RegExp(`<@!?${escapeRegExp(userId)}>`, "g"),
+      new RegExp(`<@!?${escapeRegExp(userId)}>`, 'g'),
       `@${user.username}`,
     );
   }
@@ -116,13 +116,13 @@ function formatMessageAttachments(message: Message): string[] {
         : null,
       attachment.description
         ? `description="${truncateMetadata(
-            attachment.description,
-            MAX_ATTACHMENT_DESCRIPTION_LENGTH,
-          )}"`
+          attachment.description,
+          MAX_ATTACHMENT_DESCRIPTION_LENGTH,
+        )}"`
         : null,
     ].filter(Boolean);
 
-    return `${index + 1}. ${attachment.name} (${details.join(", ")})\n   url: ${
+    return `${index + 1}. ${attachment.name} (${details.join(', ')})\n   url: ${
       attachment.url
     }`;
   });
@@ -132,7 +132,7 @@ function formatMessageStickers(message: Message): string[] {
   return [...message.stickers.values()].map((sticker, index) => {
     const description = sticker.description
       ? ` - ${truncateMetadata(sticker.description, MAX_ATTACHMENT_DESCRIPTION_LENGTH)}`
-      : "";
+      : '';
     return `${index + 1}. ${sticker.name}${description}`;
   });
 }
@@ -143,28 +143,28 @@ function formatMessageEmbeds(message: Message): string[] {
       embed.title ? `title="${truncateMetadata(embed.title, 120)}"` : null,
       embed.description
         ? `description="${truncateMetadata(
-            embed.description,
-            MAX_EMBED_DESCRIPTION_LENGTH,
-          )}"`
+          embed.description,
+          MAX_EMBED_DESCRIPTION_LENGTH,
+        )}"`
         : null,
       embed.url ? `url=${embed.url}` : null,
       embed.image?.url ? `image=${embed.image.url}` : null,
       embed.thumbnail?.url ? `thumbnail=${embed.thumbnail.url}` : null,
       embed.fields.length > 0
         ? `fields=${embed.fields
-            .slice(0, 3)
-            .map(
-              (field) =>
-                `${field.name}: ${truncateMetadata(
-                  field.value,
-                  MAX_EMBED_FIELD_LENGTH,
-                )}`,
-            )
-            .join(" | ")}`
+          .slice(0, 3)
+          .map(
+            field =>
+              `${field.name}: ${truncateMetadata(
+                field.value,
+                MAX_EMBED_FIELD_LENGTH,
+              )}`,
+          )
+          .join(' | ')}`
         : null,
     ].filter(Boolean);
 
-    return `${index + 1}. ${parts.join(", ") || "embed with no text metadata"}`;
+    return `${index + 1}. ${parts.join(', ') || 'embed with no text metadata'}`;
   });
 }
 
@@ -175,24 +175,24 @@ export function formatMessageForAI(message: Message): string {
     ? MENTION_ONLY_PROMPT
     : normalizeDiscordMentions(message, rawContent);
 
-  if (content) sections.push(content);
+  if (content) { sections.push(content); }
 
   const attachments = formatMessageAttachments(message);
   if (attachments.length > 0) {
-    sections.push(`Attachments:\n${attachments.join("\n")}`);
+    sections.push(`Attachments:\n${attachments.join('\n')}`);
   }
 
   const stickers = formatMessageStickers(message);
   if (stickers.length > 0) {
-    sections.push(`Stickers:\n${stickers.join("\n")}`);
+    sections.push(`Stickers:\n${stickers.join('\n')}`);
   }
 
   const embeds = formatMessageEmbeds(message);
   if (embeds.length > 0) {
-    sections.push(`Embedded/link preview content:\n${embeds.join("\n")}`);
+    sections.push(`Embedded/link preview content:\n${embeds.join('\n')}`);
   }
 
-  return sections.length > 0 ? sections.join("\n\n") : "[no text content]";
+  return sections.length > 0 ? sections.join('\n\n') : '[no text content]';
 }
 
 interface ProtectedRange {
@@ -212,19 +212,19 @@ function findMarkdownLinkRanges(text: string): ProtectedRange[] {
   let index = 0;
 
   while (index < text.length) {
-    const labelStart = text.indexOf("[", index);
-    if (labelStart === -1) break;
+    const labelStart = text.indexOf('[', index);
+    if (labelStart === -1) { break; }
 
-    const labelEnd = text.indexOf("]", labelStart + 1);
-    if (labelEnd === -1) break;
+    const labelEnd = text.indexOf(']', labelStart + 1);
+    if (labelEnd === -1) { break; }
 
-    if (text[labelEnd + 1] !== "(") {
+    if (text[labelEnd + 1] !== '(') {
       index = labelStart + 1;
       continue;
     }
 
-    const urlEnd = text.indexOf(")", labelEnd + 2);
-    if (urlEnd === -1) break;
+    const urlEnd = text.indexOf(')', labelEnd + 2);
+    if (urlEnd === -1) { break; }
 
     ranges.push({ start: labelStart, end: urlEnd + 1 });
     index = urlEnd + 1;
@@ -239,9 +239,10 @@ function findProtectedRanges(text: string): ProtectedRange[] {
 
   for (const pattern of REGEX_PROTECTED_PATTERNS) {
     pattern.lastIndex = 0;
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
+    let match = pattern.exec(text);
+    while (match !== null) {
       ranges.push({ start: match.index, end: match.index + match[0].length });
+      match = pattern.exec(text);
     }
   }
 
@@ -253,7 +254,7 @@ function isIndexProtected(
   index: number,
   ranges: ProtectedRange[],
 ): boolean {
-  return ranges.some((range) => index > range.start && index < range.end);
+  return ranges.some(range => index > range.start && index < range.end);
 }
 
 // Find the nearest protected range that the index falls within
@@ -285,14 +286,14 @@ function findSafeSplitPoint(
 
   // Try to find a natural break point (newline or space)
   if (splitIndex > 100) {
-    const newlineIndex = text.lastIndexOf("\n", splitIndex);
+    const newlineIndex = text.lastIndexOf('\n', splitIndex);
     if (newlineIndex > splitIndex - 300 && newlineIndex > 0) {
       if (!isIndexProtected(newlineIndex, protectedRanges)) {
         return newlineIndex + 1;
       }
     }
 
-    const spaceIndex = text.lastIndexOf(" ", splitIndex);
+    const spaceIndex = text.lastIndexOf(' ', splitIndex);
     if (spaceIndex > splitIndex - 200 && spaceIndex > 0) {
       if (!isIndexProtected(spaceIndex, protectedRanges)) {
         return spaceIndex + 1;
@@ -305,7 +306,7 @@ function findSafeSplitPoint(
 }
 
 export function splitMessage(text: string, maxLength = 2000): string[] {
-  if (text.length <= maxLength) return [text];
+  if (text.length <= maxLength) { return [text]; }
 
   const chunks: string[] = [];
   let remaining = text;
@@ -350,17 +351,17 @@ async function sendInitialReplyChunk(
           channelId: message.channel.id,
           messageId: message.id,
         },
-        "Original message was deleted before reply could be sent",
+        'Original message was deleted before reply could be sent',
       );
       return null;
     }
 
     if (
-      err.code === DISCORD_INVALID_FORM_BODY_CODE &&
-      "send" in message.channel
+      err.code === DISCORD_INVALID_FORM_BODY_CODE
+      && 'send' in message.channel
     ) {
       botLogger.debug(
-        "Reply reference was invalid, sending as regular message",
+        'Reply reference was invalid, sending as regular message',
       );
       const sent = await message.channel.send(chunk);
       return { id: sent.id, content: chunk };
@@ -381,16 +382,16 @@ export async function sendReplyChunks(
   for (const [i, chunk] of chunks.entries()) {
     if (i === 0) {
       const sent = await sendInitialReplyChunk(message, chunk);
-      if (!sent) return sentChunks;
+      if (!sent) { return sentChunks; }
       sentChunks.push(sent);
-    } else if ("send" in message.channel) {
+    } else if ('send' in message.channel) {
       const sent = await message.channel.send(chunk);
       sentChunks.push({ id: sent.id, content: chunk });
     }
   }
   botLogger.info(
     { user, replyLength: reply.length, chunks: chunks.length },
-    "Sent reply",
+    'Sent reply',
   );
   return sentChunks;
 }
@@ -399,11 +400,11 @@ async function fetchEditableBotMessage(
   message: Message,
   messageId: string,
 ): Promise<Message | null> {
-  if (!("messages" in message.channel)) return null;
+  if (!('messages' in message.channel)) { return null; }
 
   try {
     const fetched = await message.channel.messages.fetch(messageId);
-    if (fetched.author.id !== message.client.user?.id) return null;
+    if (fetched.author.id !== message.client.user?.id) { return null; }
     return fetched;
   } catch (error) {
     botLogger.debug(
@@ -412,7 +413,7 @@ async function fetchEditableBotMessage(
         channelId: message.channel.id,
         messageId,
       },
-      "Could not fetch bot reply chunk for edit",
+      'Could not fetch bot reply chunk for edit',
     );
     return null;
   }
@@ -423,7 +424,7 @@ async function deleteBotReplyChunk(
   messageId: string,
 ): Promise<void> {
   const fetched = await fetchEditableBotMessage(message, messageId);
-  if (!fetched) return;
+  if (!fetched) { return; }
 
   await fetched.delete().catch((error: unknown) => {
     botLogger.debug(
@@ -432,7 +433,7 @@ async function deleteBotReplyChunk(
         channelId: message.channel.id,
         messageId,
       },
-      "Could not delete excess bot reply chunk after edit",
+      'Could not delete excess bot reply chunk after edit',
     );
   });
 }
@@ -459,7 +460,7 @@ export async function editReplyChunks(
       continue;
     }
 
-    if (editedExistingChunk && "send" in message.channel) {
+    if (editedExistingChunk && 'send' in message.channel) {
       const sent = await message.channel.send(chunk);
       editedChunks.push({ id: sent.id, content: chunk });
     }
@@ -478,7 +479,7 @@ export async function editReplyChunks(
       editedChunks: editedChunks.length,
       previousChunks: existingMessageIds.length,
     },
-    "Edited reply after user message edit",
+    'Edited reply after user message edit',
   );
 
   return editedChunks;
@@ -491,19 +492,19 @@ export async function fetchReplyChain(
 ): Promise<ChatMessage[]> {
   const chain: ChatMessage[] = [];
   let currentMessage = firstReferencedMessage ?? null;
-  let currentRef: { messageId: string } | null =
-    !currentMessage && message.reference?.messageId
+  let currentRef: { messageId: string } | null
+    = !currentMessage && message.reference?.messageId
       ? { messageId: message.reference.messageId }
       : null;
   let depth = 0;
 
-  if (!("messages" in message.channel)) return chain;
+  if (!('messages' in message.channel)) { return chain; }
 
   while ((currentMessage || currentRef) && depth < maxDepth) {
     try {
-      const referencedMessage =
-        currentMessage ??
-        (await message.channel.messages.fetch(currentRef!.messageId));
+      const referencedMessage
+        = currentMessage
+          ?? (await message.channel.messages.fetch(currentRef!.messageId));
 
       chain.unshift({
         author: referencedMessage.author.username,
@@ -523,7 +524,7 @@ export async function fetchReplyChain(
           messageId: currentRef?.messageId,
           depth,
         },
-        "Stopping reply-chain walk (message unfetchable)",
+        'Stopping reply-chain walk (message unfetchable)',
       );
       break;
     }
@@ -536,14 +537,14 @@ export async function fetchChatHistory(
   message: Message,
 ): Promise<ChatMessage[]> {
   const chatHistory: ChatMessage[] = [];
-  if (!("messages" in message.channel)) return chatHistory;
+  if (!('messages' in message.channel)) { return chatHistory; }
 
   try {
     const messages = await message.channel.messages.fetch({ limit: 30 });
     const sorted = [...messages.values()].reverse();
 
     for (const msg of sorted) {
-      if (msg.id === message.id) continue;
+      if (msg.id === message.id) { continue; }
       chatHistory.push({
         author: msg.author.username,
         content: formatMessageForAI(msg),
@@ -557,7 +558,7 @@ export async function fetchChatHistory(
         channelId: message.channel.id,
         messageId: message.id,
       },
-      "Could not fetch chat history",
+      'Could not fetch chat history',
     );
   }
 
@@ -565,20 +566,20 @@ export async function fetchChatHistory(
 }
 
 export async function fetchRecentChatMessages(
-  channel: Message["channel"] | TextBasedChannel,
+  channel: Message['channel'] | TextBasedChannel,
   options: {
     limit?: number;
     context: Record<string, unknown>;
     failureMessage: string;
   },
 ): Promise<ChatMessage[]> {
-  if (!("messages" in channel)) return [];
+  if (!('messages' in channel)) { return []; }
 
   try {
     const messages = await channel.messages.fetch({
       limit: options.limit ?? 20,
     });
-    return [...messages.values()].reverse().map((message) => ({
+    return [...messages.values()].reverse().map(message => ({
       author: message.author.username,
       content: formatMessageForAI(message),
       isBot: message.author.bot,
@@ -599,7 +600,7 @@ export async function fetchRecentChatMessages(
 export async function fetchReferencedMessage(
   message: Message,
 ): Promise<Message | null> {
-  if (!message.reference?.messageId || !("messages" in message.channel)) {
+  if (!message.reference?.messageId || !('messages' in message.channel)) {
     return null;
   }
   try {
@@ -611,7 +612,7 @@ export async function fetchReferencedMessage(
         referencedMessageId: message.reference.messageId,
         channelId: message.channel.id,
       },
-      "Could not fetch referenced message",
+      'Could not fetch referenced message',
     );
     return null;
   }
@@ -627,28 +628,28 @@ export function getErrorMessage(error: unknown): string {
   };
   const status = err?.status || err?.code;
   const errorMsg = err?.error?.message || err?.message;
-  const normalizedMessage = errorMsg?.toLowerCase() ?? "";
+  const normalizedMessage = errorMsg?.toLowerCase() ?? '';
 
   if (
-    err?.name === "ChatTurnTimeoutError" ||
-    normalizedMessage.includes("timed out")
+    err?.name === 'ChatTurnTimeoutError'
+    || normalizedMessage.includes('timed out')
   ) {
-    return "Forgive me, my lord — that request took too long, so I stopped it before it could leave my systems in an uncertain state. Please try again in a moment.";
+    return 'Forgive me, my lord — that request took too long, so I stopped it before it could leave my systems in an uncertain state. Please try again in a moment.';
   }
   if (status === 402) {
-    return "Apologies, but I've run out of credits to process requests. Please try again later.";
+    return 'Apologies, but I\'ve run out of credits to process requests. Please try again later.';
   }
   if (status === 429) {
     if (
-      normalizedMessage.includes("quota") ||
-      normalizedMessage.includes("billing")
+      normalizedMessage.includes('quota')
+      || normalizedMessage.includes('billing')
     ) {
-      return "Apologies, but the OpenAI project is out of API quota or has hit its billing limit. Please check the OpenAI billing and usage limits.";
+      return 'Apologies, but the OpenAI project is out of API quota or has hit its billing limit. Please check the OpenAI billing and usage limits.';
     }
-    return "I'm receiving too many requests right now. Please wait a moment.";
+    return 'I\'m receiving too many requests right now. Please wait a moment.';
   }
   if (status === 503 || status === 502) {
-    return "The AI service is temporarily unavailable. Please try again shortly.";
+    return 'The AI service is temporarily unavailable. Please try again shortly.';
   }
-  return `Something went wrong: ${errorMsg || "Unknown error"}`;
+  return `Something went wrong: ${errorMsg || 'Unknown error'}`;
 }

@@ -1,16 +1,16 @@
-import { $ } from "bun";
+import { $ } from 'bun';
 
-const entrypoint = "src/main.ts";
-const outdir = "dist";
+const entrypoint = 'src/main.ts';
+const outdir = 'dist';
 
 async function getGitCommit(): Promise<string> {
   try {
     const commit = await $`git rev-parse HEAD`.text();
-    return commit.trim() || "unknown";
+    return commit.trim() || 'unknown';
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`Could not read Git commit for build: ${message}`);
-    return "unknown";
+    return 'unknown';
   }
 }
 
@@ -19,8 +19,8 @@ const buildTime = new Date().toISOString();
 
 const result = await Bun.build({
   entrypoints: [entrypoint],
-  target: "bun",
-  packages: "external",
+  target: 'bun',
+  packages: 'external',
   outdir,
   define: {
     __RUYI_GIT_COMMIT__: JSON.stringify(gitCommit),

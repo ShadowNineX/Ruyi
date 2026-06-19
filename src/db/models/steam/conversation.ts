@@ -1,4 +1,5 @@
-import mongoose, { Schema, type Document, type Model } from "mongoose";
+import type { Document, Model } from 'mongoose';
+import mongoose, { Schema } from 'mongoose';
 
 export interface ISteamConversationMessage {
   commentId: string;
@@ -35,10 +36,10 @@ const SteamConversationSchema = new Schema<ISteamConversation>({
   lastInteraction: { type: Date, default: Date.now },
 });
 
-export const SteamConversation: Model<ISteamConversation> =
-  (mongoose.models.SteamConversation as Model<ISteamConversation> | undefined) ??
-  mongoose.model<ISteamConversation>(
-    "SteamConversation",
-    SteamConversationSchema,
-    "steam_conversations",
-  );
+export const SteamConversation: Model<ISteamConversation>
+  = (mongoose.models.SteamConversation as Model<ISteamConversation> | undefined)
+    ?? mongoose.model<ISteamConversation>(
+      'SteamConversation',
+      SteamConversationSchema,
+      'steam_conversations',
+    );

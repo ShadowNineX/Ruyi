@@ -1,18 +1,18 @@
 import type {
   SmitheryConnectionScope,
   SmitheryServerId,
-} from "../db/models";
+} from '../db/models';
 
-const SMITHERY_CONNECTION_ID_PATTERN = /^[A-Za-z0-9_-]{1,255}$/;
+const SMITHERY_CONNECTION_ID_PATTERN = /^[\w-]{1,255}$/;
 
 function toConnectionIdPart(value: string): string {
-  return value.replaceAll(/[^A-Za-z0-9_-]+/g, "-");
+  return value.replaceAll(/[^\w-]+/g, '-');
 }
 
 export function isValidSmitheryConnectionId(value: unknown): value is string {
   return (
-    typeof value === "string" &&
-    SMITHERY_CONNECTION_ID_PATTERN.test(value)
+    typeof value === 'string'
+    && SMITHERY_CONNECTION_ID_PATTERN.test(value)
   );
 }
 
@@ -24,7 +24,7 @@ export function getSmitheryConnectionId(
     serverId,
     toConnectionIdPart(scope.kind),
     toConnectionIdPart(scope.id),
-  ].join("-");
+  ].join('-');
 
   if (!isValidSmitheryConnectionId(connectionId)) {
     throw new Error(

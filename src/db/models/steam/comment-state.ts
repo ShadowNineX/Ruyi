@@ -1,4 +1,5 @@
-import mongoose, { Schema, type Document, type Model } from "mongoose";
+import type { Document, Model } from 'mongoose';
+import mongoose, { Schema } from 'mongoose';
 
 export interface ISteamCommentState extends Document {
   profileId: string;
@@ -16,10 +17,10 @@ const SteamCommentStateSchema = new Schema<ISteamCommentState>(
   { timestamps: true },
 );
 
-export const SteamCommentState: Model<ISteamCommentState> =
-  (mongoose.models.SteamCommentState as Model<ISteamCommentState> | undefined) ??
-  mongoose.model<ISteamCommentState>(
-    "SteamCommentState",
-    SteamCommentStateSchema,
-    "steam_comment_states",
-  );
+export const SteamCommentState: Model<ISteamCommentState>
+  = (mongoose.models.SteamCommentState as Model<ISteamCommentState> | undefined)
+    ?? mongoose.model<ISteamCommentState>(
+      'SteamCommentState',
+      SteamCommentStateSchema,
+      'steam_comment_states',
+    );

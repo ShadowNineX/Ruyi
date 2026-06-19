@@ -1,12 +1,13 @@
-import { Agent } from "@openai/agents";
-import { z } from "zod";
-import { CLASSIFIER_TIMEOUT_MS } from "../constants";
-import { aiLogger } from "../logger";
+import type { MessageEditAssessment } from '../discord/utils/message-edits';
+import { Agent } from '@openai/agents';
+import { z } from 'zod';
+import { CLASSIFIER_TIMEOUT_MS } from '../constants';
 import {
   assessMessageEdit,
-  type MessageEditAssessment,
-} from "../discord/utils/message-edits";
-import { agentsRuntimeManager } from "./client";
+
+} from '../discord/utils/message-edits';
+import { aiLogger } from '../logger';
+import { agentsRuntimeManager } from './client';
 
 const EditDecisionSchema = z.object({
   meaningful: z.boolean(),
@@ -32,7 +33,7 @@ class EditClassifier {
     after: string,
   ): Promise<MessageEditAssessment> {
     const deterministic = assessMessageEdit(before, after);
-    if (deterministic.reason !== "needs_semantic_classification") {
+    if (deterministic.reason !== 'needs_semantic_classification') {
       return deterministic;
     }
 
@@ -44,7 +45,7 @@ class EditClassifier {
 
     try {
       const agent = new Agent({
-        name: "Ruyi message edit classifier",
+        name: 'Ruyi message edit classifier',
         instructions: EDIT_CLASSIFIER_PROMPT,
         model: agentsRuntimeManager.getBackgroundTaskModel(),
         modelSettings: agentsRuntimeManager.getBackgroundTaskModelSettings(),
@@ -60,13 +61,13 @@ class EditClassifier {
 
       const decision = result.finalOutput;
       if (!decision) {
-        throw new Error("Edit classifier returned no decision");
+        throw new Error('Edit classifier returned no decision');
       }
 
       return {
         meaningful: decision.meaningful,
         shouldRegenerate: decision.meaningful && decision.should_regenerate,
-        reason: decision.reason || "classified_by_model",
+        reason: decision.reason || 'classified_by_model',
       };
     } catch (error) {
       aiLogger.warn(
@@ -77,12 +78,12 @@ class EditClassifier {
           beforePreview: before.slice(0, 120),
           afterPreview: after.slice(0, 120),
         },
-        "Edit classifier failed; avoiding automatic regeneration",
+        'Edit classifier failed; avoiding automatic regeneration',
       );
       return {
         meaningful: true,
         shouldRegenerate: false,
-        reason: "classification_failed",
+        reason: 'classification_failed',
       };
     } finally {
       clearTimeout(timeout);
