@@ -29,12 +29,38 @@ import {
   setLastInteractionAt,
 } from '../../src/stores/conversation-store';
 import {
+  clearExternalDataCache,
+  getExternalDataCacheSize,
+  getOrCreateCachedExternalData,
+} from '../../src/stores/data-cache-store';
+import {
   getReminderSchedulerNextDueAt,
   getReminderSchedulerTimeout,
   isReminderServiceRunning,
   setReminderSchedulerTimeout,
   setReminderServiceRunning,
 } from '../../src/stores/reminder-store';
+import {
+  areSteamCommunityLifecycleListenersAttached,
+  getSteamCommunityStartPromise,
+  isSteamCommunityReady,
+  setSteamCommunityLifecycleListenersAttached,
+  setSteamCommunityReady,
+  setSteamCommunityStartPromise,
+} from '../../src/stores/steam-client-store';
+import {
+  clearSteamProfileDataCache,
+  getOrCreateCachedSteamProfileData,
+  getSteamProfileDataCacheSize,
+} from '../../src/stores/steam-profile-store';
+import {
+  hasPendingSteamProfileCommentCheck,
+  isSteamProfileCommentCheckProcessing,
+  isSteamProfileCommentServiceRunning,
+  setPendingSteamProfileCommentCheck,
+  setSteamProfileCommentCheckProcessing,
+  setSteamProfileCommentServiceRunning,
+} from '../../src/stores/steam-service-store';
 
 function testSession(): CachedAgentSession {
   return {
@@ -51,6 +77,23 @@ const defaultSettings: ScopedSettings = {
   awayDelayMinutes: 120,
   awayCooldownHours: 24,
 };
+
+async function expectPromiseToRejectWithMessage(
+  promise: Promise<unknown>,
+  message: string,
+): Promise<void> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    if (error instanceof Error) {
+      expect(error.message).toContain(message);
+    }
+    return;
+  }
+
+  throw new Error(`Expected promise to reject with "${message}".`);
+}
 
 describe('agent session store', () => {
   test('sets, reads, deletes, and clears cached sessions', () => {
@@ -127,5 +170,244 @@ describe('reminder store', () => {
       setReminderSchedulerTimeout(null, null);
       setReminderServiceRunning(false);
     }
+  });
+});
+
+describe('external data cache store', () => {
+  test('deduplicates reads inside a namespace and keeps namespaces isolated', async () => {
+    clearExternalDataCache();
+    let readCount = 0;
+
+    const first = getOrCreateCachedExternalData({
+      key: 'same-key',
+      maxEntries: 10,
+      namespace: 'pinterest',
+      read: async () => {
+        readCount += 1;
+        return { board: 'quotes' };
+      },
+      ttlMs: 10_000,
+    });
+    const second = getOrCreateCachedExternalData({
+      key: 'same-key',
+      maxEntries: 10,
+      namespace: 'pinterest',
+      read: async () => {
+        readCount += 1;
+        return { board: 'other' };
+      },
+      ttlMs: 10_000,
+    });
+
+    expect(await first).toEqual({ board: 'quotes' });
+    expect(await second).toEqual({ board: 'quotes' });
+    expect(readCount).toBe(1);
+    expect(getExternalDataCacheSize('pinterest')).toBe(1);
+    expect(getExternalDataCacheSize('steam-profile')).toBe(0);
+  });
+
+  test('drops failed reads so the next attempt can retry', async () => {
+    clearExternalDataCache();
+
+    await expectPromiseToRejectWithMessage(
+      getOrCreateCachedExternalData({
+        key: 'private-board',
+        maxEntries: 10,
+        namespace: 'pinterest',
+        read: async () => {
+          throw new Error('private');
+        },
+        ttlMs: 10_000,
+      }),
+      'private',
+    );
+
+    expect(getExternalDataCacheSize('pinterest')).toBe(0);
+  });
+
+  test('refreshes cached data after its ttl expires', async () => {
+    clearExternalDataCache();
+    let readCount = 0;
+
+    const first = await getOrCreateCachedExternalData({
+      key: 'board:quotes',
+      maxEntries: 10,
+      namespace: 'pinterest',
+      now: 1_000,
+      read: async () => {
+        readCount += 1;
+        return { version: readCount };
+      },
+      ttlMs: 100,
+    });
+    const cached = await getOrCreateCachedExternalData({
+      key: 'board:quotes',
+      maxEntries: 10,
+      namespace: 'pinterest',
+      now: 1_050,
+      read: async () => {
+        readCount += 1;
+        return { version: readCount };
+      },
+      ttlMs: 100,
+    });
+    const refreshed = await getOrCreateCachedExternalData({
+      key: 'board:quotes',
+      maxEntries: 10,
+      namespace: 'pinterest',
+      now: 1_101,
+      read: async () => {
+        readCount += 1;
+        return { version: readCount };
+      },
+      ttlMs: 100,
+    });
+
+    expect(first).toEqual({ version: 1 });
+    expect(cached).toEqual({ version: 1 });
+    expect(refreshed).toEqual({ version: 2 });
+    expect(readCount).toBe(2);
+  });
+
+  test('force refresh bypasses a live cache entry and replaces it', async () => {
+    clearExternalDataCache();
+    let readCount = 0;
+
+    await getOrCreateCachedExternalData({
+      key: 'profile:owner',
+      maxEntries: 10,
+      namespace: 'steam-profile',
+      read: async () => {
+        readCount += 1;
+        return { version: readCount };
+      },
+      ttlMs: 10_000,
+    });
+    const refreshed = await getOrCreateCachedExternalData({
+      forceRefresh: true,
+      key: 'profile:owner',
+      maxEntries: 10,
+      namespace: 'steam-profile',
+      read: async () => {
+        readCount += 1;
+        return { version: readCount };
+      },
+      ttlMs: 10_000,
+    });
+    const cachedRefresh = await getOrCreateCachedExternalData({
+      key: 'profile:owner',
+      maxEntries: 10,
+      namespace: 'steam-profile',
+      read: async () => {
+        readCount += 1;
+        return { version: readCount };
+      },
+      ttlMs: 10_000,
+    });
+
+    expect(refreshed).toEqual({ version: 2 });
+    expect(cachedRefresh).toEqual({ version: 2 });
+    expect(readCount).toBe(2);
+  });
+});
+
+describe('Steam profile store', () => {
+  test('deduplicates cached Steam profile data reads', async () => {
+    clearSteamProfileDataCache();
+    let readCount = 0;
+
+    const first = getOrCreateCachedSteamProfileData('profile:owner', async () => {
+      readCount += 1;
+      return { name: 'Shadow' };
+    });
+    const second = getOrCreateCachedSteamProfileData('profile:owner', async () => {
+      readCount += 1;
+      return { name: 'Other' };
+    });
+
+    expect(await first).toEqual({ name: 'Shadow' });
+    expect(await second).toEqual({ name: 'Shadow' });
+    expect(readCount).toBe(1);
+    expect(getSteamProfileDataCacheSize()).toBe(1);
+  });
+
+  test('removes failed Steam profile data reads from cache', async () => {
+    clearSteamProfileDataCache();
+
+    await expectPromiseToRejectWithMessage(
+      getOrCreateCachedSteamProfileData('profile:error', async () => {
+        throw new Error('private');
+      }),
+      'private',
+    );
+
+    expect(getSteamProfileDataCacheSize()).toBe(0);
+  });
+
+  test('can force refresh Steam profile data through the wrapper', async () => {
+    clearSteamProfileDataCache();
+    let readCount = 0;
+
+    await getOrCreateCachedSteamProfileData('profile:owner', async () => {
+      readCount += 1;
+      return { version: readCount };
+    });
+    const refreshed = await getOrCreateCachedSteamProfileData(
+      'profile:owner',
+      async () => {
+        readCount += 1;
+        return { version: readCount };
+      },
+      { forceRefresh: true },
+    );
+
+    expect(refreshed).toEqual({ version: 2 });
+    expect(readCount).toBe(2);
+  });
+});
+
+describe('Steam client store', () => {
+  test('tracks Steam Community readiness and startup promise', () => {
+    const startPromise = Promise.resolve();
+
+    setSteamCommunityReady(false);
+    setSteamCommunityStartPromise(null);
+    setSteamCommunityLifecycleListenersAttached(false);
+
+    setSteamCommunityReady(true);
+    setSteamCommunityStartPromise(startPromise);
+    setSteamCommunityLifecycleListenersAttached(true);
+
+    expect(isSteamCommunityReady()).toBe(true);
+    expect(getSteamCommunityStartPromise()).toBe(startPromise);
+    expect(areSteamCommunityLifecycleListenersAttached()).toBe(true);
+
+    setSteamCommunityReady(false);
+    setSteamCommunityStartPromise(null);
+    setSteamCommunityLifecycleListenersAttached(false);
+  });
+});
+
+describe('Steam service store', () => {
+  test('tracks Steam comment service lifecycle state', () => {
+    setSteamProfileCommentServiceRunning(false);
+    setSteamProfileCommentCheckProcessing(false);
+    setPendingSteamProfileCommentCheck(false);
+
+    setSteamProfileCommentServiceRunning(true);
+    setSteamProfileCommentCheckProcessing(true);
+    setPendingSteamProfileCommentCheck(true);
+
+    expect(isSteamProfileCommentServiceRunning()).toBe(true);
+    expect(isSteamProfileCommentCheckProcessing()).toBe(true);
+    expect(hasPendingSteamProfileCommentCheck()).toBe(true);
+
+    setSteamProfileCommentServiceRunning(false);
+    setSteamProfileCommentCheckProcessing(false);
+    setPendingSteamProfileCommentCheck(false);
+
+    expect(isSteamProfileCommentServiceRunning()).toBe(false);
+    expect(isSteamProfileCommentCheckProcessing()).toBe(false);
+    expect(hasPendingSteamProfileCommentCheck()).toBe(false);
   });
 });

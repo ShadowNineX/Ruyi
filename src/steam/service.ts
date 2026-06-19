@@ -15,6 +15,14 @@ import {
 } from '../db/models';
 import { env } from '../env';
 import { botLogger } from '../logger';
+import {
+  hasPendingSteamProfileCommentCheck,
+  isSteamProfileCommentCheckProcessing,
+  isSteamProfileCommentServiceRunning,
+  setPendingSteamProfileCommentCheck,
+  setSteamProfileCommentCheckProcessing,
+  setSteamProfileCommentServiceRunning,
+} from '../stores/steam-service-store';
 import { runWithToolContext } from '../utils/types';
 import {
   buildSteamUserIdentity,
@@ -123,23 +131,21 @@ function commentWasAlreadyHandled(
 
 class SteamProfileCommentService {
   private unsubscribeCommentNotifications: (() => void) | null = null;
-  private running = false;
-  private processing = false;
-  private pendingCheck = false;
 
   async start(): Promise<void> {
     if (!steamIntegrationEnabled()) {
       botLogger.info('Steam profile comment chat disabled');
       return;
     }
-    if (this.running) { return; }
-    this.running = true;
+    if (isSteamProfileCommentServiceRunning()) { return; }
+    setSteamProfileCommentServiceRunning(true);
 
     try {
       await steamCommunityClient.start();
       this.subscribeToCommentNotifications();
       await this.checkComments('startup');
     } catch (error) {
+      setSteamProfileCommentServiceRunning(false);
       botLogger.error(
         { error: getErrorMessage(error) },
         'Steam profile comment service failed during startup',
@@ -148,10 +154,10 @@ class SteamProfileCommentService {
   }
 
   stop(): void {
-    this.running = false;
+    setSteamProfileCommentServiceRunning(false);
     this.unsubscribeCommentNotifications?.();
     this.unsubscribeCommentNotifications = null;
-    this.pendingCheck = false;
+    setPendingSteamProfileCommentCheck(false);
     steamCommunityClient.stop();
   }
 
@@ -170,11 +176,11 @@ class SteamProfileCommentService {
   }
 
   private async checkComments(reason: CommentCheckReason): Promise<void> {
-    if (this.processing) {
-      this.pendingCheck = true;
+    if (isSteamProfileCommentCheckProcessing()) {
+      setPendingSteamProfileCommentCheck(true);
       return;
     }
-    this.processing = true;
+    setSteamProfileCommentCheckProcessing(true);
 
     try {
       const profileId = env.STEAM_BOT_STEAM_ID64;
@@ -188,9 +194,12 @@ class SteamProfileCommentService {
         'Steam profile comment check failed',
       );
     } finally {
-      this.processing = false;
-      if (this.pendingCheck && this.running) {
-        this.pendingCheck = false;
+      setSteamProfileCommentCheckProcessing(false);
+      if (
+        hasPendingSteamProfileCommentCheck()
+        && isSteamProfileCommentServiceRunning()
+      ) {
+        setPendingSteamProfileCommentCheck(false);
         void this.checkComments('queued');
       }
     }

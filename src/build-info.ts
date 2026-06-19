@@ -14,20 +14,21 @@ function readBundledString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+function readBundledConstant(read: () => string | undefined): string | null {
+  try {
+    return readBundledString(read() ?? null);
+  } catch (error) {
+    if (error instanceof ReferenceError) { return null; }
+    throw error;
+  }
+}
+
 function readBundledCommit(): string | null {
-  return readBundledString(
-    typeof __RUYI_GIT_COMMIT__ === 'undefined'
-      ? null
-      : __RUYI_GIT_COMMIT__,
-  );
+  return readBundledConstant(() => __RUYI_GIT_COMMIT__);
 }
 
 function readBundledBuildTime(): string | null {
-  return readBundledString(
-    typeof __RUYI_BUILD_TIME__ === 'undefined'
-      ? null
-      : __RUYI_BUILD_TIME__,
-  );
+  return readBundledConstant(() => __RUYI_BUILD_TIME__);
 }
 
 export function formatShortCommit(commit: string): string {

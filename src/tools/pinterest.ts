@@ -1,10 +1,15 @@
 import { tool } from '@openai/agents';
 import { z } from 'zod';
+import {
+  PINTEREST_DATA_CACHE_MAX_ENTRIES,
+  PINTEREST_DATA_CACHE_TTL_MS,
+} from '../constants';
 import { toolLogger } from '../logger';
 import {
   fetchScrapeCreatorsJson,
   parseScrapeCreatorsSchema,
 } from '../services/scrapecreators-client';
+import { getOrCreateCachedExternalData } from '../stores/data-cache-store';
 import { formatError } from '../utils/types';
 
 const PINTEREST_BASE_URL = 'https://www.pinterest.com';
@@ -12,6 +17,7 @@ const MAX_PINTEREST_RESULTS = 20;
 const DEFAULT_PINTEREST_RESULTS = 10;
 const MAX_PINTEREST_RECOMMENDED_FOLLOW_UPS = 10;
 const TRIM_PINTEREST_RESPONSE = false;
+const PINTEREST_CACHE_NAMESPACE = 'pinterest';
 
 type PinterestAction = 'user_boards' | 'board_pins' | 'pin' | 'search';
 type ApiRecord = Record<string, unknown>;
@@ -411,16 +417,32 @@ function summarizePin(pin: PinterestPin) {
 
 async function callScrapeCreators(
   request: ScrapeCreatorsRequest,
+  forceRefresh: boolean,
 ): Promise<unknown> {
-  return fetchScrapeCreatorsJson({
-    path: request.path,
-    params: request.params,
-    notConfiguredMessage:
-      'ScrapeCreators is not configured. Set SCRAPECREATORS_API_KEY to use Pinterest tools.',
-    requestFailedMessage: 'ScrapeCreators request failed',
-    nonJsonLogMessage: 'ScrapeCreators response body was not JSON',
-    logDebug: (context, message) => toolLogger.debug(context, message),
+  return getOrCreateCachedExternalData({
+    forceRefresh,
+    key: getScrapeCreatorsCacheKey(request),
+    maxEntries: PINTEREST_DATA_CACHE_MAX_ENTRIES,
+    namespace: PINTEREST_CACHE_NAMESPACE,
+    read: () => fetchScrapeCreatorsJson({
+      path: request.path,
+      params: request.params,
+      notConfiguredMessage:
+        'ScrapeCreators is not configured. Set SCRAPECREATORS_API_KEY to use Pinterest tools.',
+      requestFailedMessage: 'ScrapeCreators request failed',
+      nonJsonLogMessage: 'ScrapeCreators response body was not JSON',
+      logDebug: (context, message) => toolLogger.debug(context, message),
+    }),
+    ttlMs: PINTEREST_DATA_CACHE_TTL_MS,
   });
+}
+
+function getScrapeCreatorsCacheKey(request: ScrapeCreatorsRequest): string {
+  const params = Object.entries(request.params)
+    .filter(([, value]) => value !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+
+  return JSON.stringify([request.path, params]);
 }
 
 function parsePinterestResponse(
@@ -678,6 +700,12 @@ export const pinterestTool = tool({
       .number()
       .nullable()
       .describe('Maximum boards or pins to return, 1-20. Defaults to 10.'),
+    fresh: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Bypass the short cache and refetch from ScrapeCreators. Use only when the user asks to refresh or wants current board/pin data.',
+      ),
   }),
   execute: async ({
     action,
@@ -687,6 +715,7 @@ export const pinterestTool = tool({
     query,
     cursor,
     max_results,
+    fresh,
   }) => {
     try {
       const maxResults = clampMaxResults(max_results);
@@ -698,7 +727,7 @@ export const pinterestTool = tool({
         query,
         cursor,
       });
-      const data = await callScrapeCreators(request);
+      const data = await callScrapeCreators(request, fresh);
       const parsed = parsePinterestResponse(action, data);
       const summary = summarizeResponse(parsed, maxResults);
       const nextCursor = parsed.cursor;
@@ -720,6 +749,7 @@ export const pinterestTool = tool({
           recommendedPinDetailCount: imageStats.recommendedPinDetailCount,
           recommendedNextToolCallCount: recommendedNextToolCalls.length,
           hasCursor: Boolean(nextCursor),
+          fresh,
         },
         'Pinterest lookup complete',
       );
@@ -727,6 +757,10 @@ export const pinterestTool = tool({
       return {
         provider: 'scrapecreators',
         action,
+        cache: {
+          fresh,
+          ttl_seconds: 300,
+        },
         nextCursor,
         ...summary,
         returned_pin_count: imageStats.returnedPinCount,

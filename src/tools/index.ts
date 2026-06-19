@@ -23,6 +23,7 @@ import {
 } from '../discord/tools/smithery';
 import { userInfoTool } from '../discord/tools/user';
 import { env } from '../env';
+import { steamProfileTool } from '../steam/tools/profile';
 import {
   steamProfileCommentsTool,
   steamProfileCommentTool,
@@ -103,6 +104,11 @@ const baseToolRegistry: readonly ToolRegistration[] = [
   { tool: memoryRecallTool },
   { tool: searchMemoryTool },
   { tool: searchConversationTool, surfaces: ['discord', 'steam'] },
+  {
+    tool: steamProfileTool,
+    externalService: true,
+    surfaces: ['discord', 'steam'],
+  },
   { tool: auditLogTool, surfaces: ['discord'] },
   { tool: lastfmTool },
   { tool: smitheryListToolsTool, externalService: true, surfaces: ['discord'] },
