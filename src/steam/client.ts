@@ -712,6 +712,7 @@ class SteamCommunityClient {
       setSteamCommunityLoginInProgress(false);
       botLogger.info('Steam account logged on');
       this.setOnlinePresence('loggedOn');
+      this.requestWebSession('loggedOn');
     });
     this.user.on('refreshToken', () => {
       botLogger.warn(
