@@ -478,14 +478,36 @@ class ChatService {
     session: ChatRuntimeSession,
   ): Promise<void> {
     const textStream = stream.toTextStream({ compatibleWithNodeStreams: true });
-    for await (const chunk of textStream) {
-      const delta = typeof chunk === 'string' ? chunk : String(chunk);
-      session.onTextGenerationStart(delta);
+    const completion = stream.completed.then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    let textError: unknown = null;
+    try {
+      await this.consumeTextStream(textStream, session);
+    } catch (error) {
+      textError = error;
     }
 
-    session.onTextGenerationEnd();
-    await stream.completed;
+    const completionError = await completion;
+    if (textError) { throw textError; }
+    if (completionError) { throw completionError; }
     if (stream.error) { throw stream.error; }
+  }
+
+  private async consumeTextStream(
+    textStream: AsyncIterable<unknown>,
+    session: ChatRuntimeSession,
+  ): Promise<void> {
+    try {
+      for await (const chunk of textStream) {
+        const delta = typeof chunk === 'string' ? chunk : String(chunk);
+        session.onTextGenerationStart(delta);
+      }
+    } finally {
+      session.onTextGenerationEnd();
+    }
   }
 
   private getToolDisplayName(toolName: string, surface: ConversationSurface): {
