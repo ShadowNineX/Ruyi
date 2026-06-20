@@ -44,7 +44,7 @@ const STEAM_COMMENT_FETCH_COUNT = 100;
 const STEAM_CHAT_HISTORY_LIMIT = 25;
 const SEEN_COMMENT_CAP = 500;
 
-type CommentCheckReason = 'startup' | 'notification' | 'queued';
+type CommentCheckReason = 'startup' | 'notification' | 'queued' | 'reconnect';
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -131,6 +131,7 @@ function commentWasAlreadyHandled(
 
 class SteamProfileCommentService {
   private unsubscribeCommentNotifications: (() => void) | null = null;
+  private unsubscribeReadyNotifications: (() => void) | null = null;
 
   async start(): Promise<void> {
     if (!steamIntegrationEnabled()) {
@@ -140,15 +141,16 @@ class SteamProfileCommentService {
     if (isSteamProfileCommentServiceRunning()) { return; }
     setSteamProfileCommentServiceRunning(true);
 
+    this.subscribeToReadyNotifications();
+    this.subscribeToCommentNotifications();
+
     try {
       await steamCommunityClient.start();
-      this.subscribeToCommentNotifications();
       await this.checkComments('startup');
     } catch (error) {
-      setSteamProfileCommentServiceRunning(false);
       botLogger.error(
         { error: getErrorMessage(error) },
-        'Steam profile comment service failed during startup',
+        'Steam profile comment service failed during startup; reconnect will keep retrying',
       );
     }
   }
@@ -156,9 +158,22 @@ class SteamProfileCommentService {
   stop(): void {
     setSteamProfileCommentServiceRunning(false);
     this.unsubscribeCommentNotifications?.();
+    this.unsubscribeReadyNotifications?.();
     this.unsubscribeCommentNotifications = null;
+    this.unsubscribeReadyNotifications = null;
     setPendingSteamProfileCommentCheck(false);
     steamCommunityClient.stop();
+  }
+
+  private subscribeToReadyNotifications(): void {
+    if (this.unsubscribeReadyNotifications) { return; }
+
+    this.unsubscribeReadyNotifications = steamCommunityClient.onReady(() => {
+      if (!isSteamProfileCommentServiceRunning()) { return; }
+
+      botLogger.info('Steam profile comment service recovered web session');
+      void this.checkComments('reconnect');
+    });
   }
 
   private subscribeToCommentNotifications(): void {

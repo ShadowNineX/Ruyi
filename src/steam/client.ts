@@ -7,20 +7,31 @@ import { env } from '../env';
 import { botLogger } from '../logger';
 import {
   areSteamCommunityLifecycleListenersAttached,
+  getSteamCommunityReconnectTimer,
   getSteamCommunityStartPromise,
+  incrementSteamCommunityReconnectAttempts,
   isSteamCommunityReady,
+  isSteamCommunityReconnectEnabled,
+  resetSteamCommunityReconnectAttempts,
   setSteamCommunityLifecycleListenersAttached,
   setSteamCommunityReady,
+  setSteamCommunityReconnectEnabled,
+  setSteamCommunityReconnectTimer,
   setSteamCommunityStartPromise,
 } from '../stores/steam-client-store';
 import {
   clearSteamProfileDataCache,
   getOrCreateCachedSteamProfileData,
 } from '../stores/steam-profile-store';
+import { BROWSER_HEADERS } from '../utils/browser-headers';
 import { isValidDate } from '../utils/date';
 import { steamIntegrationEnabled } from '../utils/user-identity';
+import { extractSteamProfileBackgroundUrl } from './profile-background';
 
 const DEFAULT_COMMENT_FETCH_COUNT = 20;
+const STEAM_RECONNECT_BASE_DELAY_MS = 10_000;
+const STEAM_RECONNECT_MAX_DELAY_MS = 5 * 60_000;
+const STEAM_WEB_SESSION_TIMEOUT_MS = 75_000;
 const STEAM_ID64_PATTERN = /^\d{17}$/;
 
 interface SteamCommentOptions {
@@ -206,9 +217,6 @@ type SteamProfileWithComments = Omit<
   | 'getProfileBackground'
 > & {
   getAvatarURL: (size?: string, protocol?: string) => string;
-  getProfileBackground: (
-    callback: (error: SteamCommunity.CallbackError, backgroundUrl: string | null) => void,
-  ) => void;
   getInventoryContexts: (
     callback: (
       error: SteamCommunity.CallbackError,
@@ -260,6 +268,10 @@ function optionalNumber(value: unknown): number | null {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function getSteamLogOnOptions(): { refreshToken: string; steamID: string } {
@@ -613,12 +625,72 @@ function normalizeInventoryItemsSummary(
 }
 
 class SteamCommunityClient {
-  private readonly user = new SteamUser({ renewRefreshTokens: true });
+  private readonly user = new SteamUser({
+    autoRelogin: true,
+    renewRefreshTokens: true,
+  });
+
   private readonly community = new SteamCommunity();
 
   private setOnlinePresence(reason: string): void {
     this.user.setPersona(SteamUser.EPersonaState.Online);
     botLogger.info({ reason }, 'Steam account presence set to online');
+  }
+
+  private clearScheduledReconnect(): void {
+    const timer = getSteamCommunityReconnectTimer();
+    if (!timer) { return; }
+
+    clearTimeout(timer);
+    setSteamCommunityReconnectTimer(null);
+  }
+
+  private scheduleReconnect(reason: string): void {
+    if (
+      !steamIntegrationEnabled()
+      || !isSteamCommunityReconnectEnabled()
+      || isSteamCommunityReady()
+      || getSteamCommunityReconnectTimer()
+    ) {
+      return;
+    }
+
+    const attempt = incrementSteamCommunityReconnectAttempts();
+    const delayMs = Math.min(
+      STEAM_RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1),
+      STEAM_RECONNECT_MAX_DELAY_MS,
+    );
+    const timer = setTimeout(() => {
+      setSteamCommunityReconnectTimer(null);
+      if (!isSteamCommunityReconnectEnabled() || isSteamCommunityReady()) {
+        return;
+      }
+
+      botLogger.info({ attempt, reason }, 'Retrying Steam Community connection');
+      void this.start().catch(() => {
+        // start() logs the failure and schedules the next retry.
+      });
+    }, delayMs);
+
+    setSteamCommunityReconnectTimer(timer);
+    botLogger.warn(
+      { attempt, delayMs, reason },
+      'Scheduled Steam Community reconnect',
+    );
+  }
+
+  private requestWebSession(reason: string): void {
+    if (!this.user.steamID) { return; }
+
+    try {
+      this.user.webLogOn();
+      botLogger.debug({ reason }, 'Requested Steam Community web session');
+    } catch (error) {
+      botLogger.warn(
+        { reason, error: getErrorMessage(error) },
+        'Could not request Steam Community web session',
+      );
+    }
   }
 
   private attachLifecycleListeners(): void {
@@ -638,6 +710,7 @@ class SteamCommunityClient {
       setSteamCommunityStartPromise(null);
       clearSteamProfileDataCache();
       botLogger.warn({ eresult, message }, 'Steam account disconnected');
+      this.scheduleReconnect('disconnected');
     });
     this.user.on('error', (error) => {
       setSteamCommunityReady(false);
@@ -646,6 +719,19 @@ class SteamCommunityClient {
       botLogger.error(
         { error: getErrorMessage(error), stack: error.stack, name: error.name },
         'Steam account emitted an error',
+      );
+      this.scheduleReconnect('error');
+    });
+    this.user.on('webSession', (sessionId, cookies) => {
+      this.community.setCookies(cookies);
+      setSteamCommunityReady(true);
+      setSteamCommunityStartPromise(null);
+      resetSteamCommunityReconnectAttempts();
+      this.clearScheduledReconnect();
+      this.setOnlinePresence('webSession');
+      botLogger.info(
+        { sessionIdLength: sessionId.length },
+        'Steam Community web session established',
       );
     });
 
@@ -657,6 +743,7 @@ class SteamCommunityClient {
       botLogger.info('Steam integration disabled; missing Steam environment');
       return Promise.resolve();
     }
+    setSteamCommunityReconnectEnabled(true);
     if (isSteamCommunityReady()) { return Promise.resolve(); }
 
     const existingStartPromise = getSteamCommunityStartPromise();
@@ -666,29 +753,49 @@ class SteamCommunityClient {
     this.attachLifecycleListeners();
 
     const startPromise = new Promise<void>((resolve, reject) => {
-      const fail = (error: Error): void => {
+      let settled = false;
+      const timeout = setTimeout(() => {
+        this.requestWebSession('startup_timeout');
+        fail(new Error('Timed out waiting for Steam Community web session'));
+      }, STEAM_WEB_SESSION_TIMEOUT_MS);
+      const cleanup = (): void => {
+        clearTimeout(timeout);
         this.user.off('webSession', onWebSession);
+        this.user.off('error', fail);
+      };
+      const fail = (error: Error): void => {
+        if (settled) { return; }
+        settled = true;
+        cleanup();
         reject(error);
       };
-      const onWebSession = (_sessionId: string, cookies: string[]): void => {
-        this.community.setCookies(cookies);
-        setSteamCommunityReady(true);
-        this.setOnlinePresence('webSession');
-        this.user.off('error', fail);
-        botLogger.info('Steam Community web session established');
+      const onWebSession = (): void => {
+        if (settled) { return; }
+        settled = true;
+        cleanup();
         resolve();
       };
 
       this.user.once('webSession', onWebSession);
       this.user.once('error', fail);
 
-      this.user.logOn(logOnOptions);
+      try {
+        if (this.user.steamID) {
+          this.requestWebSession('existing_connection');
+        } else {
+          botLogger.info('Logging into Steam account');
+          this.user.logOn(logOnOptions);
+        }
+      } catch (error) {
+        fail(toError(error));
+      }
     }).catch((error: unknown) => {
       setSteamCommunityStartPromise(null);
       botLogger.error(
         { error: getErrorMessage(error) },
         'Steam integration failed to start',
       );
+      this.scheduleReconnect('start_failed');
       throw error;
     });
 
@@ -698,8 +805,11 @@ class SteamCommunityClient {
 
   stop(): void {
     if (!steamIntegrationEnabled()) { return; }
+    setSteamCommunityReconnectEnabled(false);
+    this.clearScheduledReconnect();
     setSteamCommunityReady(false);
     setSteamCommunityStartPromise(null);
+    resetSteamCommunityReconnectAttempts();
     clearSteamProfileDataCache();
     this.user.logOff();
   }
@@ -714,6 +824,13 @@ class SteamCommunityClient {
     this.user.on('newComments', listener);
     return () => {
       this.user.off('newComments', listener);
+    };
+  }
+
+  onReady(listener: () => void): () => void {
+    this.user.on('webSession', listener);
+    return () => {
+      this.user.off('webSession', listener);
     };
   }
 
@@ -939,22 +1056,26 @@ class SteamCommunityClient {
   private async getProfileBackground(
     profile: SteamProfileWithComments,
   ): Promise<string | null> {
-    return new Promise((resolve) => {
-      profile.getProfileBackground((error, backgroundUrl) => {
-        if (error) {
-          botLogger.debug(
-            {
-              steamId64: profileSteamId64(profile),
-              error: getErrorMessage(error),
-            },
-            'Steam profile background unavailable',
-          );
-          resolve(null);
-          return;
-        }
-        resolve(backgroundUrl);
+    const steamId64 = profileSteamId64(profile);
+    try {
+      const response = await fetch(profileUrlFor(steamId64), {
+        headers: BROWSER_HEADERS,
       });
-    });
+      if (!response.ok) {
+        throw new Error(`Steam profile page returned HTTP ${response.status}`);
+      }
+
+      return extractSteamProfileBackgroundUrl(await response.text());
+    } catch (error) {
+      botLogger.debug(
+        {
+          steamId64,
+          error: getErrorMessage(error),
+        },
+        'Steam profile background unavailable',
+      );
+      return null;
+    }
   }
 
   private async getPersona(steamId64: string): Promise<SteamPersonaSummary | null> {

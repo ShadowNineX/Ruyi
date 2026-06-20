@@ -5,6 +5,7 @@ import { tool } from '@openai/agents';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { z } from 'zod';
 import { toolLogger } from '../logger';
+import { BROWSER_HEADERS } from '../utils/browser-headers';
 import { formatError, toolContextManager } from '../utils/types';
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -14,27 +15,6 @@ const REVERSE_IMAGE_MAX_RESPONSE_BYTES = 256 * 1024;
 const DEFAULT_TEXT_CHARS = 8_000;
 const MAX_TEXT_CHARS = 12_000;
 const REVERSE_IMAGE_FETCH_MAX_TEXT_CHARS = 3_000;
-const USER_AGENT
-  = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-    + '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';
-const BROWSER_HEADERS = {
-  'Accept':
-    'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,'
-    + 'image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Cache-Control': 'no-cache',
-  'Pragma': 'no-cache',
-  'Priority': 'u=0, i',
-  'Sec-CH-UA': `"Google Chrome";v="149", "Chromium";v="149", "Not_A Brand";v="99"`,
-  'Sec-CH-UA-Mobile': '?0',
-  'Sec-CH-UA-Platform': `"Windows"`,
-  'Sec-Fetch-Dest': 'document',
-  'Sec-Fetch-Mode': 'navigate',
-  'Sec-Fetch-Site': 'none',
-  'Sec-Fetch-User': '?1',
-  'Upgrade-Insecure-Requests': '1',
-  'User-Agent': USER_AGENT,
-} as const satisfies HeadersInit;
 const HTML_FALLBACK_REMOVE_SELECTORS = [
   'script',
   'style',
