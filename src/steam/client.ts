@@ -289,6 +289,15 @@ function toSteamUserLookup(profileId: string): SteamID | string {
     : normalized;
 }
 
+function getSteamStartupStatus(
+  user: SteamUser,
+  loginInProgress: boolean,
+): string {
+  if (user.steamID) { return 'logged_on_without_web_session'; }
+  if (loginInProgress) { return 'login_in_progress'; }
+  return 'not_connected';
+}
+
 export function normalizeSteamProfileLookup(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) { return trimmed; }
@@ -705,14 +714,31 @@ class SteamCommunityClient {
     }
   }
 
+  private resetConnectionAfterStartupTimeout(status: string): void {
+    setSteamCommunityLoginInProgress(false);
+    setSteamCommunityReady(false);
+    clearSteamProfileDataCache();
+
+    try {
+      this.user.logOff();
+    } catch (error) {
+      botLogger.warn(
+        { status, error: getErrorMessage(error) },
+        'Could not reset Steam connection after startup timeout',
+      );
+    }
+  }
+
   private attachLifecycleListeners(): void {
     if (areSteamCommunityLifecycleListenersAttached()) { return; }
 
+    this.user.on('debug', (message) => {
+      botLogger.debug({ message }, 'Steam user debug');
+    });
     this.user.on('loggedOn', () => {
       setSteamCommunityLoginInProgress(false);
       botLogger.info('Steam account logged on');
       this.setOnlinePresence('loggedOn');
-      this.requestWebSession('loggedOn');
     });
     this.user.on('refreshToken', () => {
       botLogger.warn(
@@ -751,6 +777,14 @@ class SteamCommunityClient {
         'Steam Community web session established',
       );
     });
+    this.community.on('sessionExpired', (error) => {
+      setSteamCommunityReady(false);
+      botLogger.warn(
+        { error: getErrorMessage(error) },
+        'Steam Community session expired',
+      );
+      this.requestWebSession('sessionExpired');
+    });
 
     setSteamCommunityLifecycleListenersAttached(true);
   }
@@ -771,33 +805,22 @@ class SteamCommunityClient {
 
     const startPromise = new Promise<void>((resolve, reject) => {
       let settled = false;
-      let timeout: ReturnType<typeof setTimeout> | null = null;
-      const scheduleTimeout = (): void => {
-        timeout = setTimeout(() => {
-          if (settled) { return; }
+      const timeout = setTimeout(() => {
+        if (settled) { return; }
 
-          if (this.user.steamID) {
-            this.requestWebSession('startup_timeout');
-            scheduleTimeout();
-            return;
-          }
-
-          if (isSteamCommunityLoginInProgress()) {
-            botLogger.warn(
-              'Steam login is still in progress; waiting for Steam to finish before retrying',
-            );
-            scheduleTimeout();
-            return;
-          }
-
-          fail(new Error('Timed out waiting for Steam Community web session'));
-        }, STEAM_WEB_SESSION_TIMEOUT_MS);
-      };
+        const status = getSteamStartupStatus(
+          this.user,
+          isSteamCommunityLoginInProgress(),
+        );
+        this.resetConnectionAfterStartupTimeout(status);
+        fail(
+          new Error(
+            `Timed out waiting for Steam Community web session: ${status}`,
+          ),
+        );
+      }, STEAM_WEB_SESSION_TIMEOUT_MS);
       const cleanup = (): void => {
-        if (timeout) {
-          clearTimeout(timeout);
-          timeout = null;
-        }
+        clearTimeout(timeout);
         this.user.off('webSession', onWebSession);
         this.user.off('error', fail);
       };
@@ -816,7 +839,6 @@ class SteamCommunityClient {
 
       this.user.once('webSession', onWebSession);
       this.user.once('error', fail);
-      scheduleTimeout();
 
       try {
         if (this.user.steamID) {
