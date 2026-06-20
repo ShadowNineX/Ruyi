@@ -1,6 +1,7 @@
 import { createStore } from '@tanstack/store';
 
 interface SteamClientStoreState {
+  loginInProgress: boolean;
   lifecycleListenersAttached: boolean;
   ready: boolean;
   reconnectAttempts: number;
@@ -10,6 +11,7 @@ interface SteamClientStoreState {
 }
 
 const steamClientStore = createStore<SteamClientStoreState>({
+  loginInProgress: false,
   lifecycleListenersAttached: false,
   ready: false,
   reconnectAttempts: 0,
@@ -17,6 +19,16 @@ const steamClientStore = createStore<SteamClientStoreState>({
   reconnectTimer: null,
   startPromise: null,
 });
+
+export function isSteamCommunityLoginInProgress(): boolean {
+  return steamClientStore.state.loginInProgress;
+}
+
+export function setSteamCommunityLoginInProgress(
+  loginInProgress: boolean,
+): void {
+  steamClientStore.setState(state => ({ ...state, loginInProgress }));
+}
 
 export function isSteamCommunityReady(): boolean {
   return steamClientStore.state.ready;

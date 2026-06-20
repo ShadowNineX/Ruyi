@@ -10,10 +10,12 @@ import {
   getSteamCommunityReconnectTimer,
   getSteamCommunityStartPromise,
   incrementSteamCommunityReconnectAttempts,
+  isSteamCommunityLoginInProgress,
   isSteamCommunityReady,
   isSteamCommunityReconnectEnabled,
   resetSteamCommunityReconnectAttempts,
   setSteamCommunityLifecycleListenersAttached,
+  setSteamCommunityLoginInProgress,
   setSteamCommunityReady,
   setSteamCommunityReconnectEnabled,
   setSteamCommunityReconnectTimer,
@@ -23,10 +25,8 @@ import {
   clearSteamProfileDataCache,
   getOrCreateCachedSteamProfileData,
 } from '../stores/steam-profile-store';
-import { BROWSER_HEADERS } from '../utils/browser-headers';
 import { isValidDate } from '../utils/date';
 import { steamIntegrationEnabled } from '../utils/user-identity';
-import { extractSteamProfileBackgroundUrl } from './profile-background';
 
 const DEFAULT_COMMENT_FETCH_COUNT = 20;
 const STEAM_RECONNECT_BASE_DELAY_MS = 10_000;
@@ -214,7 +214,6 @@ type SteamProfileWithComments = Omit<
   | 'getComments'
   | 'getInventoryContents'
   | 'getInventoryContexts'
-  | 'getProfileBackground'
 > & {
   getAvatarURL: (size?: string, protocol?: string) => string;
   getInventoryContexts: (
@@ -534,6 +533,19 @@ function normalizeEquippedProfileItems(
   };
 }
 
+function getProfileBackgroundUrlFromItems(
+  items: SteamEquippedProfileItemsSummary,
+): string | null {
+  const background = items.profileBackground;
+  return (
+    background?.imageLarge
+    ?? background?.imageSmall
+    ?? background?.movieWebm
+    ?? background?.movieMp4
+    ?? null
+  );
+}
+
 function normalizeInventoryContexts(
   apps: RawSteamInventoryContexts,
 ): SteamInventoryAppSummary[] {
@@ -697,6 +709,7 @@ class SteamCommunityClient {
     if (areSteamCommunityLifecycleListenersAttached()) { return; }
 
     this.user.on('loggedOn', () => {
+      setSteamCommunityLoginInProgress(false);
       botLogger.info('Steam account logged on');
       this.setOnlinePresence('loggedOn');
     });
@@ -706,6 +719,7 @@ class SteamCommunityClient {
       );
     });
     this.user.on('disconnected', (eresult, message) => {
+      setSteamCommunityLoginInProgress(false);
       setSteamCommunityReady(false);
       setSteamCommunityStartPromise(null);
       clearSteamProfileDataCache();
@@ -713,6 +727,7 @@ class SteamCommunityClient {
       this.scheduleReconnect('disconnected');
     });
     this.user.on('error', (error) => {
+      setSteamCommunityLoginInProgress(false);
       setSteamCommunityReady(false);
       setSteamCommunityStartPromise(null);
       clearSteamProfileDataCache();
@@ -723,6 +738,7 @@ class SteamCommunityClient {
       this.scheduleReconnect('error');
     });
     this.user.on('webSession', (sessionId, cookies) => {
+      setSteamCommunityLoginInProgress(false);
       this.community.setCookies(cookies);
       setSteamCommunityReady(true);
       setSteamCommunityStartPromise(null);
@@ -754,12 +770,33 @@ class SteamCommunityClient {
 
     const startPromise = new Promise<void>((resolve, reject) => {
       let settled = false;
-      const timeout = setTimeout(() => {
-        this.requestWebSession('startup_timeout');
-        fail(new Error('Timed out waiting for Steam Community web session'));
-      }, STEAM_WEB_SESSION_TIMEOUT_MS);
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+      const scheduleTimeout = (): void => {
+        timeout = setTimeout(() => {
+          if (settled) { return; }
+
+          if (this.user.steamID) {
+            this.requestWebSession('startup_timeout');
+            scheduleTimeout();
+            return;
+          }
+
+          if (isSteamCommunityLoginInProgress()) {
+            botLogger.warn(
+              'Steam login is still in progress; waiting for Steam to finish before retrying',
+            );
+            scheduleTimeout();
+            return;
+          }
+
+          fail(new Error('Timed out waiting for Steam Community web session'));
+        }, STEAM_WEB_SESSION_TIMEOUT_MS);
+      };
       const cleanup = (): void => {
-        clearTimeout(timeout);
+        if (timeout) {
+          clearTimeout(timeout);
+          timeout = null;
+        }
         this.user.off('webSession', onWebSession);
         this.user.off('error', fail);
       };
@@ -778,15 +815,20 @@ class SteamCommunityClient {
 
       this.user.once('webSession', onWebSession);
       this.user.once('error', fail);
+      scheduleTimeout();
 
       try {
         if (this.user.steamID) {
           this.requestWebSession('existing_connection');
+        } else if (isSteamCommunityLoginInProgress()) {
+          botLogger.info('Steam login already in progress; waiting for web session');
         } else {
           botLogger.info('Logging into Steam account');
+          setSteamCommunityLoginInProgress(true);
           this.user.logOn(logOnOptions);
         }
       } catch (error) {
+        setSteamCommunityLoginInProgress(false);
         fail(toError(error));
       }
     }).catch((error: unknown) => {
@@ -807,6 +849,7 @@ class SteamCommunityClient {
     if (!steamIntegrationEnabled()) { return; }
     setSteamCommunityReconnectEnabled(false);
     this.clearScheduledReconnect();
+    setSteamCommunityLoginInProgress(false);
     setSteamCommunityReady(false);
     setSteamCommunityStartPromise(null);
     resetSteamCommunityReconnectAttempts();
@@ -907,7 +950,7 @@ class SteamCommunityClient {
         const profile = await this.getProfile(lookup, options);
         const steamId64 = profileSteamId64(profile);
         const [backgroundUrl, persona] = await Promise.all([
-          this.getProfileBackground(profile),
+          this.getProfileBackgroundUrlForSteamId(steamId64, options),
           this.getPersona(steamId64),
         ]);
         return normalizeSteamProfileSummary(profile, backgroundUrl, persona);
@@ -926,8 +969,8 @@ class SteamCommunityClient {
       `owned-games:${normalizeSteamProfileLookup(lookup)}`,
       async () => {
         await this.ensureReady();
-        const profile = await this.getProfile(lookup, options);
-        return this.user.getUserOwnedApps(profile.steamID, {
+        const steamId64 = await this.resolveSteamId64(lookup, options);
+        return this.user.getUserOwnedApps(steamId64, {
           includePlayedFreeGames: true,
         });
       },
@@ -940,12 +983,19 @@ class SteamCommunityClient {
     lookup: string,
     options: SteamProfileReadOptions = {},
   ): Promise<SteamEquippedProfileItemsSummary> {
+    const steamId64 = await this.resolveSteamId64(lookup, options);
+    return this.getEquippedProfileItemsForSteamId(steamId64, options);
+  }
+
+  private async getEquippedProfileItemsForSteamId(
+    steamId64: string,
+    options: SteamProfileReadOptions = {},
+  ): Promise<SteamEquippedProfileItemsSummary> {
     return getOrCreateCachedSteamProfileData(
-      `equipped-items:${normalizeSteamProfileLookup(lookup)}`,
+      `equipped-items:${steamId64}`,
       async () => {
         await this.ensureReady();
-        const profile = await this.getProfile(lookup, options);
-        const items = await this.user.getEquippedProfileItems(profile.steamID, {
+        const items = await this.user.getEquippedProfileItems(steamId64, {
           language: 'english',
         });
         return normalizeEquippedProfileItems(items);
@@ -1053,26 +1103,28 @@ class SteamCommunityClient {
     }, options);
   }
 
-  private async getProfileBackground(
-    profile: SteamProfileWithComments,
-  ): Promise<string | null> {
-    const steamId64 = profileSteamId64(profile);
-    try {
-      const response = await fetch(profileUrlFor(steamId64), {
-        headers: BROWSER_HEADERS,
-      });
-      if (!response.ok) {
-        throw new Error(`Steam profile page returned HTTP ${response.status}`);
-      }
+  private async resolveSteamId64(
+    lookup: string,
+    options: SteamProfileReadOptions = {},
+  ): Promise<string> {
+    const normalized = normalizeSteamProfileLookup(lookup);
+    if (STEAM_ID64_PATTERN.test(normalized)) { return normalized; }
 
-      return extractSteamProfileBackgroundUrl(await response.text());
+    const profile = await this.getProfile(normalized, options);
+    return profileSteamId64(profile);
+  }
+
+  private async getProfileBackgroundUrlForSteamId(
+    steamId64: string,
+    options: SteamProfileReadOptions = {},
+  ): Promise<string | null> {
+    try {
+      const items = await this.getEquippedProfileItemsForSteamId(steamId64, options);
+      return getProfileBackgroundUrlFromItems(items);
     } catch (error) {
       botLogger.debug(
-        {
-          steamId64,
-          error: getErrorMessage(error),
-        },
-        'Steam profile background unavailable',
+        { steamId64, error: getErrorMessage(error) },
+        'Steam profile background unavailable from equipped profile items',
       );
       return null;
     }
