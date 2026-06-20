@@ -21,6 +21,15 @@ const envLogger = pino({
  */
 const OPENROUTER_KEY_PREFIX = 'sk-or-v1-';
 
+function hasMongoDatabaseName(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.pathname.replace(/^\/+/, '').length > 0;
+  } catch {
+    return false;
+  }
+}
+
 const envSchema = z.object({
   // Required
   DISCORD_TOKEN: z.string().min(1, 'DISCORD_TOKEN is required'),
@@ -33,7 +42,13 @@ const envSchema = z.object({
     ),
 
   // Optional (with defaults)
-  MONGO_URI: z.string().default('mongodb://localhost:27017/ruyi'),
+  MONGO_URI: z
+    .string()
+    .default('mongodb://localhost:27017/ruyi')
+    .refine(
+      hasMongoDatabaseName,
+      'MONGO_URI must include an explicit database name, for example mongodb://localhost:27017/ruyi',
+    ),
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),
