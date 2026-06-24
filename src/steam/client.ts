@@ -39,7 +39,8 @@ import {
 const DEFAULT_COMMENT_FETCH_COUNT = 20;
 const STEAM_RECONNECT_BASE_DELAY_MS = 10_000;
 const STEAM_RECONNECT_MAX_DELAY_MS = 5 * 60_000;
-const STEAM_WEB_SESSION_TIMEOUT_MS = 75_000;
+const STEAM_WEB_SESSION_TIMEOUT_MS = 3 * 60_000;
+const STEAM_ACCOUNT_START_STAGGER_MS = 2_500;
 const STEAM_ID64_PATTERN = /^\d{17}$/;
 
 interface SteamCommentOptions {
@@ -307,6 +308,10 @@ function getErrorMessage(error: unknown): string {
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function getSteamLogOnOptions(
@@ -1289,23 +1294,38 @@ class SteamCommunityClient {
 
   async startAll(): Promise<void> {
     const clients = this.getAccountClients();
-    const results = await Promise.allSettled(
-      clients.map(client => client.start()),
-    );
-    const failures = results.filter(result => result.status === 'rejected');
+    const failures: Array<{
+      accountId: string;
+      reason: unknown;
+    }> = [];
+
+    for (const [index, client] of clients.entries()) {
+      if (index > 0) {
+        await sleep(STEAM_ACCOUNT_START_STAGGER_MS);
+      }
+
+      try {
+        await client.start();
+      } catch (error) {
+        failures.push({ accountId: client.accountId, reason: error });
+      }
+    }
 
     if (failures.length === 0) { return; }
 
     botLogger.warn(
       {
         failed: failures.length,
-        total: results.length,
-        errors: failures.map(failure => getErrorMessage(failure.reason)),
+        total: clients.length,
+        errors: failures.map(failure => ({
+          accountId: failure.accountId,
+          error: getErrorMessage(failure.reason),
+        })),
       },
       'Some Steam accounts failed to start',
     );
 
-    if (failures.length === results.length) {
+    if (failures.length === clients.length) {
       const [failure] = failures;
       throw toError(failure?.reason ?? 'All Steam accounts failed to start');
     }
