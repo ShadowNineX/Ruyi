@@ -378,6 +378,7 @@ export class ChatSession extends ChatRuntimeSession {
     }
 
     try {
+      if (this.store.state.permissionPromptActive) { return; }
       await this.store.state.statusMessage.edit(
         buildToolStatusPayload(this.store.state),
       );
