@@ -37,10 +37,9 @@ import {
 } from './accounts';
 
 const DEFAULT_COMMENT_FETCH_COUNT = 20;
-const STEAM_RECONNECT_BASE_DELAY_MS = 10_000;
+const STEAM_RECONNECT_BASE_DELAY_MS = 5_000;
 const STEAM_RECONNECT_MAX_DELAY_MS = 5 * 60_000;
-const STEAM_WEB_SESSION_TIMEOUT_MS = 3 * 60_000;
-const STEAM_ACCOUNT_START_STAGGER_MS = 2_500;
+const STEAM_WEB_SESSION_TIMEOUT_MS = 45_000;
 const STEAM_ID64_PATTERN = /^\d{17}$/;
 
 interface SteamCommentOptions {
@@ -308,10 +307,6 @@ function getErrorMessage(error: unknown): string {
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function getSteamLogOnOptions(
@@ -1294,22 +1289,21 @@ class SteamCommunityClient {
 
   async startAll(): Promise<void> {
     const clients = this.getAccountClients();
-    const failures: Array<{
-      accountId: string;
-      reason: unknown;
-    }> = [];
-
-    for (const [index, client] of clients.entries()) {
-      if (index > 0) {
-        await sleep(STEAM_ACCOUNT_START_STAGGER_MS);
-      }
-
-      try {
-        await client.start();
-      } catch (error) {
-        failures.push({ accountId: client.accountId, reason: error });
-      }
-    }
+    const results = await Promise.allSettled(
+      clients.map(async client => ({
+        accountId: client.accountId,
+        result: await client.start(),
+      })),
+    );
+    const failures = results.flatMap((result, index) => {
+      if (result.status === 'fulfilled') { return []; }
+      return [
+        {
+          accountId: clients[index]?.accountId ?? 'unknown',
+          reason: result.reason,
+        },
+      ];
+    });
 
     if (failures.length === 0) { return; }
 
