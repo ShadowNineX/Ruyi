@@ -24,6 +24,7 @@ describe('Steam chat history', () => {
     const profileId = '76561198000000001';
     const history = buildSteamChatHistory(
       profileId,
+      'Ruyi',
       [
         comment(
           'current',
@@ -68,6 +69,7 @@ describe('Steam chat history', () => {
     const profileId = '76561198000000001';
     const history = buildSteamChatHistory(
       profileId,
+      'Ruyi',
       [
         comment(
           'current',
@@ -81,5 +83,38 @@ describe('Steam chat history', () => {
     );
 
     expect(history).toEqual([]);
+  });
+
+  test('labels active bot comments with the active Steam account personality', () => {
+    const tailsProfileId = '76561198000000003';
+    const history = buildSteamChatHistory(
+      tailsProfileId,
+      'Tails',
+      [
+        comment(
+          'reply',
+          tailsProfileId,
+          'Tails',
+          'We can figure this out step by step.',
+          '2026-06-19T10:02:00Z',
+        ),
+        comment(
+          'current',
+          '76561198000000002',
+          'Alex',
+          'Hello :D',
+          '2026-06-19T10:03:00Z',
+        ),
+      ],
+      'current',
+    );
+
+    expect(history).toEqual([
+      {
+        author: 'Tails',
+        content: 'We can figure this out step by step.',
+        isBot: true,
+      },
+    ]);
   });
 });

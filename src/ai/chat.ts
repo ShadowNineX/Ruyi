@@ -274,9 +274,13 @@ class ChatService {
         );
       }
 
+      const promptVersion = getSystemPromptVersion(personality);
+
       aiLogger.info(
         {
           username,
+          personality,
+          promptVersion,
           contextLength: dynamicContext.length,
           profileContextLength: profileContext.length,
           historyCount: chatHistory.length,
@@ -347,7 +351,7 @@ class ChatService {
         model,
         modelSettings,
         surface,
-        getSystemPromptVersion(personality),
+        promptVersion,
       );
       throwIfAborted(signal);
 
@@ -375,6 +379,8 @@ class ChatService {
           surface,
           conversationId,
           sessionId: agentSessionId,
+          personality,
+          promptVersion,
           localToolCount: getToolsForSurface(surface).length,
           maxTurns: AGENT_MAX_TURNS,
         },

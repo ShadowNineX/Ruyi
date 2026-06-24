@@ -89,11 +89,12 @@ function buildSteamCommentPrompt(comment: SteamProfileComment): string {
 
 function steamCommentToChatMessage(
   profileId: string,
+  botDisplayName: string,
   comment: SteamProfileComment,
 ): ChatMessage {
   const isBot = comment.authorSteamId === profileId;
   return {
-    author: isBot ? 'Ruyi' : comment.authorName,
+    author: isBot ? botDisplayName : comment.authorName,
     content: comment.text,
     isBot,
   };
@@ -101,6 +102,7 @@ function steamCommentToChatMessage(
 
 export function buildSteamChatHistory(
   profileId: string,
+  botDisplayName: string,
   comments: SteamProfileComment[],
   currentCommentId: string,
 ): ChatMessage[] {
@@ -115,7 +117,7 @@ export function buildSteamChatHistory(
 
   return previousComments
     .slice(-STEAM_CHAT_HISTORY_LIMIT)
-    .map(comment => steamCommentToChatMessage(profileId, comment));
+    .map(comment => steamCommentToChatMessage(profileId, botDisplayName, comment));
 }
 
 function commentWasAlreadyHandled(
@@ -425,6 +427,7 @@ class SteamProfileCommentService {
           messageTimestamp: comment.date,
           chatHistory: buildSteamChatHistory(
             profileId,
+            getSteamAccountDisplayName(account),
             visibleComments,
             commentId,
           ),
