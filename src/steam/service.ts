@@ -279,7 +279,7 @@ class SteamProfileCommentService {
         lastCheckedAt: new Date(),
       });
       botLogger.info(
-        { profileId, reason },
+        { accountId: account.id, personality: account.personality, profileId, reason },
         'Initialized Steam profile comment state',
       );
       return;
@@ -318,6 +318,8 @@ class SteamProfileCommentService {
     );
     botLogger.debug(
       {
+        accountId: account.id,
+        personality: account.personality,
         profileId,
         reason,
         checked: comments.length,
@@ -416,6 +418,7 @@ class SteamProfileCommentService {
           surface: 'steam',
           surfaceLabel: `Steam profile comments on ${getSteamAccountDisplayName(account)}'s bot profile`,
           personality: account.personality,
+          sessionLabel: account.id,
           identity,
           userMessage,
           username: authorName,
@@ -474,6 +477,8 @@ class SteamProfileCommentService {
     });
     botLogger.info(
       {
+        accountId: account.id,
+        personality: account.personality,
         profileId,
         commentId,
         replyCommentId,

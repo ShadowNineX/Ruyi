@@ -2,6 +2,10 @@ import type { Types } from 'mongoose';
 import mongoose from 'mongoose';
 import { env } from '../env';
 import { dbLogger } from '../logger';
+import {
+  buildAgentSessionId,
+  normalizeSessionLabel,
+} from '../utils/session-label';
 import { isValidSmitheryConnectionId } from '../utils/smithery-connection-id';
 import { getConfigValue, setConfigValue } from './models';
 
@@ -37,6 +41,13 @@ interface LegacyMemoryDocument {
 interface SmitheryConnectionMigrationDocument {
   _id: MongoObjectId;
   connectionId?: string;
+}
+
+interface SteamAgentSessionMigrationDocument {
+  _id: MongoObjectId;
+  createdAt?: Date;
+  profileId?: string;
+  sessionId?: string;
 }
 
 interface IndexDroppableCollection {
@@ -324,6 +335,79 @@ async function removeInvalidSmitheryConnectionIds(): Promise<void> {
   );
 }
 
+function isDigitText(value: string): boolean {
+  if (value.length === 0) { return false; }
+
+  for (const character of value) {
+    if (character < '0' || character > '9') { return false; }
+  }
+
+  return true;
+}
+
+function getSessionIdTimestamp(
+  session: SteamAgentSessionMigrationDocument,
+): number | string {
+  const sessionId = session.sessionId ?? '';
+  const lastDashIndex = sessionId.lastIndexOf('-');
+  const suffix = lastDashIndex >= 0 ? sessionId.slice(lastDashIndex + 1) : '';
+  if (isDigitText(suffix)) { return suffix; }
+
+  return session.createdAt?.getTime() ?? Date.now();
+}
+
+async function migrateSteamAgentSessionLabels(): Promise<void> {
+  if (!(await collectionExists('steam_agent_sessions'))) { return; }
+  if (env.STEAM_ACCOUNTS.length === 0) { return; }
+
+  const labelByProfileId = new Map(
+    env.STEAM_ACCOUNTS.map(account => [
+      account.botSteamId64,
+      normalizeSessionLabel(account.id),
+    ]),
+  );
+  const collection = getDb().collection<SteamAgentSessionMigrationDocument>(
+    'steam_agent_sessions',
+  );
+  const sessions = await collection
+    .find({ profileId: { $in: [...labelByProfileId.keys()] } })
+    .toArray();
+
+  let modified = 0;
+  for (const session of sessions) {
+    const { profileId } = session;
+    if (!profileId) { continue; }
+
+    const label = labelByProfileId.get(profileId);
+    if (!label) { continue; }
+
+    const expectedPrefix = `${label}-steam-${profileId}-`;
+    if (session.sessionId?.startsWith(expectedPrefix)) { continue; }
+
+    await collection.updateOne(
+      { _id: session._id },
+      {
+        $set: {
+          sessionId: buildAgentSessionId({
+            conversationId: profileId,
+            label,
+            surface: 'steam',
+            timestamp: getSessionIdTimestamp(session),
+          }),
+        },
+      },
+    );
+    modified += 1;
+  }
+
+  if (modified > 0) {
+    dbLogger.info(
+      { modified },
+      'Relabeled Steam agent session IDs for configured accounts',
+    );
+  }
+}
+
 const migrations: DatabaseMigration[] = [
   {
     id: '2026-06-16-platform-history-split',
@@ -350,6 +434,10 @@ const migrations: DatabaseMigration[] = [
   {
     id: '2026-06-17-smithery-connection-id-format',
     run: removeInvalidSmitheryConnectionIds,
+  },
+  {
+    id: '2026-06-24-steam-agent-session-account-labels',
+    run: migrateSteamAgentSessionLabels,
   },
 ];
 

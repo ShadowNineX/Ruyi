@@ -33,6 +33,11 @@ import {
   getCachedAgentSessions,
   setCachedAgentSession,
 } from '../stores';
+import {
+  buildAgentSessionId,
+  DEFAULT_SESSION_LABEL,
+  normalizeSessionLabel,
+} from '../utils/session-label';
 import { agentsRuntimeManager } from './client';
 import { systemPromptVersion } from './prompt';
 
@@ -728,13 +733,15 @@ class SessionManager {
     modelSettings = agentsRuntimeManager.modelSettings,
     surface: ConversationSurface = 'discord',
     promptVersion = systemPromptVersion,
+    sessionLabel = DEFAULT_SESSION_LABEL,
   ): Promise<MongoAgentSession> {
+    const normalizedSessionLabel = normalizeSessionLabel(sessionLabel);
     const cacheKey = this.cacheKey(surface, conversationId);
     const existingSession = getCachedAgentSession<MongoAgentSession>(cacheKey);
     if (existingSession) {
       if (existingSession.matchesConfiguration(model, promptVersion)) {
         aiLogger.debug(
-          { surface, conversationId },
+          { surface, conversationId, sessionLabel: normalizedSessionLabel },
           'Using cached agent session',
         );
         await this.touchSession(
@@ -752,7 +759,13 @@ class SessionManager {
         $set: { isActive: false },
       });
       aiLogger.info(
-        { surface, conversationId, currentModel: model, promptVersion },
+        {
+          surface,
+          conversationId,
+          currentModel: model,
+          promptVersion,
+          sessionLabel: normalizedSessionLabel,
+        },
         'Cached agent session configuration changed; creating fresh agent session',
       );
     }
@@ -796,7 +809,12 @@ class SessionManager {
         );
 
         aiLogger.debug(
-          { surface, conversationId, sessionId: persistedSession.sessionId },
+          {
+            surface,
+            conversationId,
+            sessionId: persistedSession.sessionId,
+            sessionLabel: normalizedSessionLabel,
+          },
           'Loaded agent session from Mongo',
         );
         return session;
@@ -811,6 +829,7 @@ class SessionManager {
           currentVersion: promptVersion,
           storedModel: persistedSession.model,
           currentModel: model,
+          sessionLabel: normalizedSessionLabel,
         },
         'Agent session configuration changed; creating fresh agent session',
       );
@@ -819,7 +838,11 @@ class SessionManager {
       });
     }
 
-    const sessionId = `ruyi-${surface}-${conversationId}-${Date.now()}`;
+    const sessionId = buildAgentSessionId({
+      conversationId,
+      label: normalizedSessionLabel,
+      surface,
+    });
     const seedData = await buildSeedSessionData(
       surface,
       conversationId,
@@ -862,7 +885,13 @@ class SessionManager {
     setCachedAgentSession(cacheKey, session);
 
     aiLogger.info(
-      { surface, conversationId, sessionId, seedCount: seedData.items.length },
+      {
+        surface,
+        conversationId,
+        sessionId,
+        sessionLabel: normalizedSessionLabel,
+        seedCount: seedData.items.length,
+      },
       'Created new agent session',
     );
 

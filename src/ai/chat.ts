@@ -68,6 +68,7 @@ interface ChatOptions {
   persistUserMessage?: boolean;
   messageTimestamp?: Date;
   personality?: AssistantPersonality;
+  sessionLabel?: string;
 }
 
 interface TextStreamResult {
@@ -208,6 +209,7 @@ class ChatService {
       signal,
       persistUserMessage = true,
       personality = 'ruyi',
+      sessionLabel = personality,
     } = options;
     const conversationId = channelId;
     const cacheIdentity = identity ?? buildDiscordUserIdentity(userId, username);
@@ -352,6 +354,7 @@ class ChatService {
         modelSettings,
         surface,
         promptVersion,
+        sessionLabel,
       );
       throwIfAborted(signal);
 
