@@ -88,10 +88,24 @@ class SteamWebApiTransport implements ITransport {
   }
 }
 
+function hasArg(name: string): boolean {
+  return process.argv.includes(`--${name}`);
+}
+
 function getArgValue(name: string): string | null {
   const prefix = `--${name}=`;
-  const value = process.argv.find(arg => arg.startsWith(prefix));
-  return value ? value.slice(prefix.length).trim() : null;
+  const exact = `--${name}`;
+
+  for (let index = 0; index < process.argv.length; index += 1) {
+    const arg = process.argv[index] ?? '';
+    if (arg.startsWith(prefix)) { return arg.slice(prefix.length).trim(); }
+    if (arg === exact) {
+      const next = process.argv[index + 1];
+      return next && !next.startsWith('--') ? next.trim() : '';
+    }
+  }
+
+  return null;
 }
 
 function getLoginMode(): LoginMode {
@@ -131,8 +145,47 @@ function parsePersonality(value: string): SteamPersonality {
   throw new Error(`Unsupported personality "${value}". Use ruyi or tails.`);
 }
 
-function defaultAccountId(steamId64: string): string {
-  return `steam_${steamId64}`;
+function defaultAccountId(personality: SteamPersonality): string {
+  return personality;
+}
+
+function printUsage(): void {
+  stdout.write(`Steam refresh token helper
+
+Usage:
+  bun run steam:token
+  bun run steam:token -- --mode=password
+  bun run steam:token -- --personality=tails --id=tails
+
+Options:
+  --mode=qr|password       QR login is the default.
+  --id=ruyi                Short internal account id for STEAM_ACCOUNTS.
+                           This is not your Steam username or SteamID64.
+                           Use "ruyi" for the main bot, "tails" for Tails.
+  --personality=ruyi|tails Persona this Steam account should use.
+  --account=name           Steam account name for password mode.
+  --password=value         Steam password for password mode.
+  --guard-code=value       Steam Guard code for password mode.
+
+After login, the script prints the STEAM_ACCOUNTS JSON for .env.
+`);
+}
+
+function printSteamAccountPromptHelp(steamId64: string): void {
+  stdout.write(`
+Steam authenticated as ${steamId64}.
+
+Now choose how Ruyi should store this Steam bot account:
+- Personality controls how this Steam account talks.
+  ruyi  = normal Ruyi personality
+  tails = Tails personality
+- Account id is a short internal label used in STEAM_ACCOUNTS and tool calls.
+  It is NOT your Steam username and NOT your SteamID64.
+  Good ids: ruyi, tails
+
+Press Enter to accept the value in brackets.
+
+`);
 }
 
 async function readOptionalArg(
@@ -149,19 +202,24 @@ async function readOptionalArg(
 async function getSteamAccountMetadata(
   steamId64: string,
 ): Promise<SteamAccountMetadata> {
-  const fallbackId = defaultAccountId(steamId64);
-  const idInput = await readOptionalArg(
-    'id',
-    `Steam account id for STEAM_ACCOUNTS [${fallbackId}]: `,
-  );
+  printSteamAccountPromptHelp(steamId64);
+
   const personalityInput = await readOptionalArg(
     'personality',
-    'Personality for this Steam account (ruyi/tails) [ruyi]: ',
+    'Personality for this Steam account (ruyi = Ruyi, tails = Tails) [ruyi]: ',
+  );
+  const personality = personalityInput
+    ? parsePersonality(personalityInput)
+    : 'ruyi';
+  const fallbackId = defaultAccountId(personality);
+  const idInput = await readOptionalArg(
+    'id',
+    `Internal account id for STEAM_ACCOUNTS [${fallbackId}]: `,
   );
 
   return {
     id: validateAccountId(idInput ?? fallbackId),
-    personality: personalityInput ? parsePersonality(personalityInput) : 'ruyi',
+    personality,
   };
 }
 
@@ -261,8 +319,13 @@ function printToken(
   };
 
   stdout.write('\nSteam refresh token created.\n\n');
-  stdout.write('Add or merge this account into STEAM_ACCOUNTS in .env:\n\n');
+  stdout.write('Account object:\n\n');
+  stdout.write(`${JSON.stringify(account)}\n\n`);
+  stdout.write('If this is your first Steam account, put this in .env:\n\n');
   stdout.write(`STEAM_ACCOUNTS=${JSON.stringify([account])}\n`);
+  stdout.write(
+    '\nIf STEAM_ACCOUNTS already exists, add the account object inside the existing JSON array instead of replacing the other accounts.\n',
+  );
   stdout.write('\nSet STEAM_OWNER_STEAM_ID64 once for the shared owner profile.\n');
 
   if (expiresAt) {
@@ -451,6 +514,11 @@ async function submitCodeIfNeeded(
 }
 
 async function main(): Promise<void> {
+  if (hasArg('help') || process.argv.includes('-h')) {
+    printUsage();
+    return;
+  }
+
   printStatus('Starting one-time Steam refresh token login.');
   const mode = getLoginMode();
   let guardCode = getArgValue('guard-code');
