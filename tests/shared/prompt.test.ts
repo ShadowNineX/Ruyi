@@ -42,4 +42,13 @@ describe('personality prompts', () => {
     expect(prompt).toContain('Do not use actual Unicode emoji');
     expect(prompt).not.toContain('Tails may use ASCII emoticons');
   });
+
+  test('teaches Discord text attachment routing', () => {
+    const prompt = buildSystemPrompt('ruyi');
+
+    expect(prompt).toContain('send_text_attachment');
+    expect(prompt).toContain('message.txt');
+    expect(prompt).toContain('Do not also repeat the file content in normal chat');
+    expect(prompt).toContain('automatically sent as message.txt');
+  });
 });

@@ -23,6 +23,7 @@ import {
 } from '../../utils/types';
 import { messageSyncService } from '../services/message-sync';
 import { requesterHasChannelPermission } from '../utils/discord-permissions';
+import { sendTextAttachmentToChannel } from '../utils/messages';
 
 interface ReactionInfo {
   emoji: string;
@@ -558,6 +559,67 @@ export const editBotMessageTool = tool({
         'Failed to edit bot message',
       );
       return { error: 'Failed to edit bot message', details: errorMessage };
+    }
+  },
+});
+
+export const sendTextAttachmentTool = tool({
+  name: 'send_text_attachment',
+  description:
+    'Upload text as a Discord .txt attachment. Use this when the user explicitly asks to send text as an attachment, text file, or message.txt. Defaults to message.txt.',
+  parameters: z.object({
+    content: z
+      .string()
+      .min(1)
+      .describe('The exact text content to place inside the .txt attachment.'),
+    file_name: z
+      .string()
+      .nullable()
+      .describe('Optional .txt file name. Use null to send message.txt.'),
+    message: z
+      .string()
+      .nullable()
+      .describe(
+        'Optional short Discord message to send with the attachment. Use null for the default attachment notice.',
+      ),
+  }),
+  execute: async ({ content, file_name, message }) => {
+    const ctx = toolContextManager.get();
+    if (!ctx.channel) {
+      return { error: 'No Discord channel context for sending an attachment' };
+    }
+
+    try {
+      const sent = await sendTextAttachmentToChannel(ctx.channel, content, {
+        fileName: file_name,
+        notice: message,
+      });
+      toolLogger.info(
+        {
+          messageId: sent.id,
+          fileName: sent.fileName,
+          bytes: sent.bytes,
+        },
+        'Sent text attachment',
+      );
+      return {
+        success: true,
+        action: 'sent_text_attachment',
+        message_id: sent.id,
+        file_name: sent.fileName,
+        attachment_url: sent.url,
+        bytes: sent.bytes,
+      };
+    } catch (error) {
+      const errorMessage = formatError(error);
+      toolLogger.error(
+        { error: errorMessage },
+        'Failed to send text attachment',
+      );
+      return {
+        error: 'Failed to send text attachment',
+        details: errorMessage,
+      };
     }
   },
 });

@@ -1,10 +1,19 @@
-import type { Attachment, Message, TextBasedChannel } from 'discord.js';
+import type {
+  Attachment,
+  Message,
+  MessageReplyOptions,
+  TextBasedChannel,
+} from 'discord.js';
 import type { ChatMessage } from '../../ai';
+import { AttachmentBuilder } from 'discord.js';
 import { botLogger } from '../../logger';
 
 const MAX_ATTACHMENT_DESCRIPTION_LENGTH = 120;
 const MAX_EMBED_DESCRIPTION_LENGTH = 240;
 const MAX_EMBED_FIELD_LENGTH = 120;
+const DISCORD_MESSAGE_MAX_LENGTH = 2000;
+const TEXT_ATTACHMENT_DEFAULT_FILE_NAME = 'message.txt';
+const TEXT_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 const DISCORD_UNKNOWN_MESSAGE_CODE = 10008;
 const DISCORD_INVALID_FORM_BODY_CODE = 50035;
 const MENTION_ONLY_PROMPT
@@ -336,13 +345,109 @@ export interface SentChunk {
   content: string;
 }
 
+export interface TextAttachmentResult extends SentChunk {
+  bytes: number;
+  fileName: string;
+  url: string;
+}
+
+interface TextAttachmentOptions {
+  fileName?: string | null;
+  notice?: string | null;
+}
+
+interface TextAttachmentPayload {
+  content: string;
+  files: AttachmentBuilder[];
+}
+
+function normalizeTextAttachmentFileName(fileName: string | null | undefined): string {
+  const normalized = (fileName?.trim() || TEXT_ATTACHMENT_DEFAULT_FILE_NAME)
+    .replaceAll(/[^\w.-]/g, '_')
+    .slice(0, 80);
+  if (!normalized) { return TEXT_ATTACHMENT_DEFAULT_FILE_NAME; }
+  return normalized.toLowerCase().endsWith('.txt') ? normalized : `${normalized}.txt`;
+}
+
+function textByteLength(text: string): number {
+  return Buffer.byteLength(text, 'utf8');
+}
+
+function assertTextAttachmentSize(text: string): number {
+  const bytes = textByteLength(text);
+  if (bytes > TEXT_ATTACHMENT_MAX_BYTES) {
+    throw new Error(
+      `Text attachment is too large (${formatBytes(bytes)}). Maximum supported size is ${formatBytes(TEXT_ATTACHMENT_MAX_BYTES)}.`,
+    );
+  }
+  return bytes;
+}
+
+function buildTextAttachmentPayload(
+  text: string,
+  options: TextAttachmentOptions = {},
+): TextAttachmentPayload {
+  const fileName = normalizeTextAttachmentFileName(options.fileName);
+  assertTextAttachmentSize(text);
+  const attachment = new AttachmentBuilder(Buffer.from(text, 'utf8'), {
+    name: fileName,
+  });
+  return {
+    content:
+      options.notice
+      ?? `I attached the full text as \`${fileName}\`.`,
+    files: [attachment],
+  };
+}
+
+function getSentAttachmentUrl(message: Message, fileName: string): string {
+  return (
+    message.attachments.find(attachment => attachment.name === fileName)?.url
+    ?? message.attachments.first()?.url
+    ?? message.url
+  );
+}
+
+export async function sendTextAttachmentToChannel(
+  channel: TextBasedChannel,
+  text: string,
+  options: TextAttachmentOptions = {},
+): Promise<TextAttachmentResult> {
+  if (!('send' in channel)) {
+    throw new Error('This Discord channel cannot send attachments.');
+  }
+
+  const fileName = normalizeTextAttachmentFileName(options.fileName);
+  const bytes = assertTextAttachmentSize(text);
+  const payload = buildTextAttachmentPayload(text, {
+    ...options,
+    fileName,
+  });
+  const sent = await channel.send(payload);
+  return {
+    id: sent.id,
+    content: text,
+    bytes,
+    fileName,
+    url: getSentAttachmentUrl(sent, fileName),
+  };
+}
+
 async function sendInitialReplyChunk(
   message: Message,
   chunk: string,
 ): Promise<SentChunk | null> {
+  return sendInitialReplyPayload(message, chunk, chunk);
+}
+
+async function sendInitialReplyPayload(
+  message: Message,
+  payload: string | MessageReplyOptions | TextAttachmentPayload,
+  archiveContent: string,
+): Promise<SentChunk | null> {
   try {
-    const sent = await message.reply(chunk);
-    return { id: sent.id, content: chunk };
+    const sent = await message.reply(payload);
+    return { id: sent.id, content: archiveContent };
   } catch (error) {
     const err = error as { code?: number };
     if (err.code === DISCORD_UNKNOWN_MESSAGE_CODE) {
@@ -363,12 +468,19 @@ async function sendInitialReplyChunk(
       botLogger.debug(
         'Reply reference was invalid, sending as regular message',
       );
-      const sent = await message.channel.send(chunk);
-      return { id: sent.id, content: chunk };
+      const sent = await message.channel.send(payload);
+      return { id: sent.id, content: archiveContent };
     }
 
     throw error;
   }
+}
+
+function shouldAttachReply(reply: string): boolean {
+  return (
+    reply.length > DISCORD_MESSAGE_MAX_LENGTH
+    && textByteLength(reply) <= TEXT_ATTACHMENT_MAX_BYTES
+  );
 }
 
 export async function sendReplyChunks(
@@ -376,6 +488,23 @@ export async function sendReplyChunks(
   reply: string,
   user: string,
 ): Promise<SentChunk[]> {
+  if (shouldAttachReply(reply)) {
+    const payload = buildTextAttachmentPayload(reply);
+    const sent = await sendInitialReplyPayload(message, payload, reply);
+    if (!sent) { return []; }
+    botLogger.info(
+      {
+        user,
+        replyLength: reply.length,
+        attachment: true,
+        fileName: TEXT_ATTACHMENT_DEFAULT_FILE_NAME,
+        bytes: textByteLength(reply),
+      },
+      'Sent reply as text attachment',
+    );
+    return [sent];
+  }
+
   const chunks = splitMessage(reply);
   const sentChunks: SentChunk[] = [];
 
@@ -438,12 +567,72 @@ async function deleteBotReplyChunk(
   });
 }
 
+async function deleteBotReplyChunks(
+  message: Message,
+  messageIds: string[],
+): Promise<void> {
+  for (const messageId of messageIds) {
+    await deleteBotReplyChunk(message, messageId);
+  }
+}
+
+async function editBotReplyPayload(
+  message: Message,
+  messageId: string | undefined,
+  payload: TextAttachmentPayload,
+  archiveContent: string,
+): Promise<SentChunk | null> {
+  if (!messageId) { return null; }
+
+  const fetched = await fetchEditableBotMessage(message, messageId);
+  if (!fetched) { return null; }
+
+  const edited = await fetched.edit(payload);
+  return { id: edited.id, content: archiveContent };
+}
+
+async function editReplyAsTextAttachment(
+  message: Message,
+  existingMessageIds: string[],
+  reply: string,
+  user: string,
+): Promise<SentChunk[]> {
+  const payload = buildTextAttachmentPayload(reply);
+  const editedChunk = await editBotReplyPayload(
+    message,
+    existingMessageIds[0],
+    payload,
+    reply,
+  );
+  const sentChunk = editedChunk
+    ?? (await sendInitialReplyPayload(message, payload, reply));
+
+  await deleteBotReplyChunks(message, existingMessageIds.slice(1));
+
+  botLogger.info(
+    {
+      user,
+      replyLength: reply.length,
+      attachment: true,
+      editedChunks: sentChunk ? 1 : 0,
+      previousChunks: existingMessageIds.length,
+    },
+    'Edited reply as text attachment',
+  );
+
+  return sentChunk ? [sentChunk] : [];
+}
+
 export async function editReplyChunks(
   message: Message,
   existingMessageIds: string[],
   reply: string,
   user: string,
 ): Promise<SentChunk[]> {
+  if (shouldAttachReply(reply)) {
+    return editReplyAsTextAttachment(message, existingMessageIds, reply, user);
+  }
+
   const chunks = splitMessage(reply);
   const editedChunks: SentChunk[] = [];
   let editedExistingChunk = false;
@@ -467,9 +656,7 @@ export async function editReplyChunks(
   }
 
   const excessIds = existingMessageIds.slice(chunks.length);
-  for (const messageId of excessIds) {
-    await deleteBotReplyChunk(message, messageId);
-  }
+  await deleteBotReplyChunks(message, excessIds);
 
   botLogger.info(
     {

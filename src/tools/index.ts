@@ -10,6 +10,7 @@ import {
   deleteMessagesTool,
   editBotMessageTool,
   searchMessagesTool,
+  sendTextAttachmentTool,
 } from '../discord/tools/message';
 import { pinTool } from '../discord/tools/pin';
 import { reactionTool } from '../discord/tools/reaction';
@@ -82,6 +83,11 @@ const baseToolRegistry: readonly ToolRegistration[] = [
   { tool: deleteMessagesTool, surfaces: ['discord'] },
   {
     tool: editBotMessageTool,
+    producesDiscordOutput: true,
+    surfaces: ['discord'],
+  },
+  {
+    tool: sendTextAttachmentTool,
     producesDiscordOutput: true,
     surfaces: ['discord'],
   },

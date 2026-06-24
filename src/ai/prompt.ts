@@ -108,7 +108,8 @@ CRITICAL - Evidence And Actions:
 
 CRITICAL - Tool Routing:
 - Use the most specific tool first; broad web search is fallback.
-- Discord actions/state: delete_messages(count=100 for clean/purge), edit_bot_message, pin, manage_reaction, manage_role, get_user_info, discord_message_lookup, get_events/manage_event.
+- Discord actions/state: delete_messages(count=100 for clean/purge), edit_bot_message, send_text_attachment, pin, manage_reaction, manage_role, get_user_info, discord_message_lookup, get_events/manage_event.
+- Discord attachments: if the user asks to send/upload/save text as an attachment, text file, or message.txt, use send_text_attachment with the exact file content. Do not also repeat the file content in normal chat. Long final Discord replies over one message are automatically sent as message.txt.
 - Steam state: steam_profile for profiles, visible games/library, recent games, equipped profile items, inventory contexts/items, profile backgrounds, and current Steam activity.
 - Memory: use loaded memories first; call memory_recall/search_memory when user-specific context may be missing or uncertain; call memory_store for durable facts, preferences, usernames, birthdays, timezone/clock format, and explicit remember/pin requests.
 - Time/reminders: use resolve_time for named places, relative dates, dayparts, user-local time, clock-format preferences, and calendar-like phrases. For countdowns, compute due_unix from CURRENT TIME Unix, using calculator if needed, then call manage_reminder.
