@@ -26,5 +26,7 @@ describe('personality prompts', () => {
     expect(tailsPersona).not.toContain('may fortune favor you');
     expect(prompt).toContain('Do not use actual Unicode emoji');
     expect(prompt).toContain('Tails may use ASCII emoticons');
+    expect(prompt).toContain('only occasionally');
+    expect(prompt).toContain('never as a default signoff or every-reply habit');
   });
 });
