@@ -1,4 +1,5 @@
 import type { ChatMessage } from '../ai';
+import type { SteamAccountConfig } from './accounts';
 import type { SteamProfileComment } from './client';
 import type { SteamCommentWindow } from './comment-sync';
 import {
@@ -13,7 +14,6 @@ import {
   SteamCommentState,
   SteamConversation,
 } from '../db/models';
-import { env } from '../env';
 import { botLogger } from '../logger';
 import {
   hasPendingSteamProfileCommentCheck,
@@ -26,8 +26,12 @@ import {
 import { runWithToolContext } from '../utils/types';
 import {
   buildSteamUserIdentity,
-  steamIntegrationEnabled,
 } from '../utils/user-identity';
+import {
+  getSteamAccountDisplayName,
+  getSteamAccounts,
+  steamIntegrationEnabled,
+} from './accounts';
 import {
   steamCommunityClient,
 
@@ -130,8 +134,8 @@ function commentWasAlreadyHandled(
 }
 
 class SteamProfileCommentService {
-  private unsubscribeCommentNotifications: (() => void) | null = null;
-  private unsubscribeReadyNotifications: (() => void) | null = null;
+  private unsubscribeCommentNotifications: Array<() => void> = [];
+  private unsubscribeReadyNotifications: Array<() => void> = [];
 
   async start(): Promise<void> {
     if (!steamIntegrationEnabled()) {
@@ -145,8 +149,8 @@ class SteamProfileCommentService {
     this.subscribeToCommentNotifications();
 
     try {
-      await steamCommunityClient.start();
-      await this.checkComments('startup');
+      await steamCommunityClient.startAll();
+      await this.checkAllAccounts('startup');
     } catch (error) {
       botLogger.error(
         { error: getErrorMessage(error) },
@@ -157,76 +161,106 @@ class SteamProfileCommentService {
 
   stop(): void {
     setSteamProfileCommentServiceRunning(false);
-    this.unsubscribeCommentNotifications?.();
-    this.unsubscribeReadyNotifications?.();
-    this.unsubscribeCommentNotifications = null;
-    this.unsubscribeReadyNotifications = null;
-    setPendingSteamProfileCommentCheck(false);
+    for (const unsubscribe of this.unsubscribeCommentNotifications) {
+      unsubscribe();
+    }
+    for (const unsubscribe of this.unsubscribeReadyNotifications) {
+      unsubscribe();
+    }
+    this.unsubscribeCommentNotifications = [];
+    this.unsubscribeReadyNotifications = [];
+    for (const account of getSteamAccounts()) {
+      setPendingSteamProfileCommentCheck(account.id, false);
+    }
     steamCommunityClient.stop();
   }
 
   private subscribeToReadyNotifications(): void {
-    if (this.unsubscribeReadyNotifications) { return; }
+    if (this.unsubscribeReadyNotifications.length > 0) { return; }
 
-    this.unsubscribeReadyNotifications = steamCommunityClient.onReady(() => {
-      if (!isSteamProfileCommentServiceRunning()) { return; }
+    this.unsubscribeReadyNotifications = getSteamAccounts().map(account =>
+      steamCommunityClient.onReady(account.id, () => {
+        if (!isSteamProfileCommentServiceRunning()) { return; }
 
-      botLogger.info('Steam profile comment service recovered web session');
-      void this.checkComments('reconnect');
-    });
+        botLogger.info(
+          { accountId: account.id },
+          'Steam profile comment service recovered web session',
+        );
+        void this.checkComments(account, 'reconnect');
+      }),
+    );
   }
 
   private subscribeToCommentNotifications(): void {
-    if (this.unsubscribeCommentNotifications) { return; }
+    if (this.unsubscribeCommentNotifications.length > 0) { return; }
 
-    this.unsubscribeCommentNotifications
-      = steamCommunityClient.onCommentNotification((count, myItems, discussions) => {
-        botLogger.debug(
-          { count, myItems, discussions },
-          'Steam comment notification received',
-        );
-        if (myItems <= 0) { return; }
-        void this.checkComments('notification');
-      });
+    this.unsubscribeCommentNotifications = getSteamAccounts().map(account =>
+      steamCommunityClient.onCommentNotification(
+        account.id,
+        (count, myItems, discussions) => {
+          botLogger.debug(
+            { accountId: account.id, count, myItems, discussions },
+            'Steam comment notification received',
+          );
+          if (myItems <= 0) { return; }
+          void this.checkComments(account, 'notification');
+        },
+      ),
+    );
   }
 
-  private async checkComments(reason: CommentCheckReason): Promise<void> {
-    if (isSteamProfileCommentCheckProcessing()) {
-      setPendingSteamProfileCommentCheck(true);
+  private async checkAllAccounts(reason: CommentCheckReason): Promise<void> {
+    await Promise.all(
+      getSteamAccounts().map(account => this.checkComments(account, reason)),
+    );
+  }
+
+  private async checkComments(
+    account: SteamAccountConfig,
+    reason: CommentCheckReason,
+  ): Promise<void> {
+    if (!steamCommunityClient.isReady(account.id)) {
+      botLogger.debug(
+        { accountId: account.id, reason },
+        'Skipping Steam profile comment check until account is ready',
+      );
       return;
     }
-    setSteamProfileCommentCheckProcessing(true);
+
+    if (isSteamProfileCommentCheckProcessing(account.id)) {
+      setPendingSteamProfileCommentCheck(account.id, true);
+      return;
+    }
+    setSteamProfileCommentCheckProcessing(account.id, true);
 
     try {
-      const profileId = env.STEAM_BOT_STEAM_ID64;
-      if (!profileId) {
-        throw new TypeError('Steam bot profile ID is not configured');
-      }
-      await this.processProfileComments(profileId, reason);
+      await this.processProfileComments(account, reason);
     } catch (error) {
       botLogger.error(
-        { reason, error: getErrorMessage(error) },
+        { accountId: account.id, reason, error: getErrorMessage(error) },
         'Steam profile comment check failed',
       );
     } finally {
-      setSteamProfileCommentCheckProcessing(false);
+      setSteamProfileCommentCheckProcessing(account.id, false);
       if (
-        hasPendingSteamProfileCommentCheck()
+        hasPendingSteamProfileCommentCheck(account.id)
         && isSteamProfileCommentServiceRunning()
       ) {
-        setPendingSteamProfileCommentCheck(false);
-        void this.checkComments('queued');
+        setPendingSteamProfileCommentCheck(account.id, false);
+        void this.checkComments(account, 'queued');
       }
     }
   }
 
   private async processProfileComments(
-    profileId: string,
+    account: SteamAccountConfig,
     reason: CommentCheckReason,
   ): Promise<void> {
+    const profileId = account.botSteamId64;
     const page = await steamCommunityClient.getProfileCommentPage(
       profileId,
       STEAM_COMMENT_FETCH_COUNT,
+      account.id,
     );
     const { comments, totalCount } = page;
     const commentIds = comments.map(comment => comment.id);
@@ -261,7 +295,7 @@ class SteamProfileCommentService {
     for (const comment of newComments) {
       const commentId = comment.id;
       try {
-        await this.replyToComment(profileId, comment, commentId, comments);
+        await this.replyToComment(account, comment, commentId, comments);
       } finally {
         processedIds.push(commentId);
       }
@@ -354,11 +388,12 @@ class SteamProfileCommentService {
   }
 
   private async replyToComment(
-    profileId: string,
+    account: SteamAccountConfig,
     comment: SteamProfileComment,
     commentId: string,
     visibleComments: SteamProfileComment[],
   ): Promise<void> {
+    const profileId = account.botSteamId64;
     const { authorSteamId, authorName } = comment;
     const identity = buildSteamUserIdentity(authorSteamId, authorName);
     const session = new HeadlessChatSession();
@@ -372,12 +407,13 @@ class SteamProfileCommentService {
         channel: null,
         guild: null,
         referencedMessage: null,
-        steam: { profileId, sourceCommentId: commentId },
+        steam: { accountId: account.id, profileId, sourceCommentId: commentId },
       },
       () =>
         chatService.chat({
           surface: 'steam',
-          surfaceLabel: 'Steam profile comments on Ruyi\'s bot profile',
+          surfaceLabel: `Steam profile comments on ${getSteamAccountDisplayName(account)}'s bot profile`,
+          personality: account.personality,
           identity,
           userMessage,
           username: authorName,
@@ -421,15 +457,17 @@ class SteamProfileCommentService {
     const replyCommentId = await steamCommunityClient.postProfileComment(
       profileId,
       steamReply,
+      account.id,
     );
     await conversationContext.rememberSteamMessage({
       profileId,
       authorSteamId: profileId,
-      authorName: 'Ruyi',
+      authorName: getSteamAccountDisplayName(account),
       content: steamReply,
       isBot: true,
       commentId:
-        replyCommentId ?? `ruyi:${commentId}:${Math.floor(Date.now() / 1000)}`,
+        replyCommentId
+        ?? `steam:${account.id}:${commentId}:${Math.floor(Date.now() / 1000)}`,
     });
     botLogger.info(
       {

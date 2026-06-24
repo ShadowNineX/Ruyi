@@ -1,13 +1,14 @@
+import type { SteamProfileCommentTarget } from '../accounts';
 import { tool } from '@openai/agents';
 import { z } from 'zod';
 import { STEAM_PROFILE_COMMENT_MAX_LENGTH } from '../../constants';
-import { env } from '../../env';
 import { toolLogger } from '../../logger';
 import { toolContextManager } from '../../utils/types';
 import {
+  getSteamAccountById,
   resolveSteamProfileTarget,
   steamIntegrationEnabled,
-} from '../../utils/user-identity';
+} from '../accounts';
 import { steamCommunityClient } from '../client';
 import {
   normalizeSteamProfileComment,
@@ -20,10 +21,18 @@ import {
 
 const OWNER_DELETE_COMMENT_LOOKUP_LIMIT = 50;
 
-type SteamProfileCommentTarget = 'bot' | 'owner';
-
 async function steamProfileCommentNeedsApproval(): Promise<boolean> {
   return toolContextManager.get().surface === 'discord';
+}
+
+function getActiveSteamAccountId(): string | null {
+  return toolContextManager.get().steam?.accountId ?? null;
+}
+
+function resolveRequestedSteamAccountId(
+  requestedAccountId: string | null,
+): string | null {
+  return getActiveSteamAccountId() ?? requestedAccountId;
 }
 
 function resolveDeleteCommentId(
@@ -39,14 +48,24 @@ function resolveDeleteCommentId(
 
 async function canDeleteCommentFromTarget(
   target: SteamProfileCommentTarget,
+  accountId: string | null,
   targetProfileId: string,
   commentId: string,
 ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
   if (target === 'bot') { return { allowed: true }; }
 
+  const account = getSteamAccountById(accountId);
+  if (!account) {
+    return {
+      allowed: false,
+      reason: 'The Steam account for this owner-profile action is not configured.',
+    };
+  }
+
   const comments = await steamCommunityClient.getProfileComments(
     targetProfileId,
     OWNER_DELETE_COMMENT_LOOKUP_LIMIT,
+    account.id,
   );
   const comment = comments.find(candidate => candidate.id === commentId);
   if (!comment) {
@@ -57,7 +76,7 @@ async function canDeleteCommentFromTarget(
     };
   }
 
-  if (comment.authorSteamId !== env.STEAM_BOT_STEAM_ID64) {
+  if (comment.authorSteamId !== account.botSteamId64) {
     return {
       allowed: false,
       reason:
@@ -70,6 +89,7 @@ async function canDeleteCommentFromTarget(
 
 async function handleSteamProfileCommentDelete(
   target: SteamProfileCommentTarget,
+  accountId: string | null,
   targetProfileId: string,
   commentId: string | null,
 ) {
@@ -83,6 +103,7 @@ async function handleSteamProfileCommentDelete(
 
   const deletionAccess = await canDeleteCommentFromTarget(
     target,
+    accountId,
     targetProfileId,
     resolvedCommentId,
   );
@@ -96,6 +117,7 @@ async function handleSteamProfileCommentDelete(
   await steamCommunityClient.deleteProfileComment(
     targetProfileId,
     resolvedCommentId,
+    accountId,
   );
   toolLogger.info(
     { target, profileId: targetProfileId, commentId: resolvedCommentId },
@@ -114,6 +136,7 @@ async function handleSteamProfileCommentDelete(
 
 async function handleSteamProfileCommentPost(
   target: SteamProfileCommentTarget,
+  accountId: string | null,
   targetProfileId: string,
   message: string | null,
 ) {
@@ -135,6 +158,7 @@ async function handleSteamProfileCommentPost(
   const commentId = await steamCommunityClient.postProfileComment(
     targetProfileId,
     comment,
+    accountId,
   );
   toolLogger.info(
     {
@@ -168,7 +192,7 @@ async function handleSteamProfileCommentPost(
 export const steamProfileCommentTool = tool({
   name: 'steam_profile_comment',
   description:
-    'Post or delete a Steam Community profile comment from Ruyi. The target is code-whitelisted to either Ruyi\'s bot profile or the configured owner profile; never accepts arbitrary Steam IDs. Deletion is unrestricted on Ruyi\'s own bot profile, but owner-profile deletion is code-limited to comments authored by Ruyi.',
+    'Post or delete a Steam Community profile comment from the active configured bot account. The target is code-whitelisted to either that bot profile or the configured owner profile; never accepts arbitrary Steam IDs. Deletion is unrestricted on the active bot profile, but owner-profile deletion is code-limited to comments authored by that bot account.',
   parameters: z.object({
     action: z
       .enum(['post', 'delete'])
@@ -179,6 +203,15 @@ export const steamProfileCommentTool = tool({
     target: z
       .enum(['bot', 'owner'])
       .describe('Which whitelisted Steam profile to manage.'),
+    account_id: z
+      .string()
+      .min(1)
+      .max(64)
+      .nullable()
+      .default(null)
+      .describe(
+        'Optional configured Steam account id, such as ruyi or tails. Used from Discord only; Steam comment turns use their active account automatically.',
+      ),
     message: z
       .string()
       .min(1)
@@ -195,11 +228,11 @@ export const steamProfileCommentTool = tool({
       .nullable()
       .default(null)
       .describe(
-        'Required when action=delete unless deleting the current Steam comment from Ruyi\'s bot profile. The exact Steam profile comment ID returned by steam_profile_comments, search_conversation, or Steam comment context.',
+        'Required when action=delete unless deleting the current Steam comment from the active bot profile. The exact Steam profile comment ID returned by steam_profile_comments, search_conversation, or Steam comment context.',
       ),
   }),
   needsApproval: steamProfileCommentNeedsApproval,
-  execute: async ({ action, target, message, comment_id }) => {
+  execute: async ({ action, target, account_id, message, comment_id }) => {
     if (!steamIntegrationEnabled()) {
       return {
         error:
@@ -207,7 +240,8 @@ export const steamProfileCommentTool = tool({
       };
     }
 
-    const targetProfileId = resolveSteamProfileTarget(target);
+    const accountId = resolveRequestedSteamAccountId(account_id);
+    const targetProfileId = resolveSteamProfileTarget(target, accountId);
     if (!targetProfileId) {
       return {
         error:
@@ -219,6 +253,7 @@ export const steamProfileCommentTool = tool({
       if (action === 'delete') {
         return await handleSteamProfileCommentDelete(
           target,
+          accountId,
           targetProfileId,
           comment_id,
         );
@@ -226,6 +261,7 @@ export const steamProfileCommentTool = tool({
 
       return await handleSteamProfileCommentPost(
         target,
+        accountId,
         targetProfileId,
         message,
       );
@@ -235,6 +271,7 @@ export const steamProfileCommentTool = tool({
         {
           action,
           target,
+          accountId,
           profileId: targetProfileId,
           commentId: comment_id,
           error: errorMessage,
@@ -252,11 +289,20 @@ export const steamProfileCommentTool = tool({
 export const steamProfileCommentsTool = tool({
   name: 'steam_profile_comments',
   description:
-    'Discord-only bridge for reading or fuzzy-searching recent Steam Community profile comments from a whitelisted profile. Use search_conversation for the active Discord or Steam conversation itself. The target is code-whitelisted to either Ruyi\'s bot profile or the configured owner profile; never accepts arbitrary Steam IDs.',
+    'Discord-only bridge for reading or fuzzy-searching recent Steam Community profile comments from a whitelisted configured Steam account profile. Use search_conversation for the active Discord or Steam conversation itself. The target is code-whitelisted to either the selected bot profile or that account owner profile; never accepts arbitrary Steam IDs.',
   parameters: z.object({
     target: z
       .enum(['bot', 'owner'])
       .describe('Which whitelisted Steam profile to inspect.'),
+    account_id: z
+      .string()
+      .min(1)
+      .max(64)
+      .nullable()
+      .default(null)
+      .describe(
+        'Optional configured Steam account id, such as ruyi or tails. Used from Discord only; Steam comment turns use their active account automatically.',
+      ),
     query: z
       .string()
       .min(1)
@@ -283,7 +329,7 @@ export const steamProfileCommentsTool = tool({
       .default(10)
       .describe('Maximum number of recent comments or search matches to return.'),
   }),
-  execute: async ({ target, query, author, limit }) => {
+  execute: async ({ target, account_id, query, author, limit }) => {
     if (!steamIntegrationEnabled()) {
       return {
         error:
@@ -291,7 +337,8 @@ export const steamProfileCommentsTool = tool({
       };
     }
 
-    const targetProfileId = resolveSteamProfileTarget(target);
+    const accountId = resolveRequestedSteamAccountId(account_id);
+    const targetProfileId = resolveSteamProfileTarget(target, accountId);
     if (!targetProfileId) {
       return {
         error:
@@ -306,10 +353,12 @@ export const steamProfileCommentsTool = tool({
           query,
           author,
           limit,
+          accountId,
         );
         toolLogger.info(
           {
             target,
+            accountId,
             profileId: targetProfileId,
             queryLength: query.length,
             hasAuthorFilter: Boolean(author),
@@ -322,6 +371,7 @@ export const steamProfileCommentsTool = tool({
         return {
           success: true,
           target,
+          account_id: accountId,
           profileId: targetProfileId,
           query,
           author,
@@ -344,10 +394,12 @@ export const steamProfileCommentsTool = tool({
       const comments = await steamCommunityClient.getProfileComments(
         targetProfileId,
         limit,
+        accountId,
       );
       return {
         success: true,
         target,
+        account_id: accountId,
         profileId: targetProfileId,
         comments: comments.map(formatSteamCommentForTool),
       };

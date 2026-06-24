@@ -2,14 +2,33 @@ import type { SteamProfileComment } from '../../src/steam/client';
 import type { ToolContext } from '../../src/utils/types';
 import { beforeAll, describe, expect, mock, test } from 'bun:test';
 
-function requireTestEnv(name: 'STEAM_BOT_STEAM_ID64' | 'STEAM_OWNER_STEAM_ID64'): string {
-  const value = Bun.env[name];
-  if (!value) { throw new Error(`${name} is required for Steam tests`); }
-  return value;
+interface TestSteamAccount {
+  id: string;
+  botSteamId64: string;
+  personality: 'ruyi' | 'tails';
+  refreshToken: string;
 }
 
-const TEST_STEAM_BOT_STEAM_ID64 = requireTestEnv('STEAM_BOT_STEAM_ID64');
-const TEST_STEAM_OWNER_STEAM_ID64 = requireTestEnv('STEAM_OWNER_STEAM_ID64');
+function requireTestSteamAccounts(): TestSteamAccount[] {
+  const value = Bun.env.STEAM_ACCOUNTS;
+  if (!value) { throw new Error('STEAM_ACCOUNTS is required for Steam tests'); }
+  return JSON.parse(value) as TestSteamAccount[];
+}
+
+const TEST_STEAM_ACCOUNTS = requireTestSteamAccounts();
+const TEST_RUYI_STEAM_ACCOUNT = TEST_STEAM_ACCOUNTS.find(account => account.id === 'ruyi');
+const TEST_TAILS_STEAM_ACCOUNT = TEST_STEAM_ACCOUNTS.find(account => account.id === 'tails');
+if (!TEST_RUYI_STEAM_ACCOUNT || !TEST_TAILS_STEAM_ACCOUNT) {
+  throw new Error('Steam tests require ruyi and tails test accounts');
+}
+
+const TEST_STEAM_BOT_STEAM_ID64 = TEST_RUYI_STEAM_ACCOUNT.botSteamId64;
+const TEST_STEAM_OWNER_STEAM_ID64 = Bun.env.STEAM_OWNER_STEAM_ID64;
+const TEST_TAILS_BOT_STEAM_ID64 = TEST_TAILS_STEAM_ACCOUNT.botSteamId64;
+
+if (!TEST_STEAM_OWNER_STEAM_ID64) {
+  throw new Error('Steam tests require STEAM_OWNER_STEAM_ID64');
+}
 
 let mockProfileComments: SteamProfileComment[] = [];
 let mockDeletedProfileComments: Array<{
@@ -203,6 +222,7 @@ mock.module('../../src/steam/client', () => ({
     onCommentNotification: () => () => undefined,
     postProfileComment: async () => 'mock-comment-id',
     start: async () => undefined,
+    startAll: async () => undefined,
     stop: () => undefined,
   },
 }));
@@ -220,6 +240,12 @@ interface ApprovalCapableTool {
 interface InvokableTool {
   name: string;
   invoke: (runContext: unknown, input: string) => Promise<unknown>;
+}
+
+interface DeleteCommentResult {
+  action?: string;
+  commentId?: string;
+  success?: boolean;
 }
 
 let runWithToolContext: typeof import('../../src/utils/types').runWithToolContext;
@@ -254,9 +280,29 @@ function baseContext(surface: ToolContext['surface']): ToolContext {
     referencedMessage: null,
     steam:
       surface === 'steam'
-        ? { profileId: '76561198000000002', sourceCommentId: 'comment-1' }
+        ? {
+            accountId: 'ruyi',
+            profileId: '76561198000000002',
+            sourceCommentId: 'comment-1',
+          }
         : undefined,
   };
+}
+
+async function deleteBotProfileComment(
+  context: ToolContext,
+  commentId?: string,
+): Promise<DeleteCommentResult> {
+  const input = {
+    action: 'delete',
+    target: 'bot',
+    ...(commentId ? { comment_id: commentId } : {}),
+  };
+
+  return (await runWithToolContext(
+    context,
+    () => steamProfileCommentTool.invoke(null, JSON.stringify(input)),
+  )) as DeleteCommentResult;
 }
 
 beforeAll(async () => {
@@ -327,18 +373,10 @@ describe('steam_profile_comment deletion', () => {
       buildSteamComment('visitor-comment', '76561198000000099'),
     ];
 
-    const result = (await runWithToolContext(
+    const result = await deleteBotProfileComment(
       baseContext('steam'),
-      () =>
-        steamProfileCommentTool.invoke(
-          null,
-          JSON.stringify({
-            action: 'delete',
-            target: 'bot',
-            comment_id: 'visitor-comment',
-          }),
-        ),
-    )) as { action?: string; success?: boolean };
+      'visitor-comment',
+    );
 
     expect(result.success).toBe(true);
     expect(result.action).toBe('delete');
@@ -354,22 +392,34 @@ describe('steam_profile_comment deletion', () => {
       buildSteamComment('comment-1', '76561198000000099'),
     ];
 
-    const result = (await runWithToolContext(
-      baseContext('steam'),
-      () =>
-        steamProfileCommentTool.invoke(
-          null,
-          JSON.stringify({
-            action: 'delete',
-            target: 'bot',
-          }),
-        ),
-    )) as { action?: string; commentId?: string; success?: boolean };
+    const result = await deleteBotProfileComment(baseContext('steam'));
 
     expect(result.success).toBe(true);
     expect(result.action).toBe('delete');
     expect(result.commentId).toBe('comment-1');
     expectDeletedProfileComment(TEST_STEAM_BOT_STEAM_ID64, 'comment-1');
+  });
+
+  test('uses the active Steam account when deleting from a bot profile', async () => {
+    mockDeletedProfileComments = [];
+    mockProfileComments = [
+      buildSteamComment('tails-comment', '76561198000000099'),
+    ];
+    const tailsContext = {
+      ...baseContext('steam'),
+      steam: {
+        accountId: 'tails',
+        profileId: TEST_TAILS_BOT_STEAM_ID64,
+        sourceCommentId: 'tails-comment',
+      },
+    } satisfies ToolContext;
+
+    const result = await deleteBotProfileComment(tailsContext);
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('delete');
+    expect(result.commentId).toBe('tails-comment');
+    expectDeletedProfileComment(TEST_TAILS_BOT_STEAM_ID64, 'tails-comment');
   });
 
   test('refuses deleting user comments from owner profile', async () => {

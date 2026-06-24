@@ -2,6 +2,7 @@ import { tool } from '@openai/agents';
 import OpenAI from 'openai';
 import { z } from 'zod';
 import { configManager } from '../config';
+import { TOOL_ANSWER_MODEL } from '../constants';
 import { env } from '../env';
 import { toolLogger } from '../logger';
 import { getCurrentToolConfigScope } from '../utils/tool-config-scope';
@@ -30,7 +31,8 @@ function normalizeImageUrl(value: string): string {
   return url.toString();
 }
 
-function getVisionModel(): string {
+function getVisionModel(useEfficientModel: boolean): string {
+  if (useEfficientModel) { return TOOL_ANSWER_MODEL; }
   return configManager.getVisionModel(getCurrentToolConfigScope());
 }
 
@@ -81,7 +83,7 @@ export const describeImageTool = tool({
   execute: async ({ image_url, question, detail }) => {
     let normalizedUrl: string | null = null;
     let budgetConsumed = false;
-    const model = getVisionModel();
+    let model = getVisionModel(false);
     let reverseImageWorkflow = false;
     let effectiveDetail: 'auto' | 'low' | 'high' = detail ?? 'auto';
     try {
@@ -117,6 +119,7 @@ export const describeImageTool = tool({
       budgetConsumed = true;
 
       reverseImageWorkflow = toolContextManager.isReverseImageWorkflowActive();
+      model = getVisionModel(reverseImageWorkflow);
       effectiveDetail = reverseImageWorkflow ? 'low' : (detail ?? 'auto');
       const maxOutputTokens = reverseImageWorkflow
         ? REVERSE_IMAGE_MAX_OUTPUT_TOKENS

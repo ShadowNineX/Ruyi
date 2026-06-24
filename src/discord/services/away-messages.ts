@@ -15,7 +15,6 @@ import {
   AWAY_MESSAGE_GENERATION_TIMEOUT_MS,
   AWAY_MESSAGE_MAX_LENGTH,
 } from '../../constants';
-import { DiscordConversation } from '../../db/models';
 import { aiLogger, botLogger } from '../../logger';
 import {
   deleteAwayTimer,
@@ -34,7 +33,11 @@ import {
 
   formatPresenceContext,
 } from '../utils/discord-profile';
-import { fetchRecentChatMessages, splitMessage } from '../utils/messages';
+import {
+  fetchRecentChatMessages,
+  formatMessageForAI,
+  splitMessage,
+} from '../utils/messages';
 
 interface AwayTarget {
   channel: Message['channel'];
@@ -43,15 +46,22 @@ interface AwayTarget {
   userId: string;
   username: string;
   displayName: string;
+  sourceMessageContent: string;
+  sourceMessageId: string;
+  assistantReply: string | null;
   scheduledAt: number;
 }
+
+const AWAY_LIVE_HISTORY_LIMIT = 12;
+const AWAY_CONTEXT_TEXT_MAX_LENGTH = 1_200;
 
 const AWAY_MESSAGE_INSTRUCTIONS = [
   'Compose one short Character.AI-style away message from Ruyi to the current user.',
   'This is a proactive message after a quiet gap in an existing conversation.',
   'Do not mention timers, automation, inactivity tracking, settings, or that this was triggered by a service.',
   'Do not perform or promise actions. Do not ask multiple questions.',
-  'Stay in Ruyi\'s formal, warm Nine Sols voice. Keep it human-feeling, gentle, and specific to the recent context when possible.',
+  'Stay in Ruyi\'s formal, warm Nine Sols voice. Keep it human-feeling and gentle.',
+  'Ground the message in the most recent handled turn. Do not resurrect older topics unless they appear in the provided recent turn or live Discord messages.',
   'Return only the message text. The Discord mention will be added outside your response.',
 ].join('\n');
 
@@ -77,6 +87,26 @@ function sanitizeAwayMessage(content: string): string {
     : withoutMassMentions;
 }
 
+function truncateAwayContextText(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.length > AWAY_CONTEXT_TEXT_MAX_LENGTH
+    ? `${trimmed.slice(0, AWAY_CONTEXT_TEXT_MAX_LENGTH - 3).trimEnd()}...`
+    : trimmed;
+}
+
+function buildMostRecentHandledTurn(target: AwayTarget): string {
+  const lines = [
+    'Most recent handled Discord turn that scheduled this away ping:',
+    `${target.username}: ${truncateAwayContextText(target.sourceMessageContent)}`,
+  ];
+
+  if (target.assistantReply) {
+    lines.push(`Ruyi: ${truncateAwayContextText(target.assistantReply)}`);
+  }
+
+  return lines.join('\n');
+}
+
 class AwayMessageService {
   recordUserActivity(message: Message): void {
     if (message.author.bot) { return; }
@@ -92,7 +122,10 @@ class AwayMessageService {
     this.clearTimersForUser(message.author.id);
   }
 
-  async scheduleAfterHandledTurn(message: Message): Promise<void> {
+  async scheduleAfterHandledTurn(
+    message: Message,
+    assistantReply: string | null = null,
+  ): Promise<void> {
     if (message.author.bot || !('send' in message.channel)) {
       return;
     }
@@ -121,6 +154,9 @@ class AwayMessageService {
       userId: message.author.id,
       username: message.author.username,
       displayName: message.author.displayName,
+      sourceMessageContent: formatMessageForAI(message),
+      sourceMessageId: message.id,
+      assistantReply,
       scheduledAt,
     };
     const timer = setTimeout(() => {
@@ -301,15 +337,18 @@ class AwayMessageService {
           target.userId,
           target.channelId,
           await fetchRecentChatMessages(target.channel, {
+            limit: AWAY_LIVE_HISTORY_LIMIT,
             context: {
               channelId: target.channelId,
               userId: target.userId,
+              sourceMessageId: target.sourceMessageId,
             },
             failureMessage: 'Could not fetch live history for away message',
           }),
           target.scope,
+          { includeConversationSummary: false },
         ),
-        this.fetchPersistedConversationSnippet(target.channelId),
+        Promise.resolve(buildMostRecentHandledTurn(target)),
       ]);
       const presenceContext = formatPresenceContext(presence);
       const prompt = [
@@ -324,8 +363,8 @@ class AwayMessageService {
       const agent = new Agent({
         name: 'Ruyi Away Message',
         instructions: systemPrompt,
-        model: agentsRuntimeManager.getModel(target.scope),
-        modelSettings: agentsRuntimeManager.getModelSettings(target.scope),
+        model: agentsRuntimeManager.getProactiveTaskModel(),
+        modelSettings: agentsRuntimeManager.getProactiveTaskModelSettings(),
         tools: [],
       });
       const runner = agentsRuntimeManager.getRunner();
@@ -351,27 +390,6 @@ class AwayMessageService {
       return null;
     } finally {
       clearTimeout(timeout);
-    }
-  }
-
-  private async fetchPersistedConversationSnippet(
-    channelId: string,
-  ): Promise<string> {
-    try {
-      const conversation = await DiscordConversation.findOne({ channelId });
-      const messages = conversation?.messages.slice(-12) ?? [];
-      if (messages.length === 0) { return ''; }
-
-      const lines = messages.map(
-        message => `${message.author}: ${message.content}`,
-      );
-      return `Recent archived conversation:\n${lines.join('\n')}`;
-    } catch (error) {
-      botLogger.debug(
-        { error: (error as Error).message, channelId },
-        'Could not fetch archived history for away message',
-      );
-      return '';
     }
   }
 }

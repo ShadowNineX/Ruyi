@@ -29,12 +29,17 @@ describe('tool context manager', () => {
     await runWithToolContext(
       context({
         surface: 'steam',
-        steam: { profileId: '76561198000000002', sourceCommentId: 'comment-1' },
+        steam: {
+          accountId: 'ruyi',
+          profileId: '76561198000000002',
+          sourceCommentId: 'comment-1',
+        },
       }),
       async () => {
         expect(toolContextManager.get()).toMatchObject({
           surface: 'steam',
           steam: {
+            accountId: 'ruyi',
             profileId: '76561198000000002',
             sourceCommentId: 'comment-1',
           },
@@ -96,7 +101,7 @@ describe('tool config scope', () => {
     await runWithToolContext(
       context({
         surface: 'steam',
-        steam: { profileId: '76561198000000002' },
+        steam: { accountId: 'ruyi', profileId: '76561198000000002' },
       }),
       async () => {
         expect(getCurrentToolConfigScope()).toEqual({

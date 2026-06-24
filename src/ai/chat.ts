@@ -6,6 +6,7 @@ import type { RuyiUserIdentity } from '../utils/user-identity';
 import type { ChatRuntimeSession } from './chat-runtime-session';
 import type { ChatMessage, ConversationSurface } from './context';
 import type { PermissionResult } from './permissions';
+import type { AssistantPersonality } from './prompt';
 import {
   Agent,
 
@@ -24,6 +25,7 @@ import {
   getToolsForSurface,
   isExternalToolName,
 } from '../tools';
+import { getApprovalToolName } from '../utils/permission-summary';
 import { parseToolArguments } from '../utils/tool-arguments';
 import {
   buildDiscordUserIdentity,
@@ -36,12 +38,11 @@ import {
 
 } from './context';
 import { autoExtractFacts } from './extraction';
+import { permissionManager } from './permissions';
 import {
-  getApprovalToolName,
-  permissionManager,
-
-} from './permissions';
-import { systemPrompt } from './prompt';
+  buildSystemPrompt,
+  getSystemPromptVersion,
+} from './prompt';
 import { sessionManager } from './session';
 
 const ToolCallSchema = z.looseObject({
@@ -66,6 +67,7 @@ interface ChatOptions {
   signal?: AbortSignal;
   persistUserMessage?: boolean;
   messageTimestamp?: Date;
+  personality?: AssistantPersonality;
 }
 
 interface TextStreamResult {
@@ -205,6 +207,7 @@ class ChatService {
       surfaceLabel,
       signal,
       persistUserMessage = true,
+      personality = 'ruyi',
     } = options;
     const conversationId = channelId;
     const cacheIdentity = identity ?? buildDiscordUserIdentity(userId, username);
@@ -261,7 +264,10 @@ class ChatService {
       const runnerInput = buildRunnerInput(enrichedMessage, imageInputs);
 
       if (env.DEBUG_PROMPTS) {
-        aiLogger.debug({ systemPrompt }, 'system prompt (debug dump)');
+        aiLogger.debug(
+          { systemPrompt: buildSystemPrompt(personality), personality },
+          'system prompt (debug dump)',
+        );
         aiLogger.debug(
           { enrichedMessage },
           'enriched user message (debug dump)',
@@ -341,6 +347,7 @@ class ChatService {
         model,
         modelSettings,
         surface,
+        getSystemPromptVersion(personality),
       );
       throwIfAborted(signal);
 
@@ -352,6 +359,7 @@ class ChatService {
         model,
         modelSettings,
         surface,
+        personality,
       );
       const runner = agentsRuntimeManager.getRunner();
       const runOptions = {
@@ -453,10 +461,11 @@ class ChatService {
     model: string,
     modelSettings: ModelSettings,
     surface: ConversationSurface,
+    personality: AssistantPersonality,
   ) {
     const agent = new Agent({
-      name: 'Ruyi',
-      instructions: systemPrompt,
+      name: personality === 'tails' ? 'Tails' : 'Ruyi',
+      instructions: buildSystemPrompt(personality),
       model,
       modelSettings,
       tools: [...getToolsForSurface(surface)],

@@ -1,6 +1,6 @@
 import { createStore } from '@tanstack/store';
 
-interface SteamClientStoreState {
+interface SteamClientAccountState {
   loginInProgress: boolean;
   lifecycleListenersAttached: boolean;
   ready: boolean;
@@ -10,7 +10,11 @@ interface SteamClientStoreState {
   startPromise: Promise<void> | null;
 }
 
-const steamClientStore = createStore<SteamClientStoreState>({
+interface SteamClientStoreState {
+  accounts: Record<string, SteamClientAccountState>;
+}
+
+const defaultAccountState: SteamClientAccountState = {
   loginInProgress: false,
   lifecycleListenersAttached: false,
   ready: false,
@@ -18,75 +22,118 @@ const steamClientStore = createStore<SteamClientStoreState>({
   reconnectEnabled: false,
   reconnectTimer: null,
   startPromise: null,
+};
+
+const steamClientStore = createStore<SteamClientStoreState>({
+  accounts: {},
 });
 
-export function isSteamCommunityLoginInProgress(): boolean {
-  return steamClientStore.state.loginInProgress;
+function getAccountState(accountId: string): SteamClientAccountState {
+  return steamClientStore.state.accounts[accountId] ?? defaultAccountState;
+}
+
+function setAccountState(
+  accountId: string,
+  patch: Partial<SteamClientAccountState>,
+): void {
+  steamClientStore.setState((state) => {
+    const current = state.accounts[accountId] ?? defaultAccountState;
+    return {
+      ...state,
+      accounts: {
+        ...state.accounts,
+        [accountId]: { ...current, ...patch },
+      },
+    };
+  });
+}
+
+export function isSteamCommunityLoginInProgress(accountId: string): boolean {
+  return getAccountState(accountId).loginInProgress;
 }
 
 export function setSteamCommunityLoginInProgress(
+  accountId: string,
   loginInProgress: boolean,
 ): void {
-  steamClientStore.setState(state => ({ ...state, loginInProgress }));
+  setAccountState(accountId, { loginInProgress });
 }
 
-export function isSteamCommunityReady(): boolean {
-  return steamClientStore.state.ready;
+export function isSteamCommunityReady(accountId: string): boolean {
+  return getAccountState(accountId).ready;
 }
 
-export function setSteamCommunityReady(ready: boolean): void {
-  steamClientStore.setState(state => ({ ...state, ready }));
+export function isAnySteamCommunityReady(): boolean {
+  return Object.values(steamClientStore.state.accounts).some(
+    account => account.ready,
+  );
 }
 
-export function isSteamCommunityReconnectEnabled(): boolean {
-  return steamClientStore.state.reconnectEnabled;
+export function setSteamCommunityReady(
+  accountId: string,
+  ready: boolean,
+): void {
+  setAccountState(accountId, { ready });
+}
+
+export function isSteamCommunityReconnectEnabled(accountId: string): boolean {
+  return getAccountState(accountId).reconnectEnabled;
 }
 
 export function setSteamCommunityReconnectEnabled(
+  accountId: string,
   reconnectEnabled: boolean,
 ): void {
-  steamClientStore.setState(state => ({ ...state, reconnectEnabled }));
+  setAccountState(accountId, { reconnectEnabled });
 }
 
-export function incrementSteamCommunityReconnectAttempts(): number {
-  const reconnectAttempts = steamClientStore.state.reconnectAttempts + 1;
-  steamClientStore.setState(state => ({ ...state, reconnectAttempts }));
+export function incrementSteamCommunityReconnectAttempts(
+  accountId: string,
+): number {
+  const reconnectAttempts = getAccountState(accountId).reconnectAttempts + 1;
+  setAccountState(accountId, { reconnectAttempts });
   return reconnectAttempts;
 }
 
-export function resetSteamCommunityReconnectAttempts(): void {
-  steamClientStore.setState(state => ({ ...state, reconnectAttempts: 0 }));
+export function resetSteamCommunityReconnectAttempts(accountId: string): void {
+  setAccountState(accountId, { reconnectAttempts: 0 });
 }
 
-export function getSteamCommunityReconnectTimer(): ReturnType<typeof setTimeout> | null {
-  return steamClientStore.state.reconnectTimer;
+export function getSteamCommunityReconnectTimer(
+  accountId: string,
+): ReturnType<typeof setTimeout> | null {
+  return getAccountState(accountId).reconnectTimer;
 }
 
 export function setSteamCommunityReconnectTimer(
+  accountId: string,
   reconnectTimer: ReturnType<typeof setTimeout> | null,
 ): void {
-  steamClientStore.setState(state => ({ ...state, reconnectTimer }));
+  setAccountState(accountId, { reconnectTimer });
 }
 
-export function getSteamCommunityStartPromise(): Promise<void> | null {
-  return steamClientStore.state.startPromise;
+export function getSteamCommunityStartPromise(
+  accountId: string,
+): Promise<void> | null {
+  return getAccountState(accountId).startPromise;
 }
 
 export function setSteamCommunityStartPromise(
+  accountId: string,
   startPromise: Promise<void> | null,
 ): void {
-  steamClientStore.setState(state => ({ ...state, startPromise }));
+  setAccountState(accountId, { startPromise });
 }
 
-export function areSteamCommunityLifecycleListenersAttached(): boolean {
-  return steamClientStore.state.lifecycleListenersAttached;
+export function areSteamCommunityLifecycleListenersAttached(
+  accountId: string,
+): boolean {
+  return getAccountState(accountId).lifecycleListenersAttached;
 }
 
 export function setSteamCommunityLifecycleListenersAttached(
+  accountId: string,
   lifecycleListenersAttached: boolean,
 ): void {
-  steamClientStore.setState(state => ({
-    ...state,
-    lifecycleListenersAttached,
-  }));
+  setAccountState(accountId, { lifecycleListenersAttached });
 }

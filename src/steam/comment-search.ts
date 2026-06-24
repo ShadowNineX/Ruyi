@@ -131,10 +131,12 @@ export async function searchSteamProfileComments(
   query: string,
   authorFilter: string | null,
   limit: number,
+  accountId?: string | null,
 ): Promise<SteamCommentSearchResult> {
   const comments = await steamCommunityClient.getProfileComments(
     profileId,
     Math.max(limit, STEAM_COMMENT_SEARCH_FETCH_LIMIT),
+    accountId,
   );
   const documents = buildSearchDocuments(profileId, comments, authorFilter);
   const matches = rankMessageMatches(documents, query, limit);

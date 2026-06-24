@@ -1,5 +1,7 @@
 import { dateToTime } from '../utils/date';
 
+const SYNTHETIC_STEAM_COMMENT_ID_PREFIX = 'steam:';
+
 export interface VisibleSteamComment {
   id: string;
   date: Date;
@@ -16,7 +18,7 @@ export interface SteamCommentWindow {
 }
 
 function isSyntheticCommentId(commentId: string): boolean {
-  return commentId.startsWith('ruyi:');
+  return commentId.startsWith(SYNTHETIC_STEAM_COMMENT_ID_PREFIX);
 }
 
 function oldestVisibleCommentTime(comments: VisibleSteamComment[]): number | null {

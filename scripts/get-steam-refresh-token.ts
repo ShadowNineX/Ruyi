@@ -14,15 +14,23 @@ const START_LOGIN_STATUS_INTERVAL_MS = 10_000;
 const STEAM_WEB_API_BASE_URL = 'https://api.steampowered.com';
 const MASKED_INPUT_FALLBACK_WARNING
   = 'Password input is not hidden because this terminal is not interactive.';
+const STEAM_ACCOUNT_ID_PATTERN = /^[\w-]{1,64}$/;
 
 const GET_REQUESTS = new Set(['IAuthenticationService/GetPasswordRSAPublicKey/v1']);
+const STEAM_PERSONALITIES = ['ruyi', 'tails'] as const;
 
 type LoginMode = 'qr' | 'password';
+type SteamPersonality = (typeof STEAM_PERSONALITIES)[number];
 
 interface LoginCredentials {
   accountName: string;
   password: string;
   guardCode: string | null;
+}
+
+interface SteamAccountMetadata {
+  id: string;
+  personality: SteamPersonality;
 }
 
 type StartCredentialsResponse = Awaited<ReturnType<LoginSession['startWithCredentials']>>;
@@ -92,6 +100,10 @@ function getLoginMode(): LoginMode {
   throw new Error('Unsupported mode. Use "--mode=qr" or "--mode=password".');
 }
 
+function isInteractiveTerminal(): boolean {
+  return Boolean(stdin.isTTY && stdout.isTTY);
+}
+
 async function readLine(prompt: string): Promise<string> {
   const reader = createInterface({ input: stdin, output: stdout });
   try {
@@ -99,6 +111,58 @@ async function readLine(prompt: string): Promise<string> {
   } finally {
     reader.close();
   }
+}
+
+function validateAccountId(value: string): string {
+  const trimmed = value.trim();
+  if (!STEAM_ACCOUNT_ID_PATTERN.test(trimmed)) {
+    throw new Error(
+      'Steam account id must be alphanumeric with underscores/hyphens, max 64 chars',
+    );
+  }
+  return trimmed;
+}
+
+function parsePersonality(value: string): SteamPersonality {
+  const normalized = value.trim().toLowerCase();
+  if (STEAM_PERSONALITIES.includes(normalized as SteamPersonality)) {
+    return normalized as SteamPersonality;
+  }
+  throw new Error(`Unsupported personality "${value}". Use ruyi or tails.`);
+}
+
+function defaultAccountId(steamId64: string): string {
+  return `steam_${steamId64}`;
+}
+
+async function readOptionalArg(
+  name: string,
+  prompt: string,
+): Promise<string | null> {
+  const argValue = getArgValue(name);
+  if (argValue !== null) { return argValue; }
+  if (!isInteractiveTerminal()) { return null; }
+  const answer = await readLine(prompt);
+  return answer || null;
+}
+
+async function getSteamAccountMetadata(
+  steamId64: string,
+): Promise<SteamAccountMetadata> {
+  const fallbackId = defaultAccountId(steamId64);
+  const idInput = await readOptionalArg(
+    'id',
+    `Steam account id for STEAM_ACCOUNTS [${fallbackId}]: `,
+  );
+  const personalityInput = await readOptionalArg(
+    'personality',
+    'Personality for this Steam account (ruyi/tails) [ruyi]: ',
+  );
+
+  return {
+    id: validateAccountId(idInput ?? fallbackId),
+    personality: personalityInput ? parsePersonality(personalityInput) : 'ruyi',
+  };
 }
 
 async function readHiddenLine(prompt: string): Promise<string> {
@@ -183,13 +247,23 @@ function getJwtExpiry(token: string): Date | null {
   }
 }
 
-function printToken(refreshToken: string, steamId64: string): void {
+function printToken(
+  refreshToken: string,
+  steamId64: string,
+  metadata: SteamAccountMetadata,
+): void {
   const expiresAt = getJwtExpiry(refreshToken);
+  const account = {
+    id: metadata.id,
+    personality: metadata.personality,
+    refreshToken,
+    botSteamId64: steamId64,
+  };
 
   stdout.write('\nSteam refresh token created.\n\n');
-  stdout.write('Add these to .env:\n\n');
-  stdout.write(`STEAM_REFRESH_TOKEN=${refreshToken}\n`);
-  stdout.write(`STEAM_BOT_STEAM_ID64=${steamId64}\n`);
+  stdout.write('Add or merge this account into STEAM_ACCOUNTS in .env:\n\n');
+  stdout.write(`STEAM_ACCOUNTS=${JSON.stringify([account])}\n`);
+  stdout.write('\nSet STEAM_OWNER_STEAM_ID64 once for the shared owner profile.\n');
 
   if (expiresAt) {
     stdout.write(`\nToken expiry: ${expiresAt.toISOString()}\n`);
@@ -446,7 +520,9 @@ async function main(): Promise<void> {
     throw new Error('Steam authenticated but did not return a refresh token');
   }
 
-  printToken(session.refreshToken, session.steamID.getSteamID64());
+  const steamId64 = session.steamID.getSteamID64();
+  const metadata = await getSteamAccountMetadata(steamId64);
+  printToken(session.refreshToken, steamId64, metadata);
 }
 
 try {

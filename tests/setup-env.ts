@@ -15,5 +15,17 @@ Bun.env.DEBUG_PROMPTS = 'false';
 
 Bun.env.OWNER_DISCORD_USER_ID = 'discord-owner';
 Bun.env.STEAM_OWNER_STEAM_ID64 = '76561198000000001';
-Bun.env.STEAM_BOT_STEAM_ID64 = '76561198000000002';
-Bun.env.STEAM_REFRESH_TOKEN = 'test-refresh-token';
+Bun.env.STEAM_ACCOUNTS = JSON.stringify([
+  {
+    id: 'ruyi',
+    personality: 'ruyi',
+    refreshToken: 'test-refresh-token',
+    botSteamId64: '76561198000000002',
+  },
+  {
+    id: 'tails',
+    personality: 'tails',
+    refreshToken: 'test-tails-refresh-token',
+    botSteamId64: '76561198000000003',
+  },
+]);

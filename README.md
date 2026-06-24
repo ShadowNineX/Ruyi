@@ -52,20 +52,30 @@ pin lookups do not flood Discord.
 ## Steam Profile Comments
 
 Ruyi can also use Steam Community profile comments as a second chat surface.
-Steam is optional: omit all four variables to disable it, or set all four to
-enable profile-comment notifications and posting. Ruyi listens for Steam
-comment notifications first and uses a slow profile-comment reconciliation check
-only as a fallback.
+Steam is optional: omit `STEAM_ACCOUNTS` to disable it, or add one object per
+Steam bot account to enable profile-comment notifications and posting. Each
+Steam bot profile gets its own conversation history and Agent session, while
+the configured owner memory is shared across Discord and Steam identities. Ruyi
+listens for Steam comment notifications first and uses a slow profile-comment
+reconciliation check only as a fallback.
 
 ```bash
-STEAM_REFRESH_TOKEN=your_steam_refresh_token
-STEAM_BOT_STEAM_ID64=7656119xxxxxxxxxx
+STEAM_ACCOUNTS=[{"id":"ruyi","personality":"ruyi","refreshToken":"your_steam_refresh_token","botSteamId64":"7656119xxxxxxxxxx"},{"id":"tails","personality":"tails","refreshToken":"your_tails_refresh_token","botSteamId64":"7656119yyyyyyyyyy"}]
 STEAM_OWNER_STEAM_ID64=7656119xxxxxxxxxx
 OWNER_DISCORD_USER_ID=123456789012345678
 ```
 
-Steam and Discord use the same AI/persona and memories, but separate persisted
-conversation history and Agent sessions.
+Discord stays on the Ruyi personality. Steam accounts choose their personality
+with `personality`, currently `ruyi` or `tails`.
+
+Generate a refresh token for each Steam bot account with:
+
+```bash
+bun run steam:token -- --id=tails --personality=tails
+```
+
+Use `--id=ruyi --personality=ruyi` for the Ruyi Steam account, or any other
+valid account id for future personalities.
 
 ## Smithery MCP
 

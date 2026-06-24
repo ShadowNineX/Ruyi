@@ -43,5 +43,7 @@ describe('cross-surface user identity', () => {
     expect(steamIntegrationEnabled()).toBe(true);
     expect(resolveSteamProfileTarget('owner')).toBe('76561198000000001');
     expect(resolveSteamProfileTarget('bot')).toBe('76561198000000002');
+    expect(resolveSteamProfileTarget('bot', 'tails')).toBe('76561198000000003');
+    expect(resolveSteamProfileTarget('owner', 'tails')).toBe('76561198000000001');
   });
 });

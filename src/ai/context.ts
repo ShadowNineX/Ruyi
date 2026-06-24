@@ -56,6 +56,7 @@ interface ConversationMessageUpdateResult {
 }
 
 interface DynamicContextOptions {
+  includeConversationSummary?: boolean;
   surface?: ConversationSurface;
   identity?: RuyiUserIdentity | null;
   surfaceLabel?: string;
@@ -594,7 +595,9 @@ class ConversationContext {
     const [memoryContext, conversationSummary, userTimeZone]
       = await Promise.all([
         this.fetchUserMemories(identity),
-        this.fetchConversationSummary(conversationId, surface),
+        options.includeConversationSummary === false
+          ? Promise.resolve('')
+          : this.fetchConversationSummary(conversationId, surface),
         this.fetchUserTimeZone(identity),
       ]);
     const temporalContext = buildCurrentTemporalContext(userTimeZone?.timeZone);

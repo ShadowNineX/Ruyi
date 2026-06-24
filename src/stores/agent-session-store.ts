@@ -1,7 +1,7 @@
 import { createStore } from '@tanstack/store';
 
 export interface CachedAgentSession {
-  matchesModel: (model: string) => boolean;
+  matchesConfiguration: (model: string, promptVersion: string) => boolean;
   markInvalidated: () => void;
 }
 

@@ -35,6 +35,7 @@ const steamProfileTargetSchema = z.enum([
 ]);
 
 interface SteamProfileSectionContext {
+  accountId: string | null;
   fresh: boolean;
   gameSort: SteamOwnedGamesSort;
   include: SteamProfileInclude[];
@@ -50,6 +51,7 @@ interface SteamProfileSectionContext {
 function resolveLookup(
   target: z.infer<typeof steamProfileTargetSchema>,
   lookup: string | null,
+  accountId: string | null,
 ): { lookup: string; target_label: string } | { error: string } {
   if (target === 'lookup') {
     const normalized = lookup ? normalizeSteamProfileLookup(lookup) : '';
@@ -72,7 +74,7 @@ function resolveLookup(
     };
   }
 
-  const resolved = resolveSteamProfileTarget(target);
+  const resolved = resolveSteamProfileTarget(target, accountId);
   return resolved
     ? { lookup: resolved, target_label: target }
     : { error: `Steam ${target} profile is not configured.` };
@@ -101,6 +103,7 @@ async function assignSteamSection(
 }
 
 async function readProfileSection({
+  accountId,
   fresh,
   include,
   limitations,
@@ -117,6 +120,7 @@ async function readProfileSection({
       steamCommunityClient.getPublicProfileSummary(
         lookup,
         { forceRefresh: fresh },
+        accountId,
       ),
   );
 }
@@ -125,6 +129,7 @@ async function readGameSections({
   fresh,
   gameSort,
   include,
+  accountId,
   limitations,
   limit,
   lookup,
@@ -138,6 +143,7 @@ async function readGameSections({
       limit,
       gameSort,
       { forceRefresh: fresh },
+      accountId,
     );
     if (include.includes('games')) { sections.games = games; }
     if (include.includes('recent_games')) {
@@ -154,6 +160,7 @@ async function readGameSections({
 }
 
 async function readEquippedItemsSection({
+  accountId,
   fresh,
   include,
   limitations,
@@ -170,11 +177,13 @@ async function readEquippedItemsSection({
       steamCommunityClient.getEquippedProfileItems(
         lookup,
         { forceRefresh: fresh },
+        accountId,
       ),
   );
 }
 
 async function readInventoryContextsSection({
+  accountId,
   fresh,
   include,
   limitations,
@@ -191,11 +200,13 @@ async function readInventoryContextsSection({
       steamCommunityClient.getInventoryContexts(
         lookup,
         { forceRefresh: fresh },
+        accountId,
       ),
   );
 }
 
 async function readInventoryItemsSection({
+  accountId,
   fresh,
   include,
   inventoryAppId,
@@ -227,6 +238,7 @@ async function readInventoryItemsSection({
         tradableOnly,
         Math.min(limit, STEAM_INVENTORY_ITEM_LIMIT_MAX),
         { forceRefresh: fresh },
+        accountId,
       ),
   );
 }
@@ -249,7 +261,7 @@ export const steamProfileTool = tool({
     target: steamProfileTargetSchema
       .default('owner')
       .describe(
-        'Which Steam profile to inspect. Use owner for the configured owner Steam profile, bot for Ruyi, current_steam_user in Steam comment turns, or lookup with a public Steam profile URL/SteamID64/vanity name.',
+        'Which Steam profile to inspect. Use owner for the configured owner Steam profile, bot for the active configured bot account, current_steam_user in Steam comment turns, or lookup with a public Steam profile URL/SteamID64/vanity name.',
       ),
     lookup: z
       .string()
@@ -259,6 +271,15 @@ export const steamProfileTool = tool({
       .default(null)
       .describe(
         'Required only when target=lookup. Accepts SteamID64, vanity name, /id/... URL, or /profiles/... URL.',
+      ),
+    account_id: z
+      .string()
+      .min(1)
+      .max(64)
+      .nullable()
+      .default(null)
+      .describe(
+        'Optional configured Steam account id, such as ruyi or tails. Used from Discord only; Steam comment turns use their active account automatically.',
       ),
     include: z
       .array(steamProfileIncludeSchema)
@@ -307,6 +328,7 @@ export const steamProfileTool = tool({
   execute: async ({
     target,
     lookup,
+    account_id: requestedAccountId,
     include,
     limit,
     game_sort: gameSort,
@@ -322,12 +344,14 @@ export const steamProfileTool = tool({
       };
     }
 
-    const resolved = resolveLookup(target, lookup);
+    const accountId = toolContextManager.get().steam?.accountId ?? requestedAccountId;
+    const resolved = resolveLookup(target, lookup, accountId);
     if ('error' in resolved) { return { error: resolved.error }; }
 
     const sections: Record<string, unknown> = {};
     const limitations: string[] = [];
     await readRequestedSteamSections({
+      accountId,
       fresh,
       gameSort,
       include,
@@ -343,6 +367,7 @@ export const steamProfileTool = tool({
     toolLogger.info(
       {
         target,
+        accountId,
         targetLabel: resolved.target_label,
         include,
         limit,
@@ -357,6 +382,7 @@ export const steamProfileTool = tool({
     return {
       success: Object.keys(sections).length > 0,
       target: resolved.target_label,
+      account_id: accountId,
       lookup: resolved.lookup,
       include,
       cache: {

@@ -25,6 +25,7 @@ export interface ToolContext {
   guild: Guild | null;
   referencedMessage: Message | null;
   steam?: {
+    accountId: string;
     profileId: string;
     sourceCommentId?: string | null;
   };

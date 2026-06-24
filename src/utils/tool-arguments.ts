@@ -73,6 +73,10 @@ function isMeaningfulToolArgumentValue(value: unknown): boolean {
   return true;
 }
 
+function hasMeaningfulToolArguments(args: Record<string, unknown>): boolean {
+  return Object.values(args).some(isMeaningfulToolArgumentValue);
+}
+
 function truncate(value: string, maxLength: number): string {
   if (value.length <= maxLength) { return value; }
   return `${value.slice(0, maxLength - 3).trimEnd()}...`;
@@ -210,4 +214,27 @@ export function argumentEntriesToRecord(
   }
 
   return record;
+}
+
+export function extractToolArgumentsFromRecord(
+  record: Record<string, unknown>,
+  fallback: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const toolArgumentEntries = argumentEntriesToRecord(record.tool_arguments);
+  if (toolArgumentEntries && hasMeaningfulToolArguments(toolArgumentEntries)) {
+    return toolArgumentEntries;
+  }
+
+  const directArgs = parseToolArguments(record.arguments);
+  if (hasMeaningfulToolArguments(directArgs)) { return directArgs; }
+
+  const argumentsJson = record.arguments_json;
+  if (typeof argumentsJson === 'string') {
+    const parsedArgumentsJson = parseToolArguments(argumentsJson);
+    if (hasMeaningfulToolArguments(parsedArgumentsJson)) {
+      return parsedArgumentsJson;
+    }
+  }
+
+  return hasMeaningfulToolArguments(fallback) ? fallback : {};
 }

@@ -54,7 +54,7 @@ describe('Steam comment deletion sync', () => {
       findDeletedSteamCommentIds(
         [
           {
-            commentId: 'ruyi:source-comment:1781690400',
+            commentId: 'steam:ruyi:source-comment:1781690400',
             timestamp: new Date('2026-06-17T10:00:00.000Z'),
           },
         ],

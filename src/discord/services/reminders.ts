@@ -383,8 +383,8 @@ class ReminderService {
       const agent = new Agent({
         name: 'Ruyi Reminder Delivery',
         instructions: systemPrompt,
-        model: agentsRuntimeManager.getModel(scope),
-        modelSettings: agentsRuntimeManager.getModelSettings(scope),
+        model: agentsRuntimeManager.getProactiveTaskModel(),
+        modelSettings: agentsRuntimeManager.getProactiveTaskModelSettings(),
         tools: [],
       });
       const result = await agentsRuntimeManager.getRunner().run(agent, prompt, {

@@ -1,15 +1,16 @@
 import type CEconItem from 'steamcommunity/classes/CEconItem';
 import type CSteamUser from 'steamcommunity/classes/CSteamUser';
+import type { SteamAccountConfig } from './accounts';
 import SteamUser from 'steam-user';
 import SteamCommunity from 'steamcommunity';
 import SteamID from 'steamid';
-import { env } from '../env';
 import { botLogger } from '../logger';
 import {
   areSteamCommunityLifecycleListenersAttached,
   getSteamCommunityReconnectTimer,
   getSteamCommunityStartPromise,
   incrementSteamCommunityReconnectAttempts,
+  isAnySteamCommunityReady,
   isSteamCommunityLoginInProgress,
   isSteamCommunityReady,
   isSteamCommunityReconnectEnabled,
@@ -26,7 +27,14 @@ import {
   getOrCreateCachedSteamProfileData,
 } from '../stores/steam-profile-store';
 import { isValidDate } from '../utils/date';
-import { steamIntegrationEnabled } from '../utils/user-identity';
+import {
+  getDefaultSteamAccount,
+  getSteamAccountById,
+  getSteamAccountForBotProfile,
+  getSteamAccountForProfile,
+  getSteamAccounts,
+  steamIntegrationEnabled,
+} from './accounts';
 
 const DEFAULT_COMMENT_FETCH_COUNT = 20;
 const STEAM_RECONNECT_BASE_DELAY_MS = 10_000;
@@ -252,6 +260,34 @@ type SteamProfileWithComments = Omit<
   ) => void;
 };
 
+const STEAM_PROFILE_WITH_COMMENT_METHODS = [
+  'comment',
+  'deleteComment',
+  'getAvatarURL',
+  'getComments',
+  'getInventoryContents',
+  'getInventoryContexts',
+] as const satisfies readonly (keyof SteamProfileWithComments)[];
+
+function hasSteamProfileWithCommentMethods(
+  profile: CSteamUser,
+): boolean {
+  return STEAM_PROFILE_WITH_COMMENT_METHODS.every(
+    method => typeof profile[method] === 'function',
+  );
+}
+
+function requireSteamProfileWithComments(
+  profile: CSteamUser,
+): SteamProfileWithComments {
+  if (!hasSteamProfileWithCommentMethods(profile)) {
+    throw new TypeError('Steam profile response is missing comment methods');
+  }
+
+  const normalizedProfile: unknown = profile;
+  return normalizedProfile as SteamProfileWithComments;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -273,13 +309,13 @@ function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function getSteamLogOnOptions(): { refreshToken: string; steamID: string } {
-  const refreshToken = env.STEAM_REFRESH_TOKEN;
-  const steamID = env.STEAM_BOT_STEAM_ID64;
-  if (!refreshToken || !steamID) {
-    throw new TypeError('Steam login is not fully configured');
-  }
-  return { refreshToken, steamID };
+function getSteamLogOnOptions(
+  account: SteamAccountConfig,
+): { refreshToken: string; steamID: string } {
+  return {
+    refreshToken: account.refreshToken,
+    steamID: account.botSteamId64,
+  };
 }
 
 function toSteamUserLookup(profileId: string): SteamID | string {
@@ -645,7 +681,7 @@ function normalizeInventoryItemsSummary(
   };
 }
 
-class SteamCommunityClient {
+class SteamCommunityAccountClient {
   private readonly user = new SteamUser({
     autoRelogin: true,
     renewRefreshTokens: true,
@@ -653,49 +689,64 @@ class SteamCommunityClient {
 
   private readonly community = new SteamCommunity();
 
+  constructor(readonly account: SteamAccountConfig) {}
+
+  get accountId(): string {
+    return this.account.id;
+  }
+
   private setOnlinePresence(reason: string): void {
     this.user.setPersona(SteamUser.EPersonaState.Online);
-    botLogger.info({ reason }, 'Steam account presence set to online');
+    botLogger.info(
+      { accountId: this.accountId, reason },
+      'Steam account presence set to online',
+    );
   }
 
   private clearScheduledReconnect(): void {
-    const timer = getSteamCommunityReconnectTimer();
+    const timer = getSteamCommunityReconnectTimer(this.accountId);
     if (!timer) { return; }
 
     clearTimeout(timer);
-    setSteamCommunityReconnectTimer(null);
+    setSteamCommunityReconnectTimer(this.accountId, null);
   }
 
   private scheduleReconnect(reason: string): void {
     if (
       !steamIntegrationEnabled()
-      || !isSteamCommunityReconnectEnabled()
-      || isSteamCommunityReady()
-      || getSteamCommunityReconnectTimer()
+      || !isSteamCommunityReconnectEnabled(this.accountId)
+      || isSteamCommunityReady(this.accountId)
+      || getSteamCommunityReconnectTimer(this.accountId)
     ) {
       return;
     }
 
-    const attempt = incrementSteamCommunityReconnectAttempts();
+    const attempt = incrementSteamCommunityReconnectAttempts(this.accountId);
     const delayMs = Math.min(
       STEAM_RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1),
       STEAM_RECONNECT_MAX_DELAY_MS,
     );
     const timer = setTimeout(() => {
-      setSteamCommunityReconnectTimer(null);
-      if (!isSteamCommunityReconnectEnabled() || isSteamCommunityReady()) {
+      setSteamCommunityReconnectTimer(this.accountId, null);
+      if (
+        !isSteamCommunityReconnectEnabled(this.accountId)
+        || isSteamCommunityReady(this.accountId)
+      ) {
         return;
       }
 
-      botLogger.info({ attempt, reason }, 'Retrying Steam Community connection');
+      botLogger.info(
+        { accountId: this.accountId, attempt, reason },
+        'Retrying Steam Community connection',
+      );
       void this.start().catch(() => {
         // start() logs the failure and schedules the next retry.
       });
     }, delayMs);
 
-    setSteamCommunityReconnectTimer(timer);
+    setSteamCommunityReconnectTimer(this.accountId, timer);
     botLogger.warn(
-      { attempt, delayMs, reason },
+      { accountId: this.accountId, attempt, delayMs, reason },
       'Scheduled Steam Community reconnect',
     );
   }
@@ -708,85 +759,94 @@ class SteamCommunityClient {
       botLogger.debug({ reason }, 'Requested Steam Community web session');
     } catch (error) {
       botLogger.warn(
-        { reason, error: getErrorMessage(error) },
+        { accountId: this.accountId, reason, error: getErrorMessage(error) },
         'Could not request Steam Community web session',
       );
     }
   }
 
   private resetConnectionAfterStartupTimeout(status: string): void {
-    setSteamCommunityLoginInProgress(false);
-    setSteamCommunityReady(false);
-    clearSteamProfileDataCache();
+    setSteamCommunityLoginInProgress(this.accountId, false);
+    setSteamCommunityReady(this.accountId, false);
+    clearSteamProfileDataCache(this.accountId);
 
     try {
       this.user.logOff();
     } catch (error) {
       botLogger.warn(
-        { status, error: getErrorMessage(error) },
+        { accountId: this.accountId, status, error: getErrorMessage(error) },
         'Could not reset Steam connection after startup timeout',
       );
     }
   }
 
   private attachLifecycleListeners(): void {
-    if (areSteamCommunityLifecycleListenersAttached()) { return; }
+    if (areSteamCommunityLifecycleListenersAttached(this.accountId)) { return; }
 
     this.user.on('debug', (message) => {
-      botLogger.debug({ message }, 'Steam user debug');
+      botLogger.debug({ accountId: this.accountId, message }, 'Steam user debug');
     });
     this.user.on('loggedOn', () => {
-      setSteamCommunityLoginInProgress(false);
-      botLogger.info('Steam account logged on');
+      setSteamCommunityLoginInProgress(this.accountId, false);
+      botLogger.info({ accountId: this.accountId }, 'Steam account logged on');
       this.setOnlinePresence('loggedOn');
     });
     this.user.on('refreshToken', () => {
       botLogger.warn(
-        'Steam emitted a refreshed token; update STEAM_REFRESH_TOKEN in env before the old token expires',
+        { accountId: this.accountId },
+        'Steam emitted a refreshed token; update this account refreshToken in STEAM_ACCOUNTS before the old token expires',
       );
     });
     this.user.on('disconnected', (eresult, message) => {
-      setSteamCommunityLoginInProgress(false);
-      setSteamCommunityReady(false);
-      setSteamCommunityStartPromise(null);
-      clearSteamProfileDataCache();
-      botLogger.warn({ eresult, message }, 'Steam account disconnected');
+      setSteamCommunityLoginInProgress(this.accountId, false);
+      setSteamCommunityReady(this.accountId, false);
+      setSteamCommunityStartPromise(this.accountId, null);
+      clearSteamProfileDataCache(this.accountId);
+      botLogger.warn(
+        { accountId: this.accountId, eresult, message },
+        'Steam account disconnected',
+      );
       this.scheduleReconnect('disconnected');
     });
     this.user.on('error', (error) => {
-      setSteamCommunityLoginInProgress(false);
-      setSteamCommunityReady(false);
-      setSteamCommunityStartPromise(null);
-      clearSteamProfileDataCache();
+      setSteamCommunityLoginInProgress(this.accountId, false);
+      setSteamCommunityReady(this.accountId, false);
+      setSteamCommunityStartPromise(this.accountId, null);
+      clearSteamProfileDataCache(this.accountId);
       botLogger.error(
-        { error: getErrorMessage(error), stack: error.stack, name: error.name },
+        {
+          accountId: this.accountId,
+          error: getErrorMessage(error),
+          stack: error.stack,
+          name: error.name,
+        },
         'Steam account emitted an error',
       );
       this.scheduleReconnect('error');
     });
     this.user.on('webSession', (sessionId, cookies) => {
-      setSteamCommunityLoginInProgress(false);
+      setSteamCommunityLoginInProgress(this.accountId, false);
       this.community.setCookies(cookies);
-      setSteamCommunityReady(true);
-      setSteamCommunityStartPromise(null);
-      resetSteamCommunityReconnectAttempts();
+      setSteamCommunityReady(this.accountId, true);
+      setSteamCommunityStartPromise(this.accountId, null);
+      resetSteamCommunityReconnectAttempts(this.accountId);
       this.clearScheduledReconnect();
       this.setOnlinePresence('webSession');
       botLogger.info(
-        { sessionIdLength: sessionId.length },
+        { accountId: this.accountId, sessionIdLength: sessionId.length },
         'Steam Community web session established',
       );
     });
     this.community.on('sessionExpired', (error) => {
-      setSteamCommunityReady(false);
+      setSteamCommunityReady(this.accountId, false);
       botLogger.warn(
-        { error: getErrorMessage(error) },
+        { accountId: this.accountId, error: getErrorMessage(error) },
         'Steam Community session expired',
       );
       this.requestWebSession('sessionExpired');
     });
 
-    setSteamCommunityLifecycleListenersAttached(true);
+    setSteamCommunityLifecycleListenersAttached(this.accountId, true);
   }
 
   start(): Promise<void> {
@@ -794,13 +854,13 @@ class SteamCommunityClient {
       botLogger.info('Steam integration disabled; missing Steam environment');
       return Promise.resolve();
     }
-    setSteamCommunityReconnectEnabled(true);
-    if (isSteamCommunityReady()) { return Promise.resolve(); }
+    setSteamCommunityReconnectEnabled(this.accountId, true);
+    if (isSteamCommunityReady(this.accountId)) { return Promise.resolve(); }
 
-    const existingStartPromise = getSteamCommunityStartPromise();
+    const existingStartPromise = getSteamCommunityStartPromise(this.accountId);
     if (existingStartPromise !== null) { return existingStartPromise; }
 
-    const logOnOptions = getSteamLogOnOptions();
+    const logOnOptions = getSteamLogOnOptions(this.account);
     this.attachLifecycleListeners();
 
     const startPromise = new Promise<void>((resolve, reject) => {
@@ -810,7 +870,7 @@ class SteamCommunityClient {
 
         const status = getSteamStartupStatus(
           this.user,
-          isSteamCommunityLoginInProgress(),
+          isSteamCommunityLoginInProgress(this.accountId),
         );
         this.resetConnectionAfterStartupTimeout(status);
         fail(
@@ -843,45 +903,48 @@ class SteamCommunityClient {
       try {
         if (this.user.steamID) {
           this.requestWebSession('existing_connection');
-        } else if (isSteamCommunityLoginInProgress()) {
-          botLogger.info('Steam login already in progress; waiting for web session');
+        } else if (isSteamCommunityLoginInProgress(this.accountId)) {
+          botLogger.info(
+            { accountId: this.accountId },
+            'Steam login already in progress; waiting for web session',
+          );
         } else {
-          botLogger.info('Logging into Steam account');
-          setSteamCommunityLoginInProgress(true);
+          botLogger.info({ accountId: this.accountId }, 'Logging into Steam account');
+          setSteamCommunityLoginInProgress(this.accountId, true);
           this.user.logOn(logOnOptions);
         }
       } catch (error) {
-        setSteamCommunityLoginInProgress(false);
+        setSteamCommunityLoginInProgress(this.accountId, false);
         fail(toError(error));
       }
     }).catch((error: unknown) => {
-      setSteamCommunityStartPromise(null);
+      setSteamCommunityStartPromise(this.accountId, null);
       botLogger.error(
-        { error: getErrorMessage(error) },
+        { accountId: this.accountId, error: getErrorMessage(error) },
         'Steam integration failed to start',
       );
       this.scheduleReconnect('start_failed');
       throw error;
     });
 
-    setSteamCommunityStartPromise(startPromise);
+    setSteamCommunityStartPromise(this.accountId, startPromise);
     return startPromise;
   }
 
   stop(): void {
     if (!steamIntegrationEnabled()) { return; }
-    setSteamCommunityReconnectEnabled(false);
+    setSteamCommunityReconnectEnabled(this.accountId, false);
     this.clearScheduledReconnect();
-    setSteamCommunityLoginInProgress(false);
-    setSteamCommunityReady(false);
-    setSteamCommunityStartPromise(null);
-    resetSteamCommunityReconnectAttempts();
-    clearSteamProfileDataCache();
+    setSteamCommunityLoginInProgress(this.accountId, false);
+    setSteamCommunityReady(this.accountId, false);
+    setSteamCommunityStartPromise(this.accountId, null);
+    resetSteamCommunityReconnectAttempts(this.accountId);
+    clearSteamProfileDataCache(this.accountId);
     this.user.logOff();
   }
 
   isReady(): boolean {
-    return isSteamCommunityReady();
+    return isSteamCommunityReady(this.accountId);
   }
 
   onCommentNotification(
@@ -967,6 +1030,7 @@ class SteamCommunityClient {
     options: SteamProfileReadOptions = {},
   ): Promise<SteamProfileSummary> {
     return getOrCreateCachedSteamProfileData(
+      this.accountId,
       `profile-summary:${normalizeSteamProfileLookup(lookup)}`,
       async () => {
         await this.ensureReady();
@@ -989,6 +1053,7 @@ class SteamCommunityClient {
     options: SteamProfileReadOptions = {},
   ): Promise<SteamOwnedGamesSummary> {
     const response = await getOrCreateCachedSteamProfileData(
+      this.accountId,
       `owned-games:${normalizeSteamProfileLookup(lookup)}`,
       async () => {
         await this.ensureReady();
@@ -1015,6 +1080,7 @@ class SteamCommunityClient {
     options: SteamProfileReadOptions = {},
   ): Promise<SteamEquippedProfileItemsSummary> {
     return getOrCreateCachedSteamProfileData(
+      this.accountId,
       `equipped-items:${steamId64}`,
       async () => {
         await this.ensureReady();
@@ -1032,6 +1098,7 @@ class SteamCommunityClient {
     options: SteamProfileReadOptions = {},
   ): Promise<SteamInventoryAppSummary[]> {
     return getOrCreateCachedSteamProfileData(
+      this.accountId,
       `inventory-contexts:${normalizeSteamProfileLookup(lookup)}`,
       async () => {
         await this.ensureReady();
@@ -1059,6 +1126,7 @@ class SteamCommunityClient {
     options: SteamProfileReadOptions = {},
   ): Promise<SteamInventoryItemsSummary> {
     const response = await getOrCreateCachedSteamProfileData(
+      this.accountId,
       [
         'inventory-items',
         normalizeSteamProfileLookup(lookup),
@@ -1103,7 +1171,7 @@ class SteamCommunityClient {
     if (!steamIntegrationEnabled()) {
       throw new TypeError('Steam integration is not configured');
     }
-    if (isSteamCommunityReady()) { return; }
+    if (isSteamCommunityReady(this.accountId)) { return; }
     await this.start();
   }
 
@@ -1112,18 +1180,27 @@ class SteamCommunityClient {
     options: SteamProfileReadOptions = {},
   ): Promise<SteamProfileWithComments> {
     const normalized = normalizeSteamProfileLookup(profileId);
-    return getOrCreateCachedSteamProfileData(`profile:${normalized}`, async () => {
-      const lookup = toSteamUserLookup(profileId);
-      return new Promise((resolve, reject) => {
-        this.community.getSteamUser(lookup, (error, profile) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve(profile as unknown as SteamProfileWithComments);
+    return getOrCreateCachedSteamProfileData(
+      this.accountId,
+      `profile:${normalized}`,
+      async () => {
+        const lookup = toSteamUserLookup(profileId);
+        return new Promise<SteamProfileWithComments>((resolve, reject) => {
+          this.community.getSteamUser(lookup, (error, profile) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            try {
+              resolve(requireSteamProfileWithComments(profile));
+            } catch (validationError) {
+              reject(validationError);
+            }
+          });
         });
-      });
-    }, options);
+      },
+      options,
+    );
   }
 
   private async resolveSteamId64(
@@ -1146,7 +1223,7 @@ class SteamCommunityClient {
       return getProfileBackgroundUrlFromItems(items);
     } catch (error) {
       botLogger.debug(
-        { steamId64, error: getErrorMessage(error) },
+        { accountId: this.accountId, steamId64, error: getErrorMessage(error) },
         'Steam profile background unavailable from equipped profile items',
       );
       return null;
@@ -1159,11 +1236,206 @@ class SteamCommunityClient {
       return normalizeSteamPersona(personas[steamId64]);
     } catch (error) {
       botLogger.debug(
-        { steamId64, error: getErrorMessage(error) },
+        { accountId: this.accountId, steamId64, error: getErrorMessage(error) },
         'Steam persona unavailable',
       );
       return null;
     }
+  }
+}
+
+class SteamCommunityClient {
+  private readonly clients = new Map<string, SteamCommunityAccountClient>(
+    getSteamAccounts().map(account => [
+      account.id,
+      new SteamCommunityAccountClient(account),
+    ]),
+  );
+
+  private getClient(accountId?: string | null): SteamCommunityAccountClient {
+    const account = getSteamAccountById(accountId);
+    if (!account) {
+      throw new TypeError('Steam integration is not configured');
+    }
+
+    const client = this.clients.get(account.id);
+    if (!client) {
+      throw new TypeError(`Steam account "${account.id}" is not configured`);
+    }
+    return client;
+  }
+
+  private getClientForProfile(
+    profileId: string,
+    accountId?: string | null,
+  ): SteamCommunityAccountClient {
+    if (accountId) { return this.getClient(accountId); }
+
+    const account = getSteamAccountForProfile(profileId) ?? getDefaultSteamAccount();
+    return this.getClient(account?.id ?? null);
+  }
+
+  getAccountClients(): readonly SteamCommunityAccountClient[] {
+    return [...this.clients.values()];
+  }
+
+  getBotProfileIds(): string[] {
+    return this.getAccountClients().map(client => client.account.botSteamId64);
+  }
+
+  getAccountIdForBotProfile(profileId: string): string | null {
+    return getSteamAccountForBotProfile(profileId)?.id ?? null;
+  }
+
+  async startAll(): Promise<void> {
+    const clients = this.getAccountClients();
+    const results = await Promise.allSettled(
+      clients.map(client => client.start()),
+    );
+    const failures = results.filter(result => result.status === 'rejected');
+
+    if (failures.length === 0) { return; }
+
+    botLogger.warn(
+      {
+        failed: failures.length,
+        total: results.length,
+        errors: failures.map(failure => getErrorMessage(failure.reason)),
+      },
+      'Some Steam accounts failed to start',
+    );
+
+    if (failures.length === results.length) {
+      const [failure] = failures;
+      throw toError(failure?.reason ?? 'All Steam accounts failed to start');
+    }
+  }
+
+  start(accountId?: string | null): Promise<void> {
+    return accountId ? this.getClient(accountId).start() : this.startAll();
+  }
+
+  stop(): void {
+    for (const client of this.getAccountClients()) {
+      client.stop();
+    }
+  }
+
+  isReady(accountId?: string | null): boolean {
+    if (accountId) { return this.getClient(accountId).isReady(); }
+    return steamIntegrationEnabled() && this.getAccountClients().every(client => client.isReady());
+  }
+
+  isAnyReady(): boolean {
+    return isAnySteamCommunityReady();
+  }
+
+  onCommentNotification(
+    accountId: string,
+    listener: SteamCommentNotificationListener,
+  ): () => void {
+    return this.getClient(accountId).onCommentNotification(listener);
+  }
+
+  onReady(accountId: string, listener: () => void): () => void {
+    return this.getClient(accountId).onReady(listener);
+  }
+
+  getProfileComments(
+    profileId: string,
+    count = DEFAULT_COMMENT_FETCH_COUNT,
+    accountId?: string | null,
+  ): Promise<SteamProfileComment[]> {
+    return this.getClientForProfile(profileId, accountId).getProfileComments(
+      profileId,
+      count,
+    );
+  }
+
+  getProfileCommentPage(
+    profileId: string,
+    count = DEFAULT_COMMENT_FETCH_COUNT,
+    accountId?: string | null,
+  ): Promise<SteamProfileCommentPage> {
+    return this.getClientForProfile(profileId, accountId).getProfileCommentPage(
+      profileId,
+      count,
+    );
+  }
+
+  postProfileComment(
+    profileId: string,
+    message: string,
+    accountId?: string | null,
+  ): Promise<string | null> {
+    return this.getClientForProfile(profileId, accountId).postProfileComment(
+      profileId,
+      message,
+    );
+  }
+
+  deleteProfileComment(
+    profileId: string,
+    commentId: string,
+    accountId?: string | null,
+  ): Promise<void> {
+    return this.getClientForProfile(profileId, accountId).deleteProfileComment(
+      profileId,
+      commentId,
+    );
+  }
+
+  getPublicProfileSummary(
+    lookup: string,
+    options: SteamProfileReadOptions = {},
+    accountId?: string | null,
+  ): Promise<SteamProfileSummary> {
+    return this.getClient(accountId).getPublicProfileSummary(lookup, options);
+  }
+
+  getOwnedGames(
+    lookup: string,
+    limit: number,
+    sort: SteamOwnedGamesSort,
+    options: SteamProfileReadOptions = {},
+    accountId?: string | null,
+  ): Promise<SteamOwnedGamesSummary> {
+    return this.getClient(accountId).getOwnedGames(lookup, limit, sort, options);
+  }
+
+  getEquippedProfileItems(
+    lookup: string,
+    options: SteamProfileReadOptions = {},
+    accountId?: string | null,
+  ): Promise<SteamEquippedProfileItemsSummary> {
+    return this.getClient(accountId).getEquippedProfileItems(lookup, options);
+  }
+
+  getInventoryContexts(
+    lookup: string,
+    options: SteamProfileReadOptions = {},
+    accountId?: string | null,
+  ): Promise<SteamInventoryAppSummary[]> {
+    return this.getClient(accountId).getInventoryContexts(lookup, options);
+  }
+
+  getInventoryItems(
+    lookup: string,
+    appId: number,
+    contextId: string,
+    tradableOnly: boolean,
+    limit: number,
+    options: SteamProfileReadOptions = {},
+    accountId?: string | null,
+  ): Promise<SteamInventoryItemsSummary> {
+    return this.getClient(accountId).getInventoryItems(
+      lookup,
+      appId,
+      contextId,
+      tradableOnly,
+      limit,
+      options,
+    );
   }
 }
 

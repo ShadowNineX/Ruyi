@@ -8,7 +8,10 @@ import {
   setTracingDisabled,
 } from '@openai/agents';
 import { configManager } from '../config';
-import { BACKGROUND_TASK_MODEL } from '../constants';
+import {
+  BACKGROUND_TASK_MODEL,
+  PROACTIVE_TASK_MODEL,
+} from '../constants';
 import { env } from '../env';
 import { aiLogger } from '../logger';
 import {
@@ -23,21 +26,42 @@ type TextVerbosity = NonNullable<ModelSettings['text']>['verbosity'];
 
 const BACKGROUND_TASK_REASONING_EFFORT: ReasoningEffort = 'low';
 const BACKGROUND_TASK_TEXT_VERBOSITY: TextVerbosity = 'low';
+const PROACTIVE_TASK_REASONING_EFFORT: ReasoningEffort = 'low';
+const PROACTIVE_TASK_TEXT_VERBOSITY: TextVerbosity = 'medium';
 
-function buildBackgroundTaskModelSettings(): ModelSettings {
-  const defaults = getDefaultModelSettings(BACKGROUND_TASK_MODEL);
-
+function buildTaskModelSettings(
+  model: string,
+  reasoningEffort: ReasoningEffort,
+  textVerbosity: TextVerbosity,
+): ModelSettings {
+  const defaults = getDefaultModelSettings(model);
   return {
     ...defaults,
     reasoning: {
       ...defaults.reasoning,
-      effort: BACKGROUND_TASK_REASONING_EFFORT,
+      effort: reasoningEffort,
     },
     text: {
       ...defaults.text,
-      verbosity: BACKGROUND_TASK_TEXT_VERBOSITY,
+      verbosity: textVerbosity,
     },
   };
+}
+
+function buildBackgroundTaskModelSettings(): ModelSettings {
+  return buildTaskModelSettings(
+    BACKGROUND_TASK_MODEL,
+    BACKGROUND_TASK_REASONING_EFFORT,
+    BACKGROUND_TASK_TEXT_VERBOSITY,
+  );
+}
+
+function buildProactiveTaskModelSettings(): ModelSettings {
+  return buildTaskModelSettings(
+    PROACTIVE_TASK_MODEL,
+    PROACTIVE_TASK_REASONING_EFFORT,
+    PROACTIVE_TASK_TEXT_VERBOSITY,
+  );
 }
 
 class AgentsRuntimeManager {
@@ -63,6 +87,14 @@ class AgentsRuntimeManager {
 
   getBackgroundTaskModelSettings(): ModelSettings {
     return buildBackgroundTaskModelSettings();
+  }
+
+  getProactiveTaskModel(): string {
+    return PROACTIVE_TASK_MODEL;
+  }
+
+  getProactiveTaskModelSettings(): ModelSettings {
+    return buildProactiveTaskModelSettings();
   }
 
   getProviderConfig() {

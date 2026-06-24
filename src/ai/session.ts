@@ -397,12 +397,17 @@ class MongoAgentSession implements Session {
     private readonly sessionId: string,
     private readonly model: string,
     private readonly modelSettings: ModelSettings,
+    private readonly promptVersion: string,
     private items: AgentInputItem[],
     private summary: string | null,
   ) {}
 
-  matchesModel(model: string): boolean {
-    return !this.invalidated && this.model === model;
+  matchesConfiguration(model: string, promptVersion: string): boolean {
+    return (
+      !this.invalidated
+      && this.model === model
+      && this.promptVersion === promptVersion
+    );
   }
 
   markInvalidated(): void {
@@ -503,7 +508,7 @@ class MongoAgentSession implements Session {
           items: this.items,
           lastUsed: new Date(),
           isActive: true,
-          promptVersion: systemPromptVersion,
+          promptVersion: this.promptVersion,
         },
         $setOnInsert: { createdAt: new Date() },
       },
@@ -521,7 +526,7 @@ class MongoAgentSession implements Session {
         items: this.items,
         lastUsed: new Date(),
         model: this.model,
-        promptVersion: systemPromptVersion,
+        promptVersion: this.promptVersion,
       },
     });
   }
@@ -557,6 +562,7 @@ async function compactPersistedItemsIfNeeded(
   existingSummary: string | null,
   model: string,
   modelSettings: ModelSettings,
+  promptVersion: string,
 ): Promise<{ items: AgentInputItem[]; summary: string | null }> {
   if (items.length <= AGENT_SESSION_COMPACTION_TRIGGER_ITEMS) {
     return { items, summary: existingSummary };
@@ -578,7 +584,7 @@ async function compactPersistedItemsIfNeeded(
         summaryUpdatedAt: new Date(),
         lastUsed: new Date(),
         model,
-        promptVersion: systemPromptVersion,
+        promptVersion,
       },
     });
 
@@ -721,11 +727,12 @@ class SessionManager {
     model = agentsRuntimeManager.model,
     modelSettings = agentsRuntimeManager.modelSettings,
     surface: ConversationSurface = 'discord',
+    promptVersion = systemPromptVersion,
   ): Promise<MongoAgentSession> {
     const cacheKey = this.cacheKey(surface, conversationId);
     const existingSession = getCachedAgentSession<MongoAgentSession>(cacheKey);
     if (existingSession) {
-      if (existingSession.matchesModel(model)) {
+      if (existingSession.matchesConfiguration(model, promptVersion)) {
         aiLogger.debug(
           { surface, conversationId },
           'Using cached agent session',
@@ -745,8 +752,8 @@ class SessionManager {
         $set: { isActive: false },
       });
       aiLogger.info(
-        { surface, conversationId, currentModel: model },
-        'Cached agent session model changed; creating fresh agent session',
+        { surface, conversationId, currentModel: model, promptVersion },
+        'Cached agent session configuration changed; creating fresh agent session',
       );
     }
 
@@ -757,8 +764,7 @@ class SessionManager {
 
     if (persistedSession) {
       const promptVersionMatches
-        = !persistedSession.promptVersion
-          || persistedSession.promptVersion === systemPromptVersion;
+        = persistedSession.promptVersion === promptVersion;
       const modelMatches = persistedSession.model === model;
 
       if (promptVersionMatches && modelMatches) {
@@ -769,6 +775,7 @@ class SessionManager {
           persistedSession.summary ?? null,
           model,
           modelSettings,
+          promptVersion,
         );
         const session = new MongoAgentSession(
           surface,
@@ -776,6 +783,7 @@ class SessionManager {
           persistedSession.sessionId,
           model,
           modelSettings,
+          promptVersion,
           compactedSession.items,
           compactedSession.summary,
         );
@@ -800,7 +808,7 @@ class SessionManager {
           conversationId,
           sessionId: persistedSession.sessionId,
           storedVersion: persistedSession.promptVersion,
-          currentVersion: systemPromptVersion,
+          currentVersion: promptVersion,
           storedModel: persistedSession.model,
           currentModel: model,
         },
@@ -827,6 +835,7 @@ class SessionManager {
       sessionId,
       model,
       modelSettings,
+      promptVersion,
       seedData.items,
       null,
     );
@@ -845,7 +854,7 @@ class SessionManager {
         ...setFields,
         lastUsed: new Date(),
         isActive: true,
-        promptVersion: systemPromptVersion,
+        promptVersion,
       },
       $setOnInsert: { createdAt: new Date() },
     });

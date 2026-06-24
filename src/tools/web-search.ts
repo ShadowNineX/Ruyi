@@ -12,6 +12,7 @@ import {
   configManager,
 
 } from '../config';
+import { TOOL_ANSWER_MODEL } from '../constants';
 import { env } from '../env';
 import { toolLogger } from '../logger';
 import { getCurrentToolConfigScope } from '../utils/tool-config-scope';
@@ -164,10 +165,9 @@ function collectOpenAIWebSearchSources(response: Response): SearchSource[] {
 async function openAIWebSearch(
   query: string,
   mode: SearchMode,
-  scope: ConfigScope | null,
 ): Promise<Omit<WebSearchResult, 'attempts'>> {
   const response = await openai.responses.create({
-    model: configManager.getChatModel(scope),
+    model: TOOL_ANSWER_MODEL,
     instructions:
       'Answer using current web information. Include concise citations in the response when sources are available.',
     input: query,
@@ -322,10 +322,9 @@ async function runProvider(
   query: string,
   mode: SearchMode,
   maxResults: number,
-  scope: ConfigScope | null,
 ): Promise<Omit<WebSearchResult, 'attempts'>> {
   return provider === 'openai'
-    ? openAIWebSearch(query, mode, scope)
+    ? openAIWebSearch(query, mode)
     : tavilySearch(query, mode, maxResults);
 }
 
@@ -346,7 +345,6 @@ async function searchWeb(
         query,
         mode,
         maxResults,
-        scope,
       );
       attempts.push(`${provider}:ok`);
       if (resultHasGoodSources({ ...result, attempts })) {

@@ -23,11 +23,9 @@ import {
   takePermissionPromptMessages,
 } from '../stores';
 import {
-  argumentEntriesToRecord,
-  formatToolArgumentLines,
-  parseNullableToolArguments,
-  parseToolArguments,
-} from '../utils/tool-arguments';
+  getApprovalToolName,
+  getPermissionSummary,
+} from '../utils/permission-summary';
 
 export type PermissionDecision
   = | 'approve_once'
@@ -47,11 +45,7 @@ const DENY_ONCE_RESULT: PermissionResult = {
   decision: 'deny_once',
 };
 const DISCORD_UNKNOWN_MESSAGE_CODE = 10008;
-const SMITHERY_SERVICE_NAMES: Record<string, string> = {
-  youtube: 'YouTube',
-};
 const EMBED_DESCRIPTION_LIMIT = 4096;
-const ARGUMENT_LINE_LIMIT = 8;
 
 type DiscordTimestampStyle = 'R' | 'T';
 
@@ -65,12 +59,6 @@ function formatDiscordTimestamp(
   style: DiscordTimestampStyle,
 ): string {
   return `<t:${Math.floor(timestampMs / 1000)}:${style}>`;
-}
-
-export function getApprovalToolName(
-  approvalItem: RunToolApprovalItem,
-): string {
-  return approvalItem.name ?? approvalItem.toolName ?? 'unknown_tool';
 }
 
 function getDecisionLabel(decision: PermissionDecision): string {
@@ -102,125 +90,12 @@ function decisionFromCustomId(customId: string): PermissionDecision | null {
   return null;
 }
 
-function parseApprovalArguments(
-  rawArguments: string | undefined,
-): Record<string, unknown> | null {
-  return parseNullableToolArguments(rawArguments);
-}
-
-function getStringField(
-  record: Record<string, unknown>,
-  key: string,
-): string | null {
-  const value = record[key];
-  return typeof value === 'string' && value.trim() ? value : null;
-}
-
-function hasToolArguments(args: Record<string, unknown>): boolean {
-  return Object.keys(args).length > 0;
-}
-
-function getApprovalToolArguments(
-  approvalArgs: Record<string, unknown>,
-  fallback: Record<string, unknown>,
-): Record<string, unknown> {
-  const toolArgumentEntries = argumentEntriesToRecord(approvalArgs.tool_arguments);
-  if (toolArgumentEntries && hasToolArguments(toolArgumentEntries)) {
-    return toolArgumentEntries;
-  }
-
-  const directArgs = parseToolArguments(approvalArgs.arguments);
-  if (hasToolArguments(directArgs)) { return directArgs; }
-
-  const argumentsJson = approvalArgs.arguments_json;
-  if (typeof argumentsJson !== 'string') { return fallback; }
-
-  const parsedArgumentsJson = parseToolArguments(argumentsJson);
-  return hasToolArguments(parsedArgumentsJson) ? parsedArgumentsJson : fallback;
-}
-
-function formatPermissionArgumentLines(args: Record<string, unknown>): string[] {
-  return formatToolArgumentLines(args, {
-    lineLimit: ARGUMENT_LINE_LIMIT,
-    valueMaxLength: 700,
-  });
-}
-
-function formatRawArgumentLine(rawArguments: string | undefined): string | null {
-  if (!rawArguments?.trim()) { return null; }
-
-  return `- input: ${truncate(rawArguments.replace(/\s+/g, ' '), 700)}`;
-}
-
-function appendArgumentLines(
-  lines: string[],
-  argumentLines: string[],
-): void {
-  if (argumentLines.length === 0) { return; }
-  lines.push('', 'Request details:', ...argumentLines);
-}
-
-function getGenericPermissionDescription(
-  approvalItem: RunToolApprovalItem,
-  approvalArgs: Record<string, unknown> | null,
-): string {
-  const toolName = getApprovalToolName(approvalItem);
-  const lines = [`Tool: \`${toolName}\``];
-
-  if (approvalArgs) {
-    appendArgumentLines(
-      lines,
-      formatPermissionArgumentLines(
-        getApprovalToolArguments(approvalArgs, approvalArgs),
-      ),
-    );
-  } else {
-    const rawArgumentLine = formatRawArgumentLine(approvalItem.arguments);
-    if (rawArgumentLine) { appendArgumentLines(lines, [rawArgumentLine]); }
-  }
-
-  return truncate(lines.join('\n'), 3900);
-}
-
-function getSmitheryPermissionDescription(
-  approvalArgs: Record<string, unknown>,
-): string {
-  const serverId = getStringField(approvalArgs, 'server_id') ?? 'unknown';
-  const serviceName = SMITHERY_SERVICE_NAMES[serverId] ?? serverId;
-  const toolName = getStringField(approvalArgs, 'tool_name') ?? 'unknown';
-  const mcpArgs = getApprovalToolArguments(approvalArgs, {});
-  const lines = [
-    `Service: **${serviceName}**`,
-    `MCP tool: \`${toolName}\``,
-  ];
-
-  const argumentLines = formatPermissionArgumentLines(mcpArgs);
-  appendArgumentLines(lines, argumentLines);
-
-  return truncate(lines.join('\n'), 3900);
-}
-
 function getPermissionDisplayName(approvalItem: RunToolApprovalItem): string {
-  const toolName = getApprovalToolName(approvalItem);
-  if (toolName !== 'smithery_call_tool') { return toolName; }
-
-  const approvalArgs = parseApprovalArguments(approvalItem.arguments);
-  if (!approvalArgs) { return toolName; }
-
-  const serverId = getStringField(approvalArgs, 'server_id') ?? 'Smithery';
-  const serviceName = SMITHERY_SERVICE_NAMES[serverId] ?? serverId;
-  const mcpToolName = getStringField(approvalArgs, 'tool_name');
-  return mcpToolName ? `${serviceName} ${mcpToolName}` : serviceName;
+  return getPermissionSummary(approvalItem).displayName;
 }
 
 function getPermissionDescription(approvalItem: RunToolApprovalItem): string {
-  const toolName = getApprovalToolName(approvalItem);
-  const approvalArgs = parseApprovalArguments(approvalItem.arguments);
-  if (toolName === 'smithery_call_tool' && approvalArgs) {
-    return getSmitheryPermissionDescription(approvalArgs);
-  }
-
-  return getGenericPermissionDescription(approvalItem, approvalArgs);
+  return getPermissionSummary(approvalItem).description;
 }
 
 function getPermissionDescriptionWithExpiration(

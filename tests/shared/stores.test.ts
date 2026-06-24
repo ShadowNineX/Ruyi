@@ -64,10 +64,13 @@ import {
 
 function testSession(): CachedAgentSession {
   return {
-    matchesModel: model => model === 'gpt-test',
+    matchesConfiguration: model => model === 'gpt-test',
     markInvalidated: () => undefined,
   };
 }
+
+const TEST_STEAM_ACCOUNT_ID = 'ruyi';
+const TEST_TAILS_STEAM_ACCOUNT_ID = 'tails';
 
 const defaultSettings: ScopedSettings = {
   prefix: '!',
@@ -313,14 +316,14 @@ describe('external data cache store', () => {
 
 describe('Steam profile store', () => {
   test('deduplicates cached Steam profile data reads', async () => {
-    clearSteamProfileDataCache();
+    clearSteamProfileDataCache(TEST_STEAM_ACCOUNT_ID);
     let readCount = 0;
 
-    const first = getOrCreateCachedSteamProfileData('profile:owner', async () => {
+    const first = getOrCreateCachedSteamProfileData(TEST_STEAM_ACCOUNT_ID, 'profile:owner', async () => {
       readCount += 1;
       return { name: 'Shadow' };
     });
-    const second = getOrCreateCachedSteamProfileData('profile:owner', async () => {
+    const second = getOrCreateCachedSteamProfileData(TEST_STEAM_ACCOUNT_ID, 'profile:owner', async () => {
       readCount += 1;
       return { name: 'Other' };
     });
@@ -328,31 +331,32 @@ describe('Steam profile store', () => {
     expect(await first).toEqual({ name: 'Shadow' });
     expect(await second).toEqual({ name: 'Shadow' });
     expect(readCount).toBe(1);
-    expect(getSteamProfileDataCacheSize()).toBe(1);
+    expect(getSteamProfileDataCacheSize(TEST_STEAM_ACCOUNT_ID)).toBe(1);
   });
 
   test('removes failed Steam profile data reads from cache', async () => {
-    clearSteamProfileDataCache();
+    clearSteamProfileDataCache(TEST_STEAM_ACCOUNT_ID);
 
     await expectPromiseToRejectWithMessage(
-      getOrCreateCachedSteamProfileData('profile:error', async () => {
+      getOrCreateCachedSteamProfileData(TEST_STEAM_ACCOUNT_ID, 'profile:error', async () => {
         throw new Error('private');
       }),
       'private',
     );
 
-    expect(getSteamProfileDataCacheSize()).toBe(0);
+    expect(getSteamProfileDataCacheSize(TEST_STEAM_ACCOUNT_ID)).toBe(0);
   });
 
   test('can force refresh Steam profile data through the wrapper', async () => {
-    clearSteamProfileDataCache();
+    clearSteamProfileDataCache(TEST_STEAM_ACCOUNT_ID);
     let readCount = 0;
 
-    await getOrCreateCachedSteamProfileData('profile:owner', async () => {
+    await getOrCreateCachedSteamProfileData(TEST_STEAM_ACCOUNT_ID, 'profile:owner', async () => {
       readCount += 1;
       return { version: readCount };
     });
     const refreshed = await getOrCreateCachedSteamProfileData(
+      TEST_STEAM_ACCOUNT_ID,
       'profile:owner',
       async () => {
         readCount += 1;
@@ -364,50 +368,68 @@ describe('Steam profile store', () => {
     expect(refreshed).toEqual({ version: 2 });
     expect(readCount).toBe(2);
   });
+
+  test('keeps cached Steam profile data isolated per account', async () => {
+    clearSteamProfileDataCache(TEST_STEAM_ACCOUNT_ID);
+    clearSteamProfileDataCache(TEST_TAILS_STEAM_ACCOUNT_ID);
+
+    await getOrCreateCachedSteamProfileData(TEST_STEAM_ACCOUNT_ID, 'profile:owner', async () => ({
+      name: 'Ruyi view',
+    }));
+    const tailsView = await getOrCreateCachedSteamProfileData(
+      TEST_TAILS_STEAM_ACCOUNT_ID,
+      'profile:owner',
+      async () => ({ name: 'Tails view' }),
+    );
+
+    expect(tailsView).toEqual({ name: 'Tails view' });
+    expect(getSteamProfileDataCacheSize(TEST_STEAM_ACCOUNT_ID)).toBe(1);
+    expect(getSteamProfileDataCacheSize(TEST_TAILS_STEAM_ACCOUNT_ID)).toBe(1);
+  });
 });
 
 describe('Steam client store', () => {
   test('tracks Steam Community readiness and startup promise', () => {
     const startPromise = Promise.resolve();
 
-    setSteamCommunityReady(false);
-    setSteamCommunityStartPromise(null);
-    setSteamCommunityLifecycleListenersAttached(false);
+    setSteamCommunityReady(TEST_STEAM_ACCOUNT_ID, false);
+    setSteamCommunityStartPromise(TEST_STEAM_ACCOUNT_ID, null);
+    setSteamCommunityLifecycleListenersAttached(TEST_STEAM_ACCOUNT_ID, false);
 
-    setSteamCommunityReady(true);
-    setSteamCommunityStartPromise(startPromise);
-    setSteamCommunityLifecycleListenersAttached(true);
+    setSteamCommunityReady(TEST_STEAM_ACCOUNT_ID, true);
+    setSteamCommunityStartPromise(TEST_STEAM_ACCOUNT_ID, startPromise);
+    setSteamCommunityLifecycleListenersAttached(TEST_STEAM_ACCOUNT_ID, true);
 
-    expect(isSteamCommunityReady()).toBe(true);
-    expect(getSteamCommunityStartPromise()).toBe(startPromise);
-    expect(areSteamCommunityLifecycleListenersAttached()).toBe(true);
+    expect(isSteamCommunityReady(TEST_STEAM_ACCOUNT_ID)).toBe(true);
+    expect(getSteamCommunityStartPromise(TEST_STEAM_ACCOUNT_ID)).toBe(startPromise);
+    expect(areSteamCommunityLifecycleListenersAttached(TEST_STEAM_ACCOUNT_ID)).toBe(true);
 
-    setSteamCommunityReady(false);
-    setSteamCommunityStartPromise(null);
-    setSteamCommunityLifecycleListenersAttached(false);
+    setSteamCommunityReady(TEST_STEAM_ACCOUNT_ID, false);
+    setSteamCommunityStartPromise(TEST_STEAM_ACCOUNT_ID, null);
+    setSteamCommunityLifecycleListenersAttached(TEST_STEAM_ACCOUNT_ID, false);
   });
 });
 
 describe('Steam service store', () => {
   test('tracks Steam comment service lifecycle state', () => {
     setSteamProfileCommentServiceRunning(false);
-    setSteamProfileCommentCheckProcessing(false);
-    setPendingSteamProfileCommentCheck(false);
+    setSteamProfileCommentCheckProcessing(TEST_STEAM_ACCOUNT_ID, false);
+    setPendingSteamProfileCommentCheck(TEST_STEAM_ACCOUNT_ID, false);
 
     setSteamProfileCommentServiceRunning(true);
-    setSteamProfileCommentCheckProcessing(true);
-    setPendingSteamProfileCommentCheck(true);
+    setSteamProfileCommentCheckProcessing(TEST_STEAM_ACCOUNT_ID, true);
+    setPendingSteamProfileCommentCheck(TEST_STEAM_ACCOUNT_ID, true);
 
     expect(isSteamProfileCommentServiceRunning()).toBe(true);
-    expect(isSteamProfileCommentCheckProcessing()).toBe(true);
-    expect(hasPendingSteamProfileCommentCheck()).toBe(true);
+    expect(isSteamProfileCommentCheckProcessing(TEST_STEAM_ACCOUNT_ID)).toBe(true);
+    expect(hasPendingSteamProfileCommentCheck(TEST_STEAM_ACCOUNT_ID)).toBe(true);
 
     setSteamProfileCommentServiceRunning(false);
-    setSteamProfileCommentCheckProcessing(false);
-    setPendingSteamProfileCommentCheck(false);
+    setSteamProfileCommentCheckProcessing(TEST_STEAM_ACCOUNT_ID, false);
+    setPendingSteamProfileCommentCheck(TEST_STEAM_ACCOUNT_ID, false);
 
     expect(isSteamProfileCommentServiceRunning()).toBe(false);
-    expect(isSteamProfileCommentCheckProcessing()).toBe(false);
-    expect(hasPendingSteamProfileCommentCheck()).toBe(false);
+    expect(isSteamProfileCommentCheckProcessing(TEST_STEAM_ACCOUNT_ID)).toBe(false);
+    expect(hasPendingSteamProfileCommentCheck(TEST_STEAM_ACCOUNT_ID)).toBe(false);
   });
 });

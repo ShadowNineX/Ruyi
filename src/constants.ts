@@ -28,6 +28,8 @@ export const REMINDER_PROCESSING_STALE_MS
 export const REMINDER_SCHEDULER_ERROR_RETRY_MS = 60 * 1000;
 
 export const BACKGROUND_TASK_MODEL = 'gpt-5.4-nano';
+export const PROACTIVE_TASK_MODEL = 'gpt-5.4-mini';
+export const TOOL_ANSWER_MODEL = 'gpt-5.4-mini';
 
 export const ONGOING_CONVERSATION_WINDOW_MS = 30 * 60 * 1000;
 

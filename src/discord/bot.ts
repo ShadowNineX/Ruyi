@@ -315,7 +315,7 @@ class RuyiBot {
         message.id,
         sentChunks.map(chunk => chunk.id),
       );
-      await awayMessageService.scheduleAfterHandledTurn(message);
+      await awayMessageService.scheduleAfterHandledTurn(message, reply);
       return;
     }
 
@@ -344,7 +344,7 @@ class RuyiBot {
       return;
     }
 
-    await awayMessageService.scheduleAfterHandledTurn(message);
+    await awayMessageService.scheduleAfterHandledTurn(message, null);
   }
 
   private async generateChatReply(

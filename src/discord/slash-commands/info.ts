@@ -11,8 +11,8 @@ import { agentsRuntimeManager } from '../../ai';
 import { getBuildInfo } from '../../build-info';
 import { countConnectedSmitheryConnections } from '../../db/models';
 import { botLogger } from '../../logger';
+import { getSteamAccounts, steamIntegrationEnabled } from '../../steam/accounts';
 import { steamCommunityClient } from '../../steam/client';
-import { steamIntegrationEnabled } from '../../utils/user-identity';
 
 const INFO_COLORS = {
   healthy: 0x57F287,
@@ -113,6 +113,7 @@ function getOpenAIHealth(): HealthItem {
 }
 
 function getSteamHealth(): HealthItem {
+  const accounts = getSteamAccounts();
   if (!steamIntegrationEnabled()) {
     return {
       label: 'Steam',
@@ -121,12 +122,16 @@ function getSteamHealth(): HealthItem {
     };
   }
 
+  const readyCount = accounts.filter(account =>
+    steamCommunityClient.isReady(account.id),
+  ).length;
+  const allReady = readyCount === accounts.length;
   return {
     label: 'Steam',
-    state: steamCommunityClient.isReady() ? 'OK' : 'Warning',
-    detail: steamCommunityClient.isReady()
-      ? 'Community session ready'
-      : 'Configured but not ready',
+    state: allReady ? 'OK' : 'Warning',
+    detail: allReady
+      ? `${readyCount}/${accounts.length} Community session(s) ready`
+      : `${readyCount}/${accounts.length} configured Community session(s) ready`,
   };
 }
 

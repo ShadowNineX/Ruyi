@@ -15,15 +15,22 @@ interface SteamProfileCacheOptions {
   now?: number;
 }
 
-export function getSteamProfileDataCacheSize(): number {
-  return getExternalDataCacheSize(STEAM_PROFILE_CACHE_NAMESPACE);
+function steamProfileCacheNamespace(accountId?: string): string {
+  return accountId
+    ? `${STEAM_PROFILE_CACHE_NAMESPACE}:${accountId}`
+    : STEAM_PROFILE_CACHE_NAMESPACE;
 }
 
-export function clearSteamProfileDataCache(): void {
-  clearExternalDataCacheNamespace(STEAM_PROFILE_CACHE_NAMESPACE);
+export function getSteamProfileDataCacheSize(accountId?: string): number {
+  return getExternalDataCacheSize(steamProfileCacheNamespace(accountId));
+}
+
+export function clearSteamProfileDataCache(accountId?: string): void {
+  clearExternalDataCacheNamespace(steamProfileCacheNamespace(accountId));
 }
 
 export function getOrCreateCachedSteamProfileData<T>(
+  accountId: string,
   key: string,
   read: () => Promise<T>,
   options: SteamProfileCacheOptions = {},
@@ -32,7 +39,7 @@ export function getOrCreateCachedSteamProfileData<T>(
     forceRefresh: options.forceRefresh,
     key,
     maxEntries: STEAM_PROFILE_DATA_CACHE_MAX_ENTRIES,
-    namespace: STEAM_PROFILE_CACHE_NAMESPACE,
+    namespace: steamProfileCacheNamespace(accountId),
     now: options.now,
     read,
     ttlMs: STEAM_PROFILE_DATA_CACHE_TTL_MS,

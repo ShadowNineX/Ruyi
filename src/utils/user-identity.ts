@@ -1,4 +1,8 @@
 import { env } from '../env';
+import {
+  resolveSteamProfileTarget,
+  steamIntegrationEnabled,
+} from '../steam/accounts';
 
 export type UserSurface = 'discord' | 'steam';
 
@@ -11,15 +15,6 @@ export interface RuyiUserIdentity {
 }
 
 const OWNER_PERSON_ID = 'owner';
-
-export function steamIntegrationEnabled(): boolean {
-  return Boolean(
-    env.STEAM_REFRESH_TOKEN
-    && env.STEAM_BOT_STEAM_ID64
-    && env.STEAM_OWNER_STEAM_ID64
-    && env.OWNER_DISCORD_USER_ID,
-  );
-}
 
 export function buildDiscordUserIdentity(
   userId: string,
@@ -49,9 +44,4 @@ export function buildSteamUserIdentity(
   };
 }
 
-export function resolveSteamProfileTarget(
-  target: 'bot' | 'owner',
-): string | null {
-  if (target === 'bot') { return env.STEAM_BOT_STEAM_ID64 ?? null; }
-  return env.STEAM_OWNER_STEAM_ID64 ?? null;
-}
+export { resolveSteamProfileTarget, steamIntegrationEnabled };
