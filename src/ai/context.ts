@@ -661,7 +661,7 @@ class ConversationContext {
     const assistantName = options.personality === 'tails' ? 'Tails' : 'Ruyi';
     const assistantStyleBoundary
       = options.personality === 'tails'
-        ? 'Current assistant voice: Tails. Keep the reply friendly, bright, practical, and casual. Do not use formal lord/master/servant address from Ruyi.'
+        ? 'Current character voice: Tails. Reply like a clever young mechanic friend, not an assistant. Keep Steam comments short and natural; no formal lord/master/servant address from Ruyi.'
         : 'Current assistant voice: Ruyi. Keep the reply formal, deferential, warm, and in Ruyi\'s Nine Sols style.';
     const surfaceConstraints
       = surface === 'steam'
