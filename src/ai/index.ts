@@ -9,9 +9,6 @@ import { sessionManager } from './session';
 // Chat
 export { chatService } from './chat';
 
-// Classifier
-export { replyClassifier } from './classifier';
-
 export { agentsRuntimeManager } from './client';
 
 // Context and memory

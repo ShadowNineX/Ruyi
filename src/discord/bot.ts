@@ -16,7 +16,6 @@ import {
   conversationContext,
   editClassifier,
   permissionManager,
-  replyClassifier,
   sessionManager,
 } from '../ai';
 import { userConfigScope } from '../config';
@@ -78,7 +77,6 @@ import {
 
 interface ResponseGate {
   isMentioned: boolean;
-  isDM: boolean;
   isReplyToBot: boolean;
 }
 
@@ -220,55 +218,36 @@ class RuyiBot {
   ): ResponseGate {
     const botUser = this.client.user;
     const isMentioned = botUser ? message.mentions.has(botUser) : false;
-    const isDM = message.channel.isDMBased();
     const isReplyToBot
       = Boolean(botUser) && referencedMessage?.author.id === botUser?.id;
 
-    return { isMentioned, isDM, isReplyToBot };
+    return { isMentioned, isReplyToBot };
   }
 
-  private async shouldBotRespond(
+  private shouldBotRespond(
     message: Message,
     gate: ResponseGate,
-  ): Promise<boolean> {
+  ): boolean {
     const username = message.author.username;
     const channelName = 'name' in message.channel ? message.channel.name : 'DM';
 
-    if (gate.isMentioned || gate.isDM || gate.isReplyToBot) {
+    if (gate.isMentioned || gate.isReplyToBot) {
       botLogger.info(
         { user: username, channel: channelName, ...gate },
-        'Replying to mention/DM/reply',
+        'Replying to mention/reply',
       );
       return true;
     }
 
-    try {
-      const classifierMessage = formatMessageForAI(message);
-      const shouldRespond = await replyClassifier.shouldReply(
-        classifierMessage,
-        this.client.user?.username ?? 'Bot',
-        message.channel.id,
-      );
-      botLogger.debug(
-        {
-          user: username,
-          channel: channelName,
-          decision: shouldRespond ? 'reply' : 'skip',
-        },
-        'Reply classifier decision',
-      );
-      return shouldRespond;
-    } catch (error) {
-      botLogger.error(
-        { error: (error as Error)?.message, user: username },
-        'Reply classifier failed; skipping',
-      );
-      return false;
-    }
+    botLogger.debug(
+      { user: username, channel: channelName, ...gate },
+      'Skipping message without mention or bot reply',
+    );
+    return false;
   }
 
   private isDirectResponseGate(gate: ResponseGate): boolean {
-    return gate.isMentioned || gate.isDM || gate.isReplyToBot;
+    return gate.isMentioned || gate.isReplyToBot;
   }
 
   // ---- Chat handling -------------------------------------------------------
@@ -878,7 +857,7 @@ class RuyiBot {
         },
       )) ?? null;
     const gate = this.computeResponseGate(message, referencedMessage);
-    if (!(await this.shouldBotRespond(message, gate))) { return; }
+    if (!this.shouldBotRespond(message, gate)) { return; }
     if (this.isDirectResponseGate(gate)) {
       this.abortActiveChatTurn(message.channel.id, message.id);
     }

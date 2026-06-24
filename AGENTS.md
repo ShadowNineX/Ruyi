@@ -22,7 +22,7 @@ Ruyi is a Nine Sols themed AI companion with Discord and Steam profile-comment t
    - `chat.ts` — `chatService.chat()`. Returns `string | null`; **throws on error** so [src/discord/bot.ts](src/discord/bot.ts) can surface a meaningful Discord message via `getErrorMessage()` in [src/discord/utils/messages.ts](src/discord/utils/messages.ts). `null` means "model returned empty" only.
    - `context.ts` — builds platform-aware context. Discord history and Steam profile-comment history stay separate; shared memories are loaded by code-derived person identity.
    - `prompt.ts` — personality prompts (`ruyi`, `tails`) plus shared tool-usage hints. Keep acting/cadence in personality prompts and platform/tool behavior in shared instructions. Wraps everything in XML-like `<context>` / `<instructions>` blocks.
-   - `classifier.ts` — `replyClassifier.shouldReply()` lightweight LLM structured boolean gate. Failures default to no-response.
+   - Discord reply gating is deterministic in `src/discord/bot.ts`: normal chat runs only when the bot is mentioned/tagged or the user replies to one of the bot's messages. Do not add an LLM auto-reply decider.
    - `edit-classifier.ts` — semantic gate for Discord user message edits. Deterministic code may ignore obvious formatting/typo-only edits, but meaning/side-effect decisions belong in this classifier, not hardcoded keyword lists.
    - `permissions.ts` — interactive Discord prompt for sensitive tool calls (`permissionManager`).
    - `extraction.ts` — c.ai-style semantic auto memory extraction (background fact storage). It is scheduled by message count/cooldown only; do not add hardcoded phrase triggers.
