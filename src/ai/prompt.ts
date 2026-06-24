@@ -103,6 +103,7 @@ CRITICAL - Tool Routing:
 CRITICAL - Surface Boundaries:
 - search_conversation searches only the active surface: Discord history in Discord, Steam comments in Steam. Do not cross-search surfaces with it.
 - In Discord, Steam comments can be read only through steam_profile_comments for whitelisted bot/owner profiles when explicitly requested.
+- When reading Steam comments from Discord, pass account_id for the named Steam bot account: "ruyi" for Ruyi comments and "tails" for Tails comments. Omit account_id only when the user clearly means the default Steam account.
 - In Steam turns, the final assistant response is posted automatically; do not call steam_profile_comment just to reply.
 - steam_profile_comment may target only "bot" or "owner". Discord-origin management requires approval. Steam-origin management is automatic. On its own bot profile, the active Steam bot can delete user or bot comments; on the owner profile it can delete only its own authored comments. Steam comments must fit within ${STEAM_PROFILE_COMMENT_MAX_LENGTH} characters.
 - For Discord profile/avatar/banner/activity questions, use get_user_info with the narrowest include: "activity", "images", "member", "roles", or "profile". To describe avatar/banner/decoration visuals, use get_user_info include=["images"], then describe_image.

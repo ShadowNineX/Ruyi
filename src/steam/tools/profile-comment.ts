@@ -32,7 +32,10 @@ function getActiveSteamAccountId(): string | null {
 function resolveRequestedSteamAccountId(
   requestedAccountId: string | null,
 ): string | null {
-  return getActiveSteamAccountId() ?? requestedAccountId;
+  const activeAccountId = getActiveSteamAccountId();
+  if (activeAccountId) { return activeAccountId; }
+
+  return requestedAccountId || (getSteamAccountById(null)?.id ?? null);
 }
 
 function resolveDeleteCommentId(
@@ -301,7 +304,7 @@ export const steamProfileCommentsTool = tool({
       .nullable()
       .default(null)
       .describe(
-        'Optional configured Steam account id, such as ruyi or tails. Used from Discord only; Steam comment turns use their active account automatically.',
+        'Optional configured Steam account id, such as ruyi or tails. Use this to choose which bot profile comments to read; omitting it reads the default account.',
       ),
     query: z
       .string()

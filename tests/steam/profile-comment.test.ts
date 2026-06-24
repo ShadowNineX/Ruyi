@@ -31,6 +31,11 @@ if (!TEST_STEAM_OWNER_STEAM_ID64) {
 }
 
 let mockProfileComments: SteamProfileComment[] = [];
+let mockProfileCommentReads: Array<{
+  accountId?: string | null;
+  limit: number;
+  profileId: string;
+}> = [];
 let mockDeletedProfileComments: Array<{
   commentId: string;
   profileId: string;
@@ -214,8 +219,14 @@ mock.module('../../src/steam/client', () => ({
         visibilityState: 3,
       };
     },
-    getProfileComments: async (_profileId: string, limit: number) =>
-      mockProfileComments.slice(0, limit),
+    getProfileComments: async (
+      profileId: string,
+      limit: number,
+      accountId?: string | null,
+    ) => {
+      mockProfileCommentReads.push({ accountId, limit, profileId });
+      return mockProfileComments.slice(0, limit);
+    },
     deleteProfileComment: async (profileId: string, commentId: string) => {
       mockDeletedProfileComments.push({ profileId, commentId });
     },
@@ -626,6 +637,63 @@ describe('steam_profile tool', () => {
 });
 
 describe('Steam comment fuzzy search', () => {
+  test('reads recent bot comments from the default Steam account explicitly', async () => {
+    mockProfileCommentReads = [];
+    mockProfileComments = [
+      buildSteamComment('ruyi-recent-comment', '76561198000000099'),
+    ];
+
+    const result = (await steamProfileCommentsTool.invoke(
+      null,
+      JSON.stringify({
+        target: 'bot',
+        limit: 5,
+      }),
+    )) as {
+      account_id?: string | null;
+      profileId?: string;
+      success?: boolean;
+    };
+
+    expect(result.success).toBe(true);
+    expect(result.account_id).toBe('ruyi');
+    expect(result.profileId).toBe(TEST_STEAM_BOT_STEAM_ID64);
+    expect(mockProfileCommentReads.at(-1)).toEqual({
+      accountId: 'ruyi',
+      limit: 5,
+      profileId: TEST_STEAM_BOT_STEAM_ID64,
+    });
+  });
+
+  test('reads recent bot comments from the requested Steam account', async () => {
+    mockProfileCommentReads = [];
+    mockProfileComments = [
+      buildSteamComment('tails-recent-comment', '76561198000000099'),
+    ];
+
+    const result = (await steamProfileCommentsTool.invoke(
+      null,
+      JSON.stringify({
+        target: 'bot',
+        account_id: 'tails',
+        limit: 5,
+      }),
+    )) as {
+      account_id?: string | null;
+      profileId?: string;
+      success?: boolean;
+    };
+
+    expect(result.success).toBe(true);
+    expect(result.account_id).toBe('tails');
+    expect(result.profileId).toBe(TEST_TAILS_BOT_STEAM_ID64);
+    expect(mockProfileCommentReads.at(-1)).toEqual({
+      accountId: 'tails',
+      limit: 5,
+      profileId: TEST_TAILS_BOT_STEAM_ID64,
+    });
+  });
+
   test('finds exact and fuzzy comment matches with context', async () => {
     mockProfileComments = [
       {
