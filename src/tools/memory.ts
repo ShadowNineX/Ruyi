@@ -892,6 +892,7 @@ async function searchSteamConversation(
   maxLimit: number,
 ) {
   const profileId = toolContextManager.get().steam?.profileId;
+  const accountId = toolContextManager.get().steam?.accountId;
   if (!profileId) {
     return {
       error: 'Steam conversation search needs active Steam profile context',
@@ -903,6 +904,7 @@ async function searchSteamConversation(
     query,
     author,
     maxLimit,
+    accountId,
   );
   const messages = search.matches.map(buildSteamConversationMatch);
 

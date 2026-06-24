@@ -95,6 +95,23 @@ interface TurnToolUsage {
   externalToolCallCount: number;
 }
 
+interface ChatAbortState {
+  abortController: AbortController;
+  cleanup: () => void;
+}
+
+interface PersistIncomingUserMessageOptions {
+  cacheIdentity: RuyiUserIdentity;
+  conversationId: string;
+  messageId: string;
+  messageTimestamp?: Date;
+  persistUserMessage: boolean;
+  surface: ConversationSurface;
+  steamAccountId: string | null;
+  userMessage: string;
+  username: string;
+}
+
 function getLifecycleToolArgs(toolCall: unknown): Record<string, unknown> {
   const parsed = ToolCallSchema.safeParse(toolCall);
   return parseToolArguments(parsed.success ? parsed.data.arguments : undefined);
@@ -189,6 +206,30 @@ function createTurnToolUsage(): TurnToolUsage {
   };
 }
 
+function createChatAbortState(signal: AbortSignal | undefined): ChatAbortState {
+  const abortController = new AbortController();
+  const abortFromParent = (): void => {
+    const reason: unknown = signal?.reason;
+    if (reason instanceof Error) {
+      abortController.abort(reason);
+      return;
+    }
+
+    abortController.abort();
+  };
+
+  if (signal?.aborted) {
+    abortFromParent();
+  } else {
+    signal?.addEventListener('abort', abortFromParent, { once: true });
+  }
+
+  return {
+    abortController,
+    cleanup: () => signal?.removeEventListener('abort', abortFromParent),
+  };
+}
+
 class ChatService {
   async chat(options: ChatOptions): Promise<string | null> {
     const {
@@ -214,36 +255,20 @@ class ChatService {
     const conversationId = channelId;
     const cacheIdentity = identity ?? buildDiscordUserIdentity(userId, username);
 
-    if (
-      surface === 'discord'
-      && channel?.isSendable()
-      && session.getPermissionPromptController
-    ) {
-      permissionManager.setContext(channelId, {
-        channel,
-        promptController: session.getPermissionPromptController(),
-        turnId: messageId,
-        userId,
-      });
-    }
+    this.bindPermissionContext({
+      channel,
+      channelId,
+      messageId,
+      session,
+      surface,
+      userId,
+    });
 
-    const abortController = new AbortController();
-    const abortFromParent = (): void => {
-      const reason: unknown = signal?.reason;
-      if (reason instanceof Error) {
-        abortController.abort(reason);
-      } else {
-        abortController.abort();
-      }
-    };
-
-    if (signal?.aborted) {
-      abortFromParent();
-    } else {
-      signal?.addEventListener('abort', abortFromParent, { once: true });
-    }
-
-    const timeout = setTimeout(() => abortController.abort(), CHAT_TIMEOUT_MS);
+    const abortState = createChatAbortState(signal);
+    const timeout = setTimeout(
+      () => abortState.abortController.abort(),
+      CHAT_TIMEOUT_MS,
+    );
     session.onThinking();
 
     try {
@@ -255,7 +280,13 @@ class ChatService {
         conversationId,
         chatHistory,
         configScope,
-        { surface, identity: cacheIdentity, surfaceLabel },
+        {
+          surface,
+          identity: cacheIdentity,
+          surfaceLabel,
+          steamAccountId: surface === 'steam' ? sessionLabel : null,
+          personality,
+        },
       );
       throwIfAborted(signal);
 
@@ -265,16 +296,7 @@ class ChatService {
       const enrichedMessage = `${dynamicContext}${profileBlock}\n\nUser message from ${username}:\n${userMessage}${imageInputSummary}`;
       const runnerInput = buildRunnerInput(enrichedMessage, imageInputs);
 
-      if (env.DEBUG_PROMPTS) {
-        aiLogger.debug(
-          { systemPrompt: buildSystemPrompt(personality), personality },
-          'system prompt (debug dump)',
-        );
-        aiLogger.debug(
-          { enrichedMessage },
-          'enriched user message (debug dump)',
-        );
-      }
+      this.debugPromptIfEnabled(enrichedMessage, personality);
 
       const promptVersion = getSystemPromptVersion(personality);
 
@@ -294,56 +316,17 @@ class ChatService {
         'Chat input received',
       );
 
-      if (persistUserMessage) {
-        if (surface === 'discord') {
-          await conversationContext.rememberMessage(
-            conversationId,
-            username,
-            userMessage,
-            false,
-            messageId,
-          );
-        } else {
-          await conversationContext.rememberSteamMessage({
-            profileId: conversationId,
-            authorSteamId: cacheIdentity.surfaceUserId,
-            authorName: username,
-            content: userMessage,
-            isBot: false,
-            commentId: messageId,
-            timestamp: options.messageTimestamp,
-          });
-        }
-
-        const { shouldExtract } = conversationContext.trackUserMessage(
-          conversationId,
-          cacheIdentity,
-          surface,
-        );
-        if (shouldExtract) {
-          void autoExtractFacts(username, cacheIdentity, conversationId, surface)
-            .then((completed) => {
-              if (completed) {
-                conversationContext.markExtracted(
-                  conversationId,
-                  cacheIdentity,
-                  surface,
-                );
-              }
-            })
-            .catch((error: unknown) =>
-              aiLogger.warn(
-                {
-                  error: (error as Error).message,
-                  username,
-                  surface,
-                  conversationId,
-                },
-                'Background fact extraction crashed',
-              ),
-            );
-        }
-      }
+      await this.persistIncomingUserMessage({
+        cacheIdentity,
+        conversationId,
+        messageId,
+        messageTimestamp: options.messageTimestamp,
+        persistUserMessage,
+        steamAccountId: surface === 'steam' ? sessionLabel : null,
+        surface,
+        userMessage,
+        username,
+      });
 
       const model = agentsRuntimeManager.getModel(configScope);
       const modelSettings = agentsRuntimeManager.getModelSettings(configScope);
@@ -373,7 +356,7 @@ class ChatService {
         stream: true,
         session: agentSession,
         maxTurns: AGENT_MAX_TURNS,
-        signal: abortController.signal,
+        signal: abortState.abortController.signal,
         toolExecution: { maxFunctionToolConcurrency: 1 },
       } as const;
 
@@ -454,14 +437,177 @@ class ChatService {
         'Chat request failed',
       );
 
-      await sessionManager.invalidate(conversationId, surface);
+      await sessionManager.invalidate(conversationId, surface, sessionLabel);
       session.onError();
       throw error;
     } finally {
       clearTimeout(timeout);
-      signal?.removeEventListener('abort', abortFromParent);
+      abortState.cleanup();
       permissionManager.clearContext(channelId);
     }
+  }
+
+  private bindPermissionContext({
+    channel,
+    channelId,
+    messageId,
+    session,
+    surface,
+    userId,
+  }: {
+    channel: TextBasedChannel | null;
+    channelId: string;
+    messageId: string;
+    session: ChatRuntimeSession;
+    surface: ConversationSurface;
+    userId: string;
+  }): void {
+    if (
+      surface !== 'discord'
+      || !channel?.isSendable()
+      || !session.getPermissionPromptController
+    ) {
+      return;
+    }
+
+    permissionManager.setContext(channelId, {
+      channel,
+      promptController: session.getPermissionPromptController(),
+      turnId: messageId,
+      userId,
+    });
+  }
+
+  private debugPromptIfEnabled(
+    enrichedMessage: string,
+    personality: AssistantPersonality,
+  ): void {
+    if (!env.DEBUG_PROMPTS) { return; }
+
+    aiLogger.debug(
+      { systemPrompt: buildSystemPrompt(personality), personality },
+      'system prompt (debug dump)',
+    );
+    aiLogger.debug(
+      { enrichedMessage },
+      'enriched user message (debug dump)',
+    );
+  }
+
+  private async persistIncomingUserMessage({
+    cacheIdentity,
+    conversationId,
+    messageId,
+    messageTimestamp,
+    persistUserMessage,
+    surface,
+    steamAccountId,
+    userMessage,
+    username,
+  }: PersistIncomingUserMessageOptions): Promise<void> {
+    if (!persistUserMessage) { return; }
+
+    await this.rememberIncomingUserMessage({
+      cacheIdentity,
+      conversationId,
+      messageId,
+      messageTimestamp,
+      surface,
+      steamAccountId,
+      userMessage,
+      username,
+    });
+
+    const { shouldExtract } = conversationContext.trackUserMessage(
+      conversationId,
+      cacheIdentity,
+      surface,
+      steamAccountId,
+    );
+    if (shouldExtract) {
+      this.scheduleFactExtraction(
+        username,
+        cacheIdentity,
+        conversationId,
+        surface,
+        steamAccountId,
+      );
+    }
+  }
+
+  private async rememberIncomingUserMessage({
+    cacheIdentity,
+    conversationId,
+    messageId,
+    messageTimestamp,
+    surface,
+    steamAccountId,
+    userMessage,
+    username,
+  }: Omit<PersistIncomingUserMessageOptions, 'persistUserMessage'>): Promise<void> {
+    if (surface === 'discord') {
+      await conversationContext.rememberMessage(
+        conversationId,
+        username,
+        userMessage,
+        false,
+        messageId,
+      );
+      return;
+    }
+
+    await conversationContext.rememberSteamMessage({
+      accountId: this.requireSteamAccountId(steamAccountId),
+      profileId: conversationId,
+      authorSteamId: cacheIdentity.surfaceUserId,
+      authorName: username,
+      content: userMessage,
+      isBot: false,
+      commentId: messageId,
+      timestamp: messageTimestamp,
+    });
+  }
+
+  private requireSteamAccountId(steamAccountId: string | null): string {
+    if (steamAccountId) { return steamAccountId; }
+    throw new Error('Steam chat persistence requires an explicit account id');
+  }
+
+  private scheduleFactExtraction(
+    username: string,
+    cacheIdentity: RuyiUserIdentity,
+    conversationId: string,
+    surface: ConversationSurface,
+    steamAccountId: string | null,
+  ): void {
+    void autoExtractFacts(
+      username,
+      cacheIdentity,
+      conversationId,
+      surface,
+      steamAccountId,
+    )
+      .then((completed) => {
+        if (completed) {
+          conversationContext.markExtracted(
+            conversationId,
+            cacheIdentity,
+            surface,
+            steamAccountId,
+          );
+        }
+      })
+      .catch((error: unknown) =>
+        aiLogger.warn(
+          {
+            error: (error as Error).message,
+            username,
+            surface,
+            conversationId,
+          },
+          'Background fact extraction crashed',
+        ),
+      );
   }
 
   private createAgent(

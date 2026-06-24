@@ -12,6 +12,7 @@ export interface ISteamConversationMessage {
 }
 
 export interface ISteamConversation extends Document {
+  accountId: string;
   profileId: string;
   messages: ISteamConversationMessage[];
   lastInteraction: Date;
@@ -31,10 +32,16 @@ const SteamMessageSchema = new Schema<ISteamConversationMessage>(
 );
 
 const SteamConversationSchema = new Schema<ISteamConversation>({
-  profileId: { type: String, required: true, unique: true },
+  accountId: { type: String, required: true, index: true },
+  profileId: { type: String, required: true, index: true },
   messages: { type: [SteamMessageSchema], default: [] },
   lastInteraction: { type: Date, default: Date.now },
 });
+
+SteamConversationSchema.index(
+  { accountId: 1, profileId: 1 },
+  { unique: true },
+);
 
 export const SteamConversation: Model<ISteamConversation>
   = (mongoose.models.SteamConversation as Model<ISteamConversation> | undefined)

@@ -2,6 +2,7 @@ import type { Model } from 'mongoose';
 import mongoose, { Schema } from 'mongoose';
 
 export interface ISteamAgentSession {
+  accountId: string;
   profileId: string;
   sessionId: string;
   provider: 'openai-agents';
@@ -17,7 +18,8 @@ export interface ISteamAgentSession {
 }
 
 const SteamAgentSessionSchema = new Schema<ISteamAgentSession>({
-  profileId: { type: String, required: true, unique: true, index: true },
+  accountId: { type: String, required: true, index: true },
+  profileId: { type: String, required: true, index: true },
   sessionId: { type: String, required: true },
   provider: { type: String, enum: ['openai-agents'], default: 'openai-agents' },
   model: { type: String, required: true },
@@ -30,6 +32,11 @@ const SteamAgentSessionSchema = new Schema<ISteamAgentSession>({
   isActive: { type: Boolean, default: true },
   promptVersion: { type: String },
 });
+
+SteamAgentSessionSchema.index(
+  { accountId: 1, profileId: 1 },
+  { unique: true },
+);
 
 export const SteamAgentSession: Model<ISteamAgentSession>
   = (mongoose.models.SteamAgentSession as Model<ISteamAgentSession> | undefined)

@@ -45,9 +45,16 @@ interface SmitheryConnectionMigrationDocument {
 
 interface SteamAgentSessionMigrationDocument {
   _id: MongoObjectId;
+  accountId?: string;
   createdAt?: Date;
   profileId?: string;
   sessionId?: string;
+}
+
+interface SteamAccountScopedMigrationDocument {
+  _id: MongoObjectId;
+  accountId?: string;
+  profileId?: string;
 }
 
 interface IndexDroppableCollection {
@@ -134,10 +141,10 @@ async function dropIndexIfExists(
 ): Promise<void> {
   try {
     await collection.dropIndex(indexName);
-    dbLogger.info({ indexName }, 'Dropped obsolete memory index');
+    dbLogger.info({ indexName }, 'Dropped obsolete index');
   } catch (error) {
     if (isIndexMissingError(error)) {
-      dbLogger.debug({ indexName }, 'Obsolete memory index was already absent');
+      dbLogger.debug({ indexName }, 'Obsolete index was already absent');
       return;
     }
     throw error;
@@ -408,6 +415,74 @@ async function migrateSteamAgentSessionLabels(): Promise<void> {
   }
 }
 
+async function createSteamAccountScopedIndex(
+  collectionName: string,
+): Promise<void> {
+  const collection = getDb().collection(collectionName);
+  await dropIndexIfExists(collection, 'profileId_1');
+  await collection.createIndex({ accountId: 1, profileId: 1 }, { unique: true });
+  await collection.createIndex({ accountId: 1 });
+  await collection.createIndex({ profileId: 1 });
+}
+
+async function backfillSteamCollectionAccountIds(
+  collectionName: string,
+): Promise<number> {
+  if (!(await collectionExists(collectionName))) { return 0; }
+  const collection = getDb().collection<SteamAccountScopedMigrationDocument>(
+    collectionName,
+  );
+
+  let modified = 0;
+  for (const account of env.STEAM_ACCOUNTS) {
+    const result = await collection.updateMany(
+      { profileId: account.botSteamId64 },
+      { $set: { accountId: account.id } },
+    );
+    modified += result.modifiedCount;
+  }
+
+  const removed = await collection.deleteMany({
+    $or: [
+      { accountId: { $exists: false } },
+      { accountId: { $type: 'null' } },
+    ],
+  });
+
+  if (removed.deletedCount > 0) {
+    dbLogger.info(
+      { collection: collectionName, removed: removed.deletedCount },
+      'Removed Steam documents without configured account ownership',
+    );
+  }
+
+  await createSteamAccountScopedIndex(collectionName);
+  return modified;
+}
+
+async function migrateSteamAccountScopedState(): Promise<void> {
+  if (env.STEAM_ACCOUNTS.length === 0) { return; }
+
+  const modifiedCounts = await Promise.all(
+    [
+      'steam_conversations',
+      'steam_agent_sessions',
+      'steam_comment_states',
+    ].map(backfillSteamCollectionAccountIds),
+  );
+  const modified = modifiedCounts.reduce(
+    (total, count) => total + count,
+    0,
+  );
+
+  if (modified > 0) {
+    dbLogger.info(
+      { modified },
+      'Backfilled Steam account IDs for account-scoped chat state',
+    );
+  }
+}
+
 const migrations: DatabaseMigration[] = [
   {
     id: '2026-06-16-platform-history-split',
@@ -438,6 +513,10 @@ const migrations: DatabaseMigration[] = [
   {
     id: '2026-06-24-steam-agent-session-account-labels',
     run: migrateSteamAgentSessionLabels,
+  },
+  {
+    id: '2026-06-24-steam-account-scoped-chat-state',
+    run: migrateSteamAccountScopedState,
   },
 ];
 

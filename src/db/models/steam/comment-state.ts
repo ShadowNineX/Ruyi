@@ -2,6 +2,7 @@ import type { Document, Model } from 'mongoose';
 import mongoose, { Schema } from 'mongoose';
 
 export interface ISteamCommentState extends Document {
+  accountId: string;
   profileId: string;
   seenCommentIds: string[];
   lastCheckedAt: Date;
@@ -10,11 +11,17 @@ export interface ISteamCommentState extends Document {
 
 const SteamCommentStateSchema = new Schema<ISteamCommentState>(
   {
-    profileId: { type: String, required: true, unique: true, index: true },
+    accountId: { type: String, required: true, index: true },
+    profileId: { type: String, required: true, index: true },
     seenCommentIds: { type: [String], default: [] },
     lastCheckedAt: { type: Date, required: true, default: Date.now },
   },
   { timestamps: true },
+);
+
+SteamCommentStateSchema.index(
+  { accountId: 1, profileId: 1 },
+  { unique: true },
 );
 
 export const SteamCommentState: Model<ISteamCommentState>

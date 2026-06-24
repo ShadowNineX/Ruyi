@@ -54,10 +54,11 @@ interface SessionUpdateOptions {
 function getSessionFilter(
   surface: ConversationSurface,
   conversationId: string,
-): { channelId: string } | { profileId: string } {
+  accountId = DEFAULT_SESSION_LABEL,
+): { channelId: string } | { accountId: string; profileId: string } {
   return surface === 'discord'
     ? { channelId: conversationId }
-    : { profileId: conversationId };
+    : { accountId, profileId: conversationId };
 }
 
 async function updateSessionDocument(
@@ -65,6 +66,7 @@ async function updateSessionDocument(
   conversationId: string,
   update: SessionUpdate,
   options?: SessionUpdateOptions,
+  accountId?: string | null,
 ): Promise<void> {
   if (surface === 'discord') {
     await DiscordAgentSession.updateOne(
@@ -76,7 +78,7 @@ async function updateSessionDocument(
   }
 
   await SteamAgentSession.updateOne(
-    getSessionFilter(surface, conversationId),
+    getSessionFilter(surface, conversationId, accountId ?? undefined),
     update,
     options,
   );
@@ -85,6 +87,7 @@ async function updateSessionDocument(
 async function findActiveSessionDocument(
   surface: ConversationSurface,
   conversationId: string,
+  accountId?: string | null,
 ): Promise<PersistedAgentSession | null> {
   if (surface === 'discord') {
     return DiscordAgentSession.findOne({
@@ -95,6 +98,7 @@ async function findActiveSessionDocument(
   }
 
   return SteamAgentSession.findOne({
+    accountId: accountId ?? DEFAULT_SESSION_LABEL,
     profileId: conversationId,
     isActive: true,
     provider: 'openai-agents',
@@ -105,6 +109,7 @@ async function upsertSessionDocument(
   surface: ConversationSurface,
   conversationId: string,
   update: SessionUpdate,
+  accountId?: string | null,
 ): Promise<void> {
   if (surface === 'discord') {
     await DiscordAgentSession.findOneAndUpdate(
@@ -116,7 +121,7 @@ async function upsertSessionDocument(
   }
 
   await SteamAgentSession.findOneAndUpdate(
-    { profileId: conversationId },
+    { accountId: accountId ?? DEFAULT_SESSION_LABEL, profileId: conversationId },
     update,
     { upsert: true },
   );
@@ -368,6 +373,17 @@ interface SeedSessionData {
   messageIds: string[];
 }
 
+interface PersistedCompactionInput {
+  accountId: string | null;
+  conversationId: string;
+  existingSummary: string | null;
+  items: AgentInputItem[];
+  model: string;
+  modelSettings: ModelSettings;
+  promptVersion: string;
+  surface: ConversationSurface;
+}
+
 async function compactItemsIntoSummary(
   items: AgentInputItem[],
   existingSummary: string | null,
@@ -399,6 +415,7 @@ class MongoAgentSession implements Session {
   constructor(
     private readonly surface: ConversationSurface,
     private readonly conversationId: string,
+    private readonly accountId: string | null,
     private readonly sessionId: string,
     private readonly model: string,
     private readonly modelSettings: ModelSettings,
@@ -511,6 +528,9 @@ class MongoAgentSession implements Session {
           provider: 'openai-agents',
           model: this.model,
           items: this.items,
+          ...(this.surface === 'steam' && this.accountId
+            ? { accountId: this.accountId }
+            : {}),
           lastUsed: new Date(),
           isActive: true,
           promptVersion: this.promptVersion,
@@ -518,22 +538,29 @@ class MongoAgentSession implements Session {
         $setOnInsert: { createdAt: new Date() },
       },
       { upsert: true },
+      this.accountId,
     );
   }
 
   private async persistCompaction(): Promise<void> {
     if (this.invalidated) { return; }
 
-    await updateSessionDocument(this.surface, this.conversationId, {
-      $set: {
-        summary: this.summary ?? '',
-        summaryUpdatedAt: new Date(),
-        items: this.items,
-        lastUsed: new Date(),
-        model: this.model,
-        promptVersion: this.promptVersion,
+    await updateSessionDocument(
+      this.surface,
+      this.conversationId,
+      {
+        $set: {
+          summary: this.summary ?? '',
+          summaryUpdatedAt: new Date(),
+          items: this.items,
+          lastUsed: new Date(),
+          model: this.model,
+          promptVersion: this.promptVersion,
+        },
       },
-    });
+      undefined,
+      this.accountId,
+    );
   }
 
   private async trimAfterFailedCompaction(): Promise<void> {
@@ -560,15 +587,19 @@ function toAgentItems(doc: PersistedAgentSession): AgentInputItem[] {
   return doc.items as AgentInputItem[];
 }
 
-async function compactPersistedItemsIfNeeded(
-  surface: ConversationSurface,
-  conversationId: string,
-  items: AgentInputItem[],
-  existingSummary: string | null,
-  model: string,
-  modelSettings: ModelSettings,
-  promptVersion: string,
-): Promise<{ items: AgentInputItem[]; summary: string | null }> {
+async function compactPersistedItemsIfNeeded({
+  accountId,
+  conversationId,
+  existingSummary,
+  items,
+  model,
+  modelSettings,
+  promptVersion,
+  surface,
+}: PersistedCompactionInput): Promise<{
+  items: AgentInputItem[];
+  summary: string | null;
+}> {
   if (items.length <= AGENT_SESSION_COMPACTION_TRIGGER_ITEMS) {
     return { items, summary: existingSummary };
   }
@@ -582,16 +613,22 @@ async function compactPersistedItemsIfNeeded(
     );
     if (!result) { return { items, summary: existingSummary }; }
 
-    await updateSessionDocument(surface, conversationId, {
-      $set: {
-        items: result.items,
-        summary: result.summary,
-        summaryUpdatedAt: new Date(),
-        lastUsed: new Date(),
-        model,
-        promptVersion,
+    await updateSessionDocument(
+      surface,
+      conversationId,
+      {
+        $set: {
+          items: result.items,
+          summary: result.summary,
+          summaryUpdatedAt: new Date(),
+          lastUsed: new Date(),
+          model,
+          promptVersion,
+        },
       },
-    });
+      undefined,
+      accountId,
+    );
 
     aiLogger.info(
       {
@@ -654,10 +691,12 @@ function upsertAssistantReplyLink(
 async function buildSeedSessionData(
   surface: ConversationSurface,
   conversationId: string,
+  accountId: string | null,
   currentMessageId?: string,
 ): Promise<SeedSessionData> {
   if (surface === 'steam') {
     const conversation = await SteamConversation.findOne({
+      accountId: accountId ?? DEFAULT_SESSION_LABEL,
       profileId: conversationId,
     });
     if (!conversation || conversation.messages.length === 0) {
@@ -722,8 +761,11 @@ class SessionManager {
   private cacheKey(
     surface: ConversationSurface,
     conversationId: string,
+    accountId?: string | null,
   ): string {
-    return `${surface}:${conversationId}`;
+    return surface === 'steam'
+      ? `${surface}:${accountId ?? DEFAULT_SESSION_LABEL}:${conversationId}`
+      : `${surface}:${conversationId}`;
   }
 
   async getOrCreate(
@@ -736,7 +778,8 @@ class SessionManager {
     sessionLabel = DEFAULT_SESSION_LABEL,
   ): Promise<MongoAgentSession> {
     const normalizedSessionLabel = normalizeSessionLabel(sessionLabel);
-    const cacheKey = this.cacheKey(surface, conversationId);
+    const accountId = surface === 'steam' ? sessionLabel : null;
+    const cacheKey = this.cacheKey(surface, conversationId, accountId);
     const existingSession = getCachedAgentSession<MongoAgentSession>(cacheKey);
     if (existingSession) {
       if (existingSession.matchesConfiguration(model, promptVersion)) {
@@ -749,6 +792,7 @@ class SessionManager {
           conversationId,
           model,
           currentMessageId,
+          accountId,
         );
         return existingSession;
       }
@@ -757,7 +801,7 @@ class SessionManager {
       deleteCachedAgentSession(cacheKey);
       await updateSessionDocument(surface, conversationId, {
         $set: { isActive: false },
-      });
+      }, undefined, accountId);
       aiLogger.info(
         {
           surface,
@@ -773,6 +817,7 @@ class SessionManager {
     const persistedSession = await findActiveSessionDocument(
       surface,
       conversationId,
+      accountId,
     );
 
     if (persistedSession) {
@@ -781,18 +826,20 @@ class SessionManager {
       const modelMatches = persistedSession.model === model;
 
       if (promptVersionMatches && modelMatches) {
-        const compactedSession = await compactPersistedItemsIfNeeded(
-          surface,
+        const compactedSession = await compactPersistedItemsIfNeeded({
+          accountId,
           conversationId,
-          toAgentItems(persistedSession),
-          persistedSession.summary ?? null,
+          existingSummary: persistedSession.summary ?? null,
+          items: toAgentItems(persistedSession),
           model,
           modelSettings,
           promptVersion,
-        );
+          surface,
+        });
         const session = new MongoAgentSession(
           surface,
           conversationId,
+          accountId,
           persistedSession.sessionId,
           model,
           modelSettings,
@@ -806,6 +853,7 @@ class SessionManager {
           conversationId,
           model,
           currentMessageId,
+          accountId,
         );
 
         aiLogger.debug(
@@ -835,7 +883,7 @@ class SessionManager {
       );
       await updateSessionDocument(surface, conversationId, {
         $set: { isActive: false },
-      });
+      }, undefined, accountId);
     }
 
     const sessionId = buildAgentSessionId({
@@ -846,6 +894,7 @@ class SessionManager {
     const seedData = await buildSeedSessionData(
       surface,
       conversationId,
+      accountId,
       currentMessageId,
     );
     const userMessageIds = normalizeMessageIds([
@@ -855,6 +904,7 @@ class SessionManager {
     const session = new MongoAgentSession(
       surface,
       conversationId,
+      accountId,
       sessionId,
       model,
       modelSettings,
@@ -866,7 +916,7 @@ class SessionManager {
     const setFields
       = surface === 'discord'
         ? { userMessageIds }
-        : { processedCommentIds: userMessageIds };
+        : { accountId: accountId ?? DEFAULT_SESSION_LABEL, processedCommentIds: userMessageIds };
 
     await upsertSessionDocument(surface, conversationId, {
       $set: {
@@ -880,7 +930,7 @@ class SessionManager {
         promptVersion,
       },
       $setOnInsert: { createdAt: new Date() },
-    });
+    }, accountId);
 
     setCachedAgentSession(cacheKey, session);
 
@@ -903,6 +953,7 @@ class SessionManager {
     conversationId: string,
     model: string,
     currentMessageId?: string,
+    accountId?: string | null,
   ): Promise<void> {
     const idArrayField
       = surface === 'discord' ? 'userMessageIds' : 'processedCommentIds';
@@ -927,20 +978,22 @@ class SessionManager {
             },
           };
 
-    await updateSessionDocument(surface, conversationId, update);
+    await updateSessionDocument(surface, conversationId, update, undefined, accountId);
   }
 
   async invalidate(
     conversationId: string,
     surface: ConversationSurface = 'discord',
+    sessionLabel = DEFAULT_SESSION_LABEL,
   ): Promise<void> {
-    const cacheKey = this.cacheKey(surface, conversationId);
+    const accountId = surface === 'steam' ? sessionLabel : null;
+    const cacheKey = this.cacheKey(surface, conversationId, accountId);
     getCachedAgentSession(cacheKey)?.markInvalidated();
     deleteCachedAgentSession(cacheKey);
 
     await updateSessionDocument(surface, conversationId, {
       $set: { isActive: false },
-    });
+    }, undefined, accountId);
 
     aiLogger.debug({ surface, conversationId }, 'Agent session invalidated');
   }

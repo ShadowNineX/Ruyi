@@ -267,13 +267,18 @@ class SteamProfileCommentService {
     const { comments, totalCount } = page;
     const commentIds = comments.map(comment => comment.id);
     const deletedIds = await this.syncDeletedProfileComments(
+      account.id,
       profileId,
       toSteamCommentWindow(comments, totalCount),
     );
 
-    const state = await SteamCommentState.findOne({ profileId });
+    const state = await SteamCommentState.findOne({
+      accountId: account.id,
+      profileId,
+    });
     if (!state) {
       await SteamCommentState.create({
+        accountId: account.id,
         profileId,
         seenCommentIds: [],
         lastCheckedAt: new Date(),
@@ -308,7 +313,7 @@ class SteamProfileCommentService {
       ...processedIds,
     ]);
     await SteamCommentState.updateOne(
-      { profileId },
+      { accountId: account.id, profileId },
       {
         $set: {
           seenCommentIds,
@@ -332,11 +337,12 @@ class SteamProfileCommentService {
   }
 
   private async syncDeletedProfileComments(
+    accountId: string,
     profileId: string,
     visibleWindow: SteamCommentWindow,
   ): Promise<string[]> {
     const conversation = await SteamConversation.findOne(
-      { profileId },
+      { accountId, profileId },
       { messages: 1 },
     );
     if (!conversation || conversation.messages.length === 0) { return []; }
@@ -351,6 +357,7 @@ class SteamProfileCommentService {
     if (deletedIds.length === 0) { return []; }
 
     const activeSessionMatchesDeletedComment = await SteamAgentSession.exists({
+      accountId,
       profileId,
       isActive: true,
       provider: 'openai-agents',
@@ -359,28 +366,29 @@ class SteamProfileCommentService {
 
     await Promise.all([
       SteamConversation.updateOne(
-        { profileId },
+        { accountId, profileId },
         {
           $pull: { messages: { commentId: { $in: deletedIds } } },
           $set: { lastInteraction: new Date() },
         },
       ),
       SteamCommentState.updateOne(
-        { profileId },
+        { accountId, profileId },
         { $pull: { seenCommentIds: { $in: deletedIds } } },
       ),
       SteamAgentSession.updateOne(
-        { profileId },
+        { accountId, profileId },
         { $pull: { processedCommentIds: { $in: deletedIds } } },
       ),
     ]);
 
     if (activeSessionMatchesDeletedComment) {
-      await sessionManager.invalidate(profileId, 'steam');
+      await sessionManager.invalidate(profileId, 'steam', accountId);
     }
 
     botLogger.info(
       {
+        accountId,
         profileId,
         deletedCommentIds: deletedIds,
         invalidatedSession: Boolean(activeSessionMatchesDeletedComment),
@@ -466,6 +474,7 @@ class SteamProfileCommentService {
       account.id,
     );
     await conversationContext.rememberSteamMessage({
+      accountId: account.id,
       profileId,
       authorSteamId: profileId,
       authorName: getSteamAccountDisplayName(account),

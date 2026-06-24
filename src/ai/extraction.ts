@@ -261,6 +261,7 @@ export async function autoExtractFacts(
   identity: RuyiUserIdentity,
   conversationId: string,
   surface: ConversationSurface = 'discord',
+  steamAccountId?: string | null,
 ): Promise<boolean> {
   if (!identity.canWriteMemory) {
     aiLogger.debug(
@@ -274,6 +275,7 @@ export async function autoExtractFacts(
     conversationId,
     AUTO_EXTRACT_HISTORY_WINDOW,
     surface,
+    steamAccountId,
   );
   if (!history || history.length < 80) {
     aiLogger.debug(
