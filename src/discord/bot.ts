@@ -1,4 +1,11 @@
-import type { Interaction, Message, PartialMessage } from 'discord.js';
+import type {
+  ButtonInteraction,
+  Interaction,
+  Message,
+  ModalSubmitInteraction,
+  PartialMessage,
+  StringSelectMenuInteraction,
+} from 'discord.js';
 import type { SessionStatusSnapshot } from '../stores';
 import type { ToolContext } from '../utils/types';
 import {
@@ -967,6 +974,48 @@ class RuyiBot {
     }
   };
 
+  private async dispatchStringSelect(
+    interaction: StringSelectMenuInteraction,
+  ): Promise<void> {
+    const { customId } = interaction;
+    if (isSearchProviderSelect(customId)) {
+      await handleSearchProviderSelect(interaction);
+      return;
+    }
+    if (isModelSelect(customId)) {
+      await handleModelSelect(interaction);
+      return;
+    }
+    if (customId === 'smithery_select_server') {
+      await handleSmitherySelect(interaction);
+      return;
+    }
+    if (customId === 'smithery_unlink_server') {
+      await handleSmitheryUnlinkSelect(interaction);
+    }
+  }
+
+  private async dispatchButton(
+    interaction: ButtonInteraction,
+  ): Promise<void> {
+    const { customId } = interaction;
+    if (customId.startsWith('smithery_check:')) {
+      await handleSmitheryCheckButton(interaction);
+      return;
+    }
+    if (isMemoriesButton(customId)) {
+      await handleMemoriesButton(interaction);
+    }
+  }
+
+  private async dispatchModalSubmit(
+    interaction: ModalSubmitInteraction,
+  ): Promise<void> {
+    if (isMemoriesModal(interaction.customId)) {
+      await handleMemoriesModal(interaction);
+    }
+  }
+
   // ---- Slash command registration -----------------------------------------
 
   private async registerSlashCommands() {
@@ -987,43 +1036,22 @@ class RuyiBot {
   ): Promise<void> => {
     if (interaction.isAutocomplete()) {
       await handleReminderAutocomplete(interaction);
-    } else if (interaction.isChatInputCommand()) {
+      return;
+    }
+    if (interaction.isChatInputCommand()) {
       await handleSlashCommand(interaction);
-    } else if (
-      interaction.isStringSelectMenu()
-      && isSearchProviderSelect(interaction.customId)
-    ) {
-      await handleSearchProviderSelect(interaction);
-    } else if (
-      interaction.isStringSelectMenu()
-      && isModelSelect(interaction.customId)
-    ) {
-      await handleModelSelect(interaction);
-    } else if (
-      interaction.isStringSelectMenu()
-      && interaction.customId === 'smithery_select_server'
-    ) {
-      await handleSmitherySelect(interaction);
-    } else if (
-      interaction.isStringSelectMenu()
-      && interaction.customId === 'smithery_unlink_server'
-    ) {
-      await handleSmitheryUnlinkSelect(interaction);
-    } else if (
-      interaction.isButton()
-      && interaction.customId.startsWith('smithery_check:')
-    ) {
-      await handleSmitheryCheckButton(interaction);
-    } else if (
-      interaction.isButton()
-      && isMemoriesButton(interaction.customId)
-    ) {
-      await handleMemoriesButton(interaction);
-    } else if (
-      interaction.isModalSubmit()
-      && isMemoriesModal(interaction.customId)
-    ) {
-      await handleMemoriesModal(interaction);
+      return;
+    }
+    if (interaction.isStringSelectMenu()) {
+      await this.dispatchStringSelect(interaction);
+      return;
+    }
+    if (interaction.isButton()) {
+      await this.dispatchButton(interaction);
+      return;
+    }
+    if (interaction.isModalSubmit()) {
+      await this.dispatchModalSubmit(interaction);
     }
   };
 
