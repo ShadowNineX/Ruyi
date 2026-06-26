@@ -34,6 +34,10 @@ import {
   setCachedAgentSession,
 } from '../stores';
 import {
+  findReplaySafeStartIndex,
+  retainReplaySafeItems,
+} from '../utils/agent-session-items';
+import {
   buildAgentSessionId,
   DEFAULT_SESSION_LABEL,
   normalizeSessionLabel,
@@ -232,80 +236,9 @@ function serializeItemsForSummary(items: AgentInputItem[]): string {
     .join('\n');
 }
 
-function itemType(item: AgentInputItem): string | null {
-  const type = asRecord(item)?.type;
-  return typeof type === 'string' ? type : null;
-}
-
-function callIdForItem(item: AgentInputItem): string | null {
-  const record = asRecord(item);
-  const callId = record?.callId ?? record?.call_id;
-  return typeof callId === 'string' && callId.length > 0 ? callId : null;
-}
-
-function isFunctionCall(item: AgentInputItem): boolean {
-  return itemType(item) === 'function_call';
-}
-
-function isFunctionCallResult(item: AgentInputItem): boolean {
-  return itemType(item) === 'function_call_result';
-}
-
-function callIdsForItems(
-  items: AgentInputItem[],
-  predicate: (item: AgentInputItem) => boolean,
-): Set<string> {
-  const callIds = new Set<string>();
-
-  for (const item of items) {
-    const callId = callIdForItem(item);
-    if (callId && predicate(item)) { callIds.add(callId); }
-  }
-
-  return callIds;
-}
-
-function missingFunctionCallIds(
-  items: AgentInputItem[],
-  knownCallIds: Set<string>,
-): Set<string> {
-  const missingCallIds = new Set<string>();
-
-  for (const item of items) {
-    const callId = callIdForItem(item);
-    if (callId && isFunctionCallResult(item) && !knownCallIds.has(callId)) {
-      missingCallIds.add(callId);
-    }
-  }
-
-  return missingCallIds;
-}
-
-function moveStartBeforeMissingCalls(
-  items: AgentInputItem[],
-  start: number,
-  missingCallIds: Set<string>,
-): number {
-  while (missingCallIds.size > 0 && start > 0) {
-    start -= 1;
-    const item = items[start];
-    if (!item) { continue; }
-    const callId = callIdForItem(item);
-    if (!callId) { continue; }
-    if (isFunctionCall(item)) { missingCallIds.delete(callId); }
-    if (isFunctionCallResult(item)) { missingCallIds.add(callId); }
-  }
-
-  return start;
-}
-
 function retainedStartIndex(items: AgentInputItem[]): number {
   const start = Math.max(0, items.length - AGENT_SESSION_RECENT_ITEM_KEEP);
-  const retainedItems = items.slice(start);
-  const retainedCallIds = callIdsForItems(retainedItems, isFunctionCall);
-  const missingCallIds = missingFunctionCallIds(retainedItems, retainedCallIds);
-
-  return moveStartBeforeMissingCalls(items, start, missingCallIds);
+  return findReplaySafeStartIndex(items, start);
 }
 
 function buildSummaryPrompt(
@@ -568,7 +501,7 @@ class MongoAgentSession implements Session {
     if (this.items.length <= AGENT_SESSION_ITEM_CAP) { return; }
 
     const originalCount = this.items.length;
-    this.items = this.items.slice(-AGENT_SESSION_ITEM_CAP);
+    this.items = retainReplaySafeItems(this.items, AGENT_SESSION_ITEM_CAP);
     await this.persist();
 
     aiLogger.warn(
@@ -655,7 +588,7 @@ async function compactPersistedItemsIfNeeded({
       'Failed to compact loaded agent session; using existing raw items',
     );
     return {
-      items: items.slice(-AGENT_SESSION_ITEM_CAP),
+      items: retainReplaySafeItems(items, AGENT_SESSION_ITEM_CAP),
       summary: existingSummary,
     };
   }

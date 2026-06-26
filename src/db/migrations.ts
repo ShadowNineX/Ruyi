@@ -483,6 +483,27 @@ async function migrateSteamAccountScopedState(): Promise<void> {
   }
 }
 
+async function clearPersistedAgentSessionReplayItems(): Promise<void> {
+  for (const collectionName of [
+    'discord_agent_sessions',
+    'steam_agent_sessions',
+  ]) {
+    if (!(await collectionExists(collectionName))) { continue; }
+
+    const collection = getDb().collection(collectionName);
+    const result = await collection.updateMany(
+      { 'items.0': { $exists: true } },
+      { $set: { items: [] } },
+    );
+    if (result.modifiedCount === 0) { continue; }
+
+    dbLogger.info(
+      { collection: collectionName, modified: result.modifiedCount },
+      'Cleared persisted OpenAI agent replay items',
+    );
+  }
+}
+
 const migrations: DatabaseMigration[] = [
   {
     id: '2026-06-16-platform-history-split',
@@ -517,6 +538,10 @@ const migrations: DatabaseMigration[] = [
   {
     id: '2026-06-24-steam-account-scoped-chat-state',
     run: migrateSteamAccountScopedState,
+  },
+  {
+    id: '2026-06-26-clear-agent-session-replay-items',
+    run: clearPersistedAgentSessionReplayItems,
   },
 ];
 
