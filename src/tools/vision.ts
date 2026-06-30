@@ -1,14 +1,13 @@
 import { tool } from '@openai/agents';
-import OpenAI from 'openai';
 import { z } from 'zod';
+import { getSharedOpenAIClient } from '../ai/openai-client';
 import { configManager } from '../config';
 import { TOOL_ANSWER_MODEL } from '../constants';
-import { env } from '../env';
 import { toolLogger } from '../logger';
 import { getCurrentToolConfigScope } from '../utils/tool-config-scope';
 import { formatError, toolContextManager } from '../utils/types';
 
-const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+const openai = getSharedOpenAIClient();
 const DEFAULT_MAX_OUTPUT_TOKENS = 900;
 const REVERSE_IMAGE_MAX_OUTPUT_TOKENS = 350;
 const IMAGE_TEXT_INSTRUCTION

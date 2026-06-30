@@ -6,8 +6,8 @@ import type {
 } from 'openai/resources/responses/responses';
 import type { ConfigScope, SearchProvider } from '../config';
 import { tool } from '@openai/agents';
-import OpenAI from 'openai';
 import { z } from 'zod';
+import { getSharedOpenAIClient } from '../ai/openai-client';
 import {
   configManager,
 
@@ -67,7 +67,7 @@ interface TavilyResponse {
   request_id?: string;
 }
 
-const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+const openai = getSharedOpenAIClient();
 
 function clampMaxResults(value: number | null): number {
   if (value === null || !Number.isFinite(value)) { return 5; }

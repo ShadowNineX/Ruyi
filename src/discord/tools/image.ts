@@ -1,8 +1,7 @@
 import { tool } from '@openai/agents';
 import { AttachmentBuilder, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
-import OpenAI from 'openai';
 import { z } from 'zod';
-import { env } from '../../env';
+import { getSharedOpenAIClient } from '../../ai/openai-client';
 import { toolLogger } from '../../logger';
 import { formatError, toolContextManager } from '../../utils/types';
 import { requesterHasChannelPermission } from '../utils/discord-permissions';
@@ -25,7 +24,7 @@ interface ImageOutputDetails {
   format: OpenAIImageFormat;
 }
 
-const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+const openai = getSharedOpenAIClient();
 const SUPPORTED_NATIVE_SIZES = new Set<OpenAIImageSize>([
   'auto',
   '1024x1024',

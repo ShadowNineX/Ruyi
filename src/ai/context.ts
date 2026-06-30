@@ -432,7 +432,7 @@ class ConversationContext {
 
     if (replyChain.length > 0) {
       const lines = replyChain
-        .slice(-10)
+        .slice(-8)
         .map(message => `${message.author}: ${message.content}`)
         .join('\n');
       sections.push(
@@ -444,7 +444,7 @@ class ConversationContext {
       const label
         = 'Recent channel activity (other people talking, for situational awareness — do NOT respond to these directly unless the user asks)';
       const lines = ambient
-        .slice(-15)
+        .slice(-8)
         .map(message => `${message.author}: ${message.content}`)
         .join('\n');
       sections.push(`${label}:\n${lines}`);
@@ -452,7 +452,7 @@ class ConversationContext {
 
     if (visibleBotReplies.length > 0) {
       const lines = visibleBotReplies
-        .slice(-5)
+        .slice(-3)
         .map(message => `${message.author}: ${message.content}`)
         .join('\n');
       sections.push(

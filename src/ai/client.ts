@@ -12,7 +12,6 @@ import {
   BACKGROUND_TASK_MODEL,
   PROACTIVE_TASK_MODEL,
 } from '../constants';
-import { env } from '../env';
 import { aiLogger } from '../logger';
 import {
   getAgentsProvider,
@@ -20,6 +19,7 @@ import {
   resetAgentsRuntime,
   setAgentsRuntime,
 } from '../stores';
+import { getSharedOpenAIClient } from './openai-client';
 
 type ReasoningEffort = NonNullable<ModelSettings['reasoning']>['effort'];
 type TextVerbosity = NonNullable<ModelSettings['text']>['verbosity'];
@@ -99,7 +99,7 @@ class AgentsRuntimeManager {
 
   getProviderConfig() {
     return {
-      apiKey: env.OPENAI_API_KEY,
+      openAIClient: getSharedOpenAIClient(),
       useResponses: true,
       strictFeatureValidation: false,
     } as const;

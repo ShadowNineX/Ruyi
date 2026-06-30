@@ -727,7 +727,7 @@ export async function fetchChatHistory(
   if (!('messages' in message.channel)) { return chatHistory; }
 
   try {
-    const messages = await message.channel.messages.fetch({ limit: 30 });
+    const messages = await message.channel.messages.fetch({ limit: 18 });
     const sorted = [...messages.values()].reverse();
 
     for (const msg of sorted) {
