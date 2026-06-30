@@ -11,8 +11,6 @@ import { agentsRuntimeManager } from '../../ai';
 import { getBuildInfo } from '../../build-info';
 import { countConnectedSmitheryConnections } from '../../db/models';
 import { botLogger } from '../../logger';
-import { getSteamAccounts, steamIntegrationEnabled } from '../../steam/accounts';
-import { steamCommunityClient } from '../../steam/client';
 
 const INFO_COLORS = {
   healthy: 0x57F287,
@@ -112,29 +110,6 @@ function getOpenAIHealth(): HealthItem {
   };
 }
 
-function getSteamHealth(): HealthItem {
-  const accounts = getSteamAccounts();
-  if (!steamIntegrationEnabled()) {
-    return {
-      label: 'Steam',
-      state: 'Disabled',
-      detail: 'Steam env is not configured',
-    };
-  }
-
-  const readyCount = accounts.filter(account =>
-    steamCommunityClient.isReady(account.id),
-  ).length;
-  const allReady = readyCount === accounts.length;
-  return {
-    label: 'Steam',
-    state: allReady ? 'OK' : 'Warning',
-    detail: allReady
-      ? `${readyCount}/${accounts.length} Community session(s) ready`
-      : `${readyCount}/${accounts.length} configured Community session(s) ready`,
-  };
-}
-
 async function getSmitheryHealth(): Promise<HealthItem> {
   const connected = await countConnectedSmitheryConnections();
   return {
@@ -160,7 +135,6 @@ async function buildInfoEmbed(
     getDiscordHealth(interaction),
     getMongoHealth(),
     getOpenAIHealth(),
-    getSteamHealth(),
     await getSmitheryHealth(),
   ];
 

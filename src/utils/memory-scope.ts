@@ -15,9 +15,7 @@ export function buildUserMemoryFilter(
 }
 
 export function formatUserMemoryContext(
-  identity: Pick<RuyiUserIdentity, 'surface' | 'username' | 'personId'>,
+  identity: Pick<RuyiUserIdentity, 'username' | 'personId'>,
 ): string {
-  return identity.personId === 'owner'
-    ? `${identity.username} across linked Discord and Steam identities`
-    : `${identity.username} on ${identity.surface}`;
+  return identity.personId === 'owner' ? identity.username : `${identity.username} on Discord`;
 }

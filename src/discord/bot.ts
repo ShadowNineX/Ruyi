@@ -264,7 +264,6 @@ class RuyiBot {
     referencedMessage: Message | null,
   ): ToolContext {
     return {
-      surface: 'discord',
       identity: buildDiscordUserIdentity(
         message.author.id,
         message.author.username,
@@ -393,7 +392,6 @@ class RuyiBot {
         ),
         userId: message.author.id,
         session,
-        surface: 'discord',
         identity,
         chatHistory: combinedHistory,
         imageInputs,

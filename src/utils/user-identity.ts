@@ -1,13 +1,6 @@
 import { env } from '../env';
-import {
-  resolveSteamProfileTarget,
-  steamIntegrationEnabled,
-} from '../steam/accounts';
-
-export type UserSurface = 'discord' | 'steam';
 
 export interface RuyiUserIdentity {
-  surface: UserSurface;
   surfaceUserId: string;
   username: string;
   personId: string;
@@ -22,26 +15,9 @@ export function buildDiscordUserIdentity(
 ): RuyiUserIdentity {
   const isOwner = env.OWNER_DISCORD_USER_ID === userId;
   return {
-    surface: 'discord',
     surfaceUserId: userId,
     username,
     personId: isOwner ? OWNER_PERSON_ID : `discord:${userId}`,
     canWriteMemory: true,
   };
 }
-
-export function buildSteamUserIdentity(
-  steamId64: string,
-  username: string,
-): RuyiUserIdentity {
-  const isOwner = env.STEAM_OWNER_STEAM_ID64 === steamId64;
-  return {
-    surface: 'steam',
-    surfaceUserId: steamId64,
-    username,
-    personId: isOwner ? OWNER_PERSON_ID : `steam:${steamId64}`,
-    canWriteMemory: isOwner,
-  };
-}
-
-export { resolveSteamProfileTarget, steamIntegrationEnabled };

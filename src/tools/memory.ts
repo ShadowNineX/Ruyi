@@ -1,5 +1,4 @@
 import type { Guild, TextBasedChannel, TextChannel } from 'discord.js';
-import type { SteamCommentSearchMatch } from '../steam/comment-search';
 import type { UserMemoryFilter } from '../utils/memory-scope';
 import type { MessageMatchType, RankedMessageMatch, SearchableMessage } from '../utils/message-search';
 import { tool } from '@openai/agents';
@@ -14,10 +13,6 @@ import { USER_MEMORY_CAP } from '../constants';
 import { DiscordConversation, Memory } from '../db/models';
 import { requesterHasChannelPermission } from '../discord/utils/discord-permissions';
 import { toolLogger } from '../logger';
-import {
-  searchSteamProfileComments,
-
-} from '../steam/comment-search';
 import {
   sanitizeMemoryKey,
   truncateMemoryValue,
@@ -43,7 +38,6 @@ interface MemoryUserIdentity {
   personId: string;
   username: string;
   canWriteMemory: boolean;
-  surface: 'discord' | 'steam';
 }
 
 interface MemoryOwnerContext {
@@ -63,7 +57,6 @@ function getContextUserIdentity(): MemoryUserIdentity | null {
         personId: identity.personId,
         username: identity.username,
         canWriteMemory: identity.canWriteMemory,
-        surface: identity.surface,
       }
     : null;
 }
@@ -84,7 +77,7 @@ function resolveMemoryOwner(
     return 'User context required for memories';
   }
   if (!user.canWriteMemory) {
-    return 'Memory writes are disabled for this unlinked Steam commenter';
+    return 'Memory writes are disabled for this user context';
   }
 
   return {
@@ -307,7 +300,6 @@ export const memoryStoreTool = tool({
         action,
         key,
         personId: user?.personId,
-        surface: user?.surface,
         username: user?.username,
         pinned,
       },
@@ -386,7 +378,7 @@ export const memoryRecallTool = tool({
     const user = getContextUserIdentity();
     try {
       toolLogger.info(
-        { personId: user?.personId, surface: user?.surface, username: user?.username },
+        { personId: user?.personId, username: user?.username },
         'Recalling memories',
       );
 
@@ -417,7 +409,6 @@ export const memoryRecallTool = tool({
       toolLogger.info(
         {
           personId: user?.personId,
-          surface: user?.surface,
           username: user?.username,
           lineCount: allLines.length,
         },
@@ -427,7 +418,7 @@ export const memoryRecallTool = tool({
     } catch (error) {
       const details = formatError(error);
       toolLogger.error(
-        { personId: user?.personId, surface: user?.surface, error: details },
+        { personId: user?.personId, error: details },
         'Memory recall failed',
       );
       return {
@@ -450,7 +441,7 @@ export const searchMemoryTool = tool({
   execute: async ({ query }) => {
     const user = getContextUserIdentity();
     toolLogger.info(
-      { query, personId: user?.personId, surface: user?.surface, username: user?.username },
+      { query, personId: user?.personId, username: user?.username },
       'Searching memories',
     );
 
@@ -488,10 +479,9 @@ export const searchMemoryTool = tool({
 });
 
 interface ConversationMatch {
-  source: 'discord' | 'steam';
+  source: 'discord';
   id: string;
   channelId?: string;
-  profileId?: string;
   author: string;
   content: string;
   isBot?: boolean;
@@ -637,36 +627,6 @@ function buildConversationMatch(
     missingTerms: match.missingTerms,
     contextBefore: match.item.contextBefore,
     contextAfter: match.item.contextAfter,
-  };
-}
-
-function buildSteamConversationContextMessage(
-  match: SteamCommentSearchMatch['contextBefore'][number],
-): ConversationContextMessage {
-  return {
-    author: match.author,
-    content: truncateContent(match.content),
-    timestamp: match.timestamp,
-  };
-}
-
-function buildSteamConversationMatch(
-  match: SteamCommentSearchMatch,
-): ConversationMatch {
-  return {
-    source: 'steam',
-    id: match.id,
-    profileId: match.profileId,
-    author: match.author,
-    content: truncateContent(match.content),
-    timestamp: match.timestamp,
-    matchType: match.matchType,
-    matchScore: match.matchScore,
-    fuseScore: match.fuseScore,
-    matchedTerms: match.matchedTerms,
-    missingTerms: match.missingTerms,
-    contextBefore: match.contextBefore.map(buildSteamConversationContextMessage),
-    contextAfter: match.contextAfter.map(buildSteamConversationContextMessage),
   };
 }
 
@@ -886,65 +846,10 @@ async function searchDiscordConversation(
   };
 }
 
-async function searchSteamConversation(
-  query: string,
-  author: string | null,
-  maxLimit: number,
-) {
-  const profileId = toolContextManager.get().steam?.profileId;
-  const accountId = toolContextManager.get().steam?.accountId;
-  if (!profileId) {
-    return {
-      error: 'Steam conversation search needs active Steam profile context',
-    };
-  }
-
-  const search = await searchSteamProfileComments(
-    profileId,
-    query,
-    author,
-    maxLimit,
-    accountId,
-  );
-  const messages = search.matches.map(buildSteamConversationMatch);
-
-  if (messages.length === 0) {
-    return {
-      found: false,
-      message: `No Steam profile comments found matching "${query}"`,
-      search_summary: {
-        searched_comment_count: search.searchedCommentCount,
-        result_limit: maxLimit,
-        source: 'steam',
-        limitation:
-          'Steam conversation search only covers recent comments fetched from the active Steam profile. Deleted, private, or older comments may be unavailable.',
-      },
-    };
-  }
-
-  return {
-    found: true,
-    count: messages.length,
-    messages,
-    search_summary: {
-      exact_phrase_found: search.summary.exactPhraseFound,
-      best_match_type: search.summary.bestMatchType,
-      fuzzy_match_count: search.summary.fuzzyMatchCount,
-      partial_match_count: search.summary.partialMatchCount,
-      searched_comment_count: search.searchedCommentCount,
-      result_limit: maxLimit,
-      source: 'steam',
-      scope: 'recent profile comments on the active Steam profile',
-      limitation:
-        'Steam conversation search only covers recent comments fetched from the active Steam profile. Deleted, private, or older comments may be unavailable.',
-    },
-  };
-}
-
 export const searchConversationTool = tool({
   name: 'search_conversation',
   description:
-    'Surface-aware fuzzy search for the current conversation. In Discord, searches stored Discord history for the current or verified server channel. In Steam, searches recent comments on the active Steam profile. The source is chosen by code and never crosses surfaces.',
+    'Fuzzy search for stored Discord conversation history in the current or verified server channel. The search is scoped by code and never accepts arbitrary guild access.',
   parameters: z.object({
     query: z
       .string()
@@ -954,13 +859,13 @@ export const searchConversationTool = tool({
       .string()
       .nullable()
       .describe(
-        'Discord-only optional specific channel ID. If omitted, Discord searches the current channel only. Ignored for Steam.',
+        'Optional specific channel ID. If omitted, searches the current channel only.',
       ),
     search_all_channels: z
       .boolean()
       .nullable()
       .describe(
-        'Discord-only. If true, searches archived history for readable text channels in the current server. Not available in DMs. Ignored for Steam.',
+        'If true, searches archived history for readable text channels in the current server. Not available in DMs.',
       ),
     limit: z
       .number()
@@ -981,11 +886,6 @@ export const searchConversationTool = tool({
 
     try {
       const maxLimit = Math.min(Math.max(Math.round(limit ?? 20), 1), 50);
-      const ctx = toolContextManager.get();
-      if (ctx.surface === 'steam') {
-        return searchSteamConversation(query, author, maxLimit);
-      }
-
       return searchDiscordConversation(
         query,
         author,

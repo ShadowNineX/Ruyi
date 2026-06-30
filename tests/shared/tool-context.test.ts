@@ -5,7 +5,6 @@ import { runWithToolContext, toolContextManager } from '../../src/utils/types';
 
 function context(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
-    surface: 'discord',
     identity: null,
     message: null,
     channel: null,
@@ -16,36 +15,12 @@ function context(overrides: Partial<ToolContext> = {}): ToolContext {
 }
 
 describe('tool context manager', () => {
-  test('returns an empty Discord context outside a bound turn', () => {
+  test('returns an empty context outside a bound turn', () => {
     expect(toolContextManager.get()).toMatchObject({
-      surface: 'discord',
       message: null,
       channel: null,
       guild: null,
     });
-  });
-
-  test('binds Steam context inside a tool turn', async () => {
-    await runWithToolContext(
-      context({
-        surface: 'steam',
-        steam: {
-          accountId: 'ruyi',
-          profileId: '76561198000000002',
-          sourceCommentId: 'comment-1',
-        },
-      }),
-      async () => {
-        expect(toolContextManager.get()).toMatchObject({
-          surface: 'steam',
-          steam: {
-            accountId: 'ruyi',
-            profileId: '76561198000000002',
-            sourceCommentId: 'comment-1',
-          },
-        });
-      },
-    );
   });
 
   test('enforces reverse image follow-up budgets only after reverse search starts', async () => {
@@ -97,21 +72,6 @@ describe('tool context manager', () => {
 });
 
 describe('tool config scope', () => {
-  test('uses Steam profile scope in Steam tool context', async () => {
-    await runWithToolContext(
-      context({
-        surface: 'steam',
-        steam: { accountId: 'ruyi', profileId: '76561198000000002' },
-      }),
-      async () => {
-        expect(getCurrentToolConfigScope()).toEqual({
-          kind: 'steam:profile',
-          id: '76561198000000002',
-        });
-      },
-    );
-  });
-
   test('uses Discord message guild or DM scope in Discord tool context', async () => {
     const message = {
       guild: { id: 'guild-1' },

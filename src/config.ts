@@ -35,7 +35,6 @@ const DEFAULT_AWAY_SCOPE_ENABLED = true;
 
 const DISCORD_GUILD_CONFIG_PREFIX = 'discord:guild:';
 const DISCORD_DM_CONFIG_PREFIX = 'discord:dm:';
-const STEAM_PROFILE_CONFIG_PREFIX = 'steam:profile:';
 const USER_SEGMENT = 'user';
 const PREFIX_SETTING = 'prefix';
 const SEARCH_PROVIDER_SETTING = 'search:primary_provider';
@@ -48,7 +47,7 @@ const AWAY_USER_LAST_SENT_SETTING = 'away:last_sent_at';
 
 export const SEARCH_PROVIDERS = ['openai', 'tavily'] as const;
 export type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
-type ConfigScopeKind = 'discord:guild' | 'discord:dm' | 'steam:profile';
+type ConfigScopeKind = 'discord:guild' | 'discord:dm';
 
 export interface ConfigScope {
   kind: ConfigScopeKind;
@@ -146,10 +145,6 @@ function dmConfigScope(userId: string): ConfigScope {
   return { kind: 'discord:dm', id: userId };
 }
 
-export function steamProfileConfigScope(profileId: string): ConfigScope {
-  return { kind: 'steam:profile', id: profileId };
-}
-
 export function userConfigScope(
   guildId: string | null | undefined,
   userId: string,
@@ -167,8 +162,6 @@ export function formatConfigScope(scope: ConfigScope): string {
       return 'this server';
     case 'discord:dm':
       return 'this private chat';
-    case 'steam:profile':
-      return 'this Steam profile';
   }
 }
 
@@ -258,7 +251,6 @@ function parseScopePrefix(key: string): ConfigScope | null {
   const prefixes = [
     { kind: 'discord:guild', prefix: DISCORD_GUILD_CONFIG_PREFIX },
     { kind: 'discord:dm', prefix: DISCORD_DM_CONFIG_PREFIX },
-    { kind: 'steam:profile', prefix: STEAM_PROFILE_CONFIG_PREFIX },
   ] as const;
 
   for (const { kind, prefix } of prefixes) {
@@ -311,7 +303,6 @@ class ConfigManager {
       await Promise.all([
         getConfigValuesByPrefix(DISCORD_GUILD_CONFIG_PREFIX),
         getConfigValuesByPrefix(DISCORD_DM_CONFIG_PREFIX),
-        getConfigValuesByPrefix(STEAM_PROFILE_CONFIG_PREFIX),
       ])
     ).flat();
 

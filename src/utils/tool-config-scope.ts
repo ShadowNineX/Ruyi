@@ -2,17 +2,12 @@ import type { ConfigScope } from '../config';
 import {
 
   guildConfigScope,
-  steamProfileConfigScope,
   userConfigScope,
 } from '../config';
 import { toolContextManager } from './types';
 
 export function getCurrentToolConfigScope(): ConfigScope | null {
   const ctx = toolContextManager.get();
-
-  if (ctx.surface === 'steam') {
-    return ctx.steam ? steamProfileConfigScope(ctx.steam.profileId) : null;
-  }
 
   if (ctx.message) {
     return userConfigScope(ctx.message.guild?.id ?? null, ctx.message.author.id);

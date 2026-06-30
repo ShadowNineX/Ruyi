@@ -10,7 +10,6 @@ import { countConnectedSmitheryConnections } from './db/models';
 import { ruyiBot } from './discord/bot';
 import { botLogger, logger } from './logger';
 import { mcpRegistry } from './mcp';
-import { steamProfileCommentService } from './steam/service';
 import { allTools } from './tools';
 
 // Connect to MongoDB first (needed for Smithery connections)
@@ -40,12 +39,10 @@ await sessionManager.loadPersisted();
 // Start the bot
 ruyiBot.registerEvents();
 ruyiBot.start();
-void steamProfileCommentService.start();
 
 // Graceful shutdown handling
 async function shutdown(signal: string): Promise<void> {
   botLogger.info({ signal }, 'Shutting down gracefully');
-  steamProfileCommentService.stop();
   await shutdownAgentsRuntime();
   process.exit(0);
 }

@@ -42,13 +42,11 @@ export function normalizeSessionLabel(label: string): string {
 export function buildAgentSessionId({
   conversationId,
   label,
-  surface,
   timestamp = Date.now(),
 }: {
   conversationId: string;
   label: string;
-  surface: string;
   timestamp?: number | string;
 }): string {
-  return `${normalizeSessionLabel(label)}-${surface}-${conversationId}-${timestamp}`;
+  return `${normalizeSessionLabel(label)}-${conversationId}-${timestamp}`;
 }

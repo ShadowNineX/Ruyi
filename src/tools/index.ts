@@ -1,5 +1,4 @@
 import type { Tool } from '@openai/agents';
-import type { ConversationSurface } from '../ai/context';
 import { hostedMcpTool } from '@openai/agents';
 import { auditLogTool } from '../discord/tools/audit';
 import { channelInfoTool } from '../discord/tools/channel';
@@ -24,11 +23,6 @@ import {
 } from '../discord/tools/smithery';
 import { userInfoTool } from '../discord/tools/user';
 import { env } from '../env';
-import { steamProfileTool } from '../steam/tools/profile';
-import {
-  steamProfileCommentsTool,
-  steamProfileCommentTool,
-} from '../steam/tools/profile-comment';
 import { calculatorTool } from './calc';
 import { fetchUrlTool } from './fetch';
 import { lastfmTool } from './lastfm';
@@ -51,7 +45,6 @@ interface ToolRegistration {
    */
   readonly producesDiscordOutput?: boolean;
   readonly externalService?: boolean;
-  readonly surfaces?: readonly ConversationSurface[];
 }
 
 const githubMcpTool: Tool | null = env.GITHUB_PERSONAL_ACCESS_TOKEN
@@ -69,67 +62,48 @@ const githubMcpTool: Tool | null = env.GITHUB_PERSONAL_ACCESS_TOKEN
 
 const baseToolRegistry: readonly ToolRegistration[] = [
   { tool: calculatorTool },
-  { tool: channelInfoTool, surfaces: ['discord'] },
-  { tool: serverInfoTool, surfaces: ['discord'] },
-  { tool: userInfoTool, surfaces: ['discord'] },
+  { tool: channelInfoTool },
+  { tool: serverInfoTool },
+  { tool: userInfoTool },
   { tool: resolveTimeTool },
-  { tool: manageReminderTool, surfaces: ['discord'] },
-  { tool: getEventsTool, surfaces: ['discord'] },
-  { tool: manageEventTool, surfaces: ['discord'] },
-  { tool: manageRoleTool, surfaces: ['discord'] },
-  { tool: reactionTool, surfaces: ['discord'] },
-  { tool: pinTool, surfaces: ['discord'] },
-  { tool: searchMessagesTool, surfaces: ['discord'] },
-  { tool: deleteMessagesTool, surfaces: ['discord'] },
+  { tool: manageReminderTool },
+  { tool: getEventsTool },
+  { tool: manageEventTool },
+  { tool: manageRoleTool },
+  { tool: reactionTool },
+  { tool: pinTool },
+  { tool: searchMessagesTool },
+  { tool: deleteMessagesTool },
   {
     tool: editBotMessageTool,
     producesDiscordOutput: true,
-    surfaces: ['discord'],
   },
   {
     tool: sendTextAttachmentTool,
     producesDiscordOutput: true,
-    surfaces: ['discord'],
   },
-  { tool: embedTool, producesDiscordOutput: true, surfaces: ['discord'] },
+  { tool: embedTool, producesDiscordOutput: true },
   { tool: fetchUrlTool },
   { tool: webSearchTool, externalService: true },
   { tool: pinterestTool, externalService: true },
   {
     tool: reverseImageSearchTool,
     externalService: true,
-    surfaces: ['discord'],
   },
   {
     tool: generateImageTool,
     externalService: true,
     producesDiscordOutput: true,
-    surfaces: ['discord'],
   },
   { tool: describeImageTool, externalService: true },
   { tool: memoryStoreTool },
   { tool: memoryRecallTool },
   { tool: searchMemoryTool },
-  { tool: searchConversationTool, surfaces: ['discord', 'steam'] },
-  {
-    tool: steamProfileTool,
-    externalService: true,
-    surfaces: ['discord', 'steam'],
-  },
-  { tool: auditLogTool, surfaces: ['discord'] },
+  { tool: searchConversationTool },
+  { tool: auditLogTool },
   { tool: lastfmTool, externalService: true },
-  { tool: smitheryListToolsTool, externalService: true, surfaces: ['discord'] },
-  { tool: smitheryCallTool, externalService: true, surfaces: ['discord'] },
-  {
-    tool: steamProfileCommentTool,
-    externalService: true,
-    surfaces: ['discord', 'steam'],
-  },
-  {
-    tool: steamProfileCommentsTool,
-    externalService: true,
-    surfaces: ['discord'],
-  },
+  { tool: smitheryListToolsTool, externalService: true },
+  { tool: smitheryCallTool, externalService: true },
 ];
 
 function buildToolRegistry(): readonly ToolRegistration[] {
@@ -144,36 +118,15 @@ export const allTools: readonly Tool[] = toolRegistry.map(
   registration => registration.tool,
 );
 
-function supportsSurface(
-  registration: ToolRegistration,
-  surface: ConversationSurface,
-): boolean {
-  return !registration.surfaces || registration.surfaces.includes(surface);
+export function getToolNames(): ReadonlySet<string> {
+  return new Set(allTools.map(tool => tool.name));
 }
 
-export function getToolsForSurface(
-  surface: ConversationSurface,
-): readonly Tool[] {
-  return toolRegistry
-    .filter(registration => supportsSurface(registration, surface))
-    .map(registration => registration.tool);
-}
-
-export function getToolNamesForSurface(
-  surface: ConversationSurface,
-): ReadonlySet<string> {
-  return new Set(getToolsForSurface(surface).map(tool => tool.name));
-}
-
-export function isExternalToolName(
-  toolName: string,
-  surface: ConversationSurface,
-): boolean {
+export function isExternalToolName(toolName: string): boolean {
   return toolRegistry.some(
     registration =>
       registration.tool.name === toolName
-      && registration.externalService === true
-      && supportsSurface(registration, surface),
+      && registration.externalService === true,
   );
 }
 

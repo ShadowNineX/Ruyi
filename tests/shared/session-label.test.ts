@@ -11,14 +11,13 @@ describe('agent session labels', () => {
     expect(normalizeSessionLabel('---')).toBe('assistant');
   });
 
-  test('builds account-visible agent session ids', () => {
+  test('builds agent session ids', () => {
     expect(
       buildAgentSessionId({
-        conversationId: '76561198716653765',
-        label: 'tails',
-        surface: 'steam',
+        conversationId: 'channel-1',
+        label: 'ruyi',
         timestamp: 1782265954498,
       }),
-    ).toBe('tails-steam-76561198716653765-1782265954498');
+    ).toBe('ruyi-channel-1-1782265954498');
   });
 });

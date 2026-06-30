@@ -1,6 +1,5 @@
 import type { IMemory } from '../db/models/memory';
 import type { RuyiUserIdentity } from '../utils/user-identity';
-import type { ConversationSurface } from './context';
 import { Agent } from '@openai/agents';
 import { z } from 'zod';
 import {
@@ -55,7 +54,7 @@ RULES:
 - DO NOT extract: passing moods, current activities ("eating lunch"), one-off events, temporary plans, todos, feature requests, bug reports, repositories/projects being discussed, quotes/boards/documents being edited, things said by other users, or things the bot said.
 - Work/project/repository/chat context is usually not personal memory. Store it only when the user explicitly asks Ruyi to remember it, or when it is clearly a stable personal account/handle/profile link rather than a task or project fact.
 - Avoid saving facts whose main purpose is helping the current coding/debugging task. Auto memory is for the user's long-term persona and preferences, not a project notebook.
-- Do not store one-off output-formatting instructions for the current task, including Steam BBCode, Steam profile-comment layout, ASCII art spacing, or Discord/Steam markdown cleanup requests.
+- Do not store one-off output-formatting instructions for the current task, including ASCII art spacing or Discord markdown cleanup requests.
 - Keys: short, snake_case, descriptive. Examples: "favorite_food", "occupation", "lastfm_username", "lives_in".
 - Values: concise, factual, max 200 chars. Strip "the user" / "they" — write the fact directly.
 - If the fact restates an existing memory, SKIP it.
@@ -260,12 +259,10 @@ export async function autoExtractFacts(
   username: string,
   identity: RuyiUserIdentity,
   conversationId: string,
-  surface: ConversationSurface = 'discord',
-  steamAccountId?: string | null,
 ): Promise<boolean> {
   if (!identity.canWriteMemory) {
     aiLogger.debug(
-      { username, conversationId, surface },
+      { username, conversationId },
       'Skip extraction: identity is not allowed to write memories',
     );
     return false;
@@ -274,12 +271,10 @@ export async function autoExtractFacts(
   const history = await conversationContext.getMemoryContext(
     conversationId,
     AUTO_EXTRACT_HISTORY_WINDOW,
-    surface,
-    steamAccountId,
   );
   if (!history || history.length < 80) {
     aiLogger.debug(
-      { username, conversationId, surface },
+      { username, conversationId },
       'Skip extraction: history too short',
     );
     return false;
@@ -351,7 +346,6 @@ Extract durable facts about ${username}. Return create/update memory operations,
       {
         username,
         conversationId,
-        surface,
         count: operations.length,
         created: outcomes.created,
         updated: outcomes.updated,
@@ -369,7 +363,6 @@ Extract durable facts about ${username}. Return create/update memory operations,
         name: (error as Error).name,
         username,
         conversationId,
-        surface,
       },
       'Auto-extraction failed',
     );

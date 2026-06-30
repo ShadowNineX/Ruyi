@@ -2,10 +2,6 @@ import type { Types } from 'mongoose';
 import mongoose from 'mongoose';
 import { env } from '../env';
 import { dbLogger } from '../logger';
-import {
-  buildAgentSessionId,
-  normalizeSessionLabel,
-} from '../utils/session-label';
 import { isValidSmitheryConnectionId } from '../utils/smithery-connection-id';
 import { getConfigValue, setConfigValue } from './models';
 
@@ -43,20 +39,6 @@ interface SmitheryConnectionMigrationDocument {
   connectionId?: string;
 }
 
-interface SteamAgentSessionMigrationDocument {
-  _id: MongoObjectId;
-  accountId?: string;
-  createdAt?: Date;
-  profileId?: string;
-  sessionId?: string;
-}
-
-interface SteamAccountScopedMigrationDocument {
-  _id: MongoObjectId;
-  accountId?: string;
-  profileId?: string;
-}
-
 interface IndexDroppableCollection {
   dropIndex: (indexName: string) => Promise<unknown>;
 }
@@ -64,6 +46,13 @@ interface IndexDroppableCollection {
 async function collectionExists(name: string): Promise<boolean> {
   const collections = await getDb().listCollections({ name }).toArray();
   return collections.length > 0;
+}
+
+async function dropCollectionIfExists(name: string): Promise<void> {
+  if (!(await collectionExists(name))) { return; }
+
+  await getDb().collection(name).drop();
+  dbLogger.info({ collection: name }, 'Dropped obsolete collection');
 }
 
 function getDb() {
@@ -301,27 +290,6 @@ async function migrateStoredDiscordScopeKinds(): Promise<void> {
   }
 }
 
-async function resetSteamCommentTrackingToCheckpoint(): Promise<void> {
-  if (!(await collectionExists('steam_comment_states'))) { return; }
-  const collection = getDb().collection('steam_comment_states');
-  const result = await collection.updateMany(
-    {},
-    {
-      $set: {
-        seenCommentIds: [],
-        lastCheckedAt: new Date(),
-      },
-    },
-  );
-
-  if (result.modifiedCount > 0) {
-    dbLogger.info(
-      { modified: result.modifiedCount },
-      'Reset Steam comment tracking to checkpoint mode',
-    );
-  }
-}
-
 async function removeInvalidSmitheryConnectionIds(): Promise<void> {
   if (!(await collectionExists('smitheryconnections'))) { return; }
 
@@ -342,164 +310,38 @@ async function removeInvalidSmitheryConnectionIds(): Promise<void> {
   );
 }
 
-function isDigitText(value: string): boolean {
-  if (value.length === 0) { return false; }
-
-  for (const character of value) {
-    if (character < '0' || character > '9') { return false; }
-  }
-
-  return true;
-}
-
-function getSessionIdTimestamp(
-  session: SteamAgentSessionMigrationDocument,
-): number | string {
-  const sessionId = session.sessionId ?? '';
-  const lastDashIndex = sessionId.lastIndexOf('-');
-  const suffix = lastDashIndex >= 0 ? sessionId.slice(lastDashIndex + 1) : '';
-  if (isDigitText(suffix)) { return suffix; }
-
-  return session.createdAt?.getTime() ?? Date.now();
-}
-
-async function migrateSteamAgentSessionLabels(): Promise<void> {
-  if (!(await collectionExists('steam_agent_sessions'))) { return; }
-  if (env.STEAM_ACCOUNTS.length === 0) { return; }
-
-  const labelByProfileId = new Map(
-    env.STEAM_ACCOUNTS.map(account => [
-      account.botSteamId64,
-      normalizeSessionLabel(account.id),
-    ]),
-  );
-  const collection = getDb().collection<SteamAgentSessionMigrationDocument>(
-    'steam_agent_sessions',
-  );
-  const sessions = await collection
-    .find({ profileId: { $in: [...labelByProfileId.keys()] } })
-    .toArray();
-
-  let modified = 0;
-  for (const session of sessions) {
-    const { profileId } = session;
-    if (!profileId) { continue; }
-
-    const label = labelByProfileId.get(profileId);
-    if (!label) { continue; }
-
-    const expectedPrefix = `${label}-steam-${profileId}-`;
-    if (session.sessionId?.startsWith(expectedPrefix)) { continue; }
-
-    await collection.updateOne(
-      { _id: session._id },
-      {
-        $set: {
-          sessionId: buildAgentSessionId({
-            conversationId: profileId,
-            label,
-            surface: 'steam',
-            timestamp: getSessionIdTimestamp(session),
-          }),
-        },
-      },
-    );
-    modified += 1;
-  }
-
-  if (modified > 0) {
-    dbLogger.info(
-      { modified },
-      'Relabeled Steam agent session IDs for configured accounts',
-    );
-  }
-}
-
-async function createSteamAccountScopedIndex(
-  collectionName: string,
-): Promise<void> {
-  const collection = getDb().collection(collectionName);
-  await dropIndexIfExists(collection, 'profileId_1');
-  await collection.createIndex({ accountId: 1, profileId: 1 }, { unique: true });
-  await collection.createIndex({ accountId: 1 });
-  await collection.createIndex({ profileId: 1 });
-}
-
-async function backfillSteamCollectionAccountIds(
-  collectionName: string,
-): Promise<number> {
-  if (!(await collectionExists(collectionName))) { return 0; }
-  const collection = getDb().collection<SteamAccountScopedMigrationDocument>(
-    collectionName,
-  );
-
-  let modified = 0;
-  for (const account of env.STEAM_ACCOUNTS) {
-    const result = await collection.updateMany(
-      { profileId: account.botSteamId64 },
-      { $set: { accountId: account.id } },
-    );
-    modified += result.modifiedCount;
-  }
-
-  const removed = await collection.deleteMany({
-    $or: [
-      { accountId: { $exists: false } },
-      { accountId: { $type: 'null' } },
-    ],
-  });
-
-  if (removed.deletedCount > 0) {
-    dbLogger.info(
-      { collection: collectionName, removed: removed.deletedCount },
-      'Removed Steam documents without configured account ownership',
-    );
-  }
-
-  await createSteamAccountScopedIndex(collectionName);
-  return modified;
-}
-
-async function migrateSteamAccountScopedState(): Promise<void> {
-  if (env.STEAM_ACCOUNTS.length === 0) { return; }
-
-  const modifiedCounts = await Promise.all(
-    [
-      'steam_conversations',
-      'steam_agent_sessions',
-      'steam_comment_states',
-    ].map(backfillSteamCollectionAccountIds),
-  );
-  const modified = modifiedCounts.reduce(
-    (total, count) => total + count,
-    0,
-  );
-
-  if (modified > 0) {
-    dbLogger.info(
-      { modified },
-      'Backfilled Steam account IDs for account-scoped chat state',
-    );
-  }
-}
-
 async function clearPersistedAgentSessionReplayItems(): Promise<void> {
-  for (const collectionName of [
-    'discord_agent_sessions',
-    'steam_agent_sessions',
-  ]) {
-    if (!(await collectionExists(collectionName))) { continue; }
+  const collectionName = 'discord_agent_sessions';
+  if (!(await collectionExists(collectionName))) { return; }
 
-    const collection = getDb().collection(collectionName);
-    const result = await collection.updateMany(
-      { 'items.0': { $exists: true } },
-      { $set: { items: [] } },
-    );
-    if (result.modifiedCount === 0) { continue; }
+  const collection = getDb().collection(collectionName);
+  const result = await collection.updateMany(
+    { 'items.0': { $exists: true } },
+    { $set: { items: [] } },
+  );
+  if (result.modifiedCount === 0) { return; }
 
+  dbLogger.info(
+    { collection: collectionName, modified: result.modifiedCount },
+    'Cleared persisted OpenAI agent replay items',
+  );
+}
+
+async function dropSteamCollections(): Promise<void> {
+  await Promise.all([
+    dropCollectionIfExists('steam_conversations'),
+    dropCollectionIfExists('steam_agent_sessions'),
+    dropCollectionIfExists('steam_comment_states'),
+  ]);
+
+  const configs = getDb().collection<ConfigDocument>('configs');
+  const result = await configs.deleteMany({
+    key: { $regex: /^steam:/ },
+  });
+  if (result.deletedCount > 0) {
     dbLogger.info(
-      { collection: collectionName, modified: result.modifiedCount },
-      'Cleared persisted OpenAI agent replay items',
+      { removed: result.deletedCount },
+      'Removed obsolete Steam config keys',
     );
   }
 }
@@ -524,24 +366,16 @@ const migrations: DatabaseMigration[] = [
     },
   },
   {
-    id: '2026-06-16-steam-comment-checkpoint-mode',
-    run: resetSteamCommentTrackingToCheckpoint,
-  },
-  {
     id: '2026-06-17-smithery-connection-id-format',
     run: removeInvalidSmitheryConnectionIds,
   },
   {
-    id: '2026-06-24-steam-agent-session-account-labels',
-    run: migrateSteamAgentSessionLabels,
-  },
-  {
-    id: '2026-06-24-steam-account-scoped-chat-state',
-    run: migrateSteamAccountScopedState,
-  },
-  {
     id: '2026-06-26-clear-agent-session-replay-items',
     run: clearPersistedAgentSessionReplayItems,
+  },
+  {
+    id: '2026-06-30-remove-steam-integration-state',
+    run: dropSteamCollections,
   },
 ];
 

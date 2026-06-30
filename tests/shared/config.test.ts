@@ -4,7 +4,6 @@ import {
   formatConfigScope,
   guildConfigScope,
   isAiModelPresetId,
-  steamProfileConfigScope,
   userConfigScope,
 } from '../../src/config';
 
@@ -25,11 +24,11 @@ describe('config scopes', () => {
     });
   });
 
-  test('supports Steam profile-scoped settings', () => {
-    const scope = steamProfileConfigScope('76561198000000002');
-
-    expect(configScopeKey(scope)).toBe('steam:profile:76561198000000002');
-    expect(formatConfigScope(scope)).toBe('this Steam profile');
+  test('formats Discord scope labels', () => {
+    expect(formatConfigScope(guildConfigScope('guild-1'))).toBe('this server');
+    expect(formatConfigScope(userConfigScope(null, 'user-1'))).toBe(
+      'this private chat',
+    );
   });
 });
 

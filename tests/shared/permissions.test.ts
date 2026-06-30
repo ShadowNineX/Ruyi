@@ -10,20 +10,18 @@ describe('permission prompt summaries', () => {
   test('shows local tool arguments from SDK arguments', () => {
     const summary = getPermissionSummary(
       approvalItem({
-        name: 'steam_profile_comment',
+        name: 'delete_messages',
         arguments: JSON.stringify({
-          target: 'owner',
-          action: 'post',
-          comment: 'A small kindness for today.',
+          count: 3,
+          reason: 'User requested cleanup.',
         }),
       }),
     );
 
-    expect(summary.displayName).toBe('steam_profile_comment');
-    expect(summary.description).toContain('Tool: `steam_profile_comment`');
-    expect(summary.description).toContain('- `target`: owner');
-    expect(summary.description).toContain('- `action`: post');
-    expect(summary.description).toContain('- `comment`: A small kindness for today.');
+    expect(summary.displayName).toBe('delete_messages');
+    expect(summary.description).toContain('Tool: `delete_messages`');
+    expect(summary.description).toContain('- `count`: 3');
+    expect(summary.description).toContain('- `reason`: User requested cleanup.');
   });
 
   test('shows hosted MCP tool arguments from provider data', () => {

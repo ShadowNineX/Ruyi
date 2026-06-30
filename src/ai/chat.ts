@@ -4,9 +4,8 @@ import type { ConfigScope } from '../config';
 import type { MessageImageInput } from '../discord/utils/messages';
 import type { RuyiUserIdentity } from '../utils/user-identity';
 import type { ChatRuntimeSession } from './chat-runtime-session';
-import type { ChatMessage, ConversationSurface } from './context';
+import type { ChatMessage } from './context';
 import type { PermissionResult } from './permissions';
-import type { AssistantPersonality } from './prompt';
 import {
   Agent,
 
@@ -21,8 +20,8 @@ import {
 import { env } from '../env';
 import { aiLogger } from '../logger';
 import {
-  getToolNamesForSurface,
-  getToolsForSurface,
+  allTools,
+  getToolNames,
   isExternalToolName,
 } from '../tools';
 import { getApprovalToolName } from '../utils/permission-summary';
@@ -41,7 +40,7 @@ import { autoExtractFacts } from './extraction';
 import { permissionManager } from './permissions';
 import {
   buildSystemPrompt,
-  getSystemPromptVersion,
+  systemPromptVersion,
 } from './prompt';
 import { sessionManager } from './session';
 
@@ -61,14 +60,9 @@ interface ChatOptions {
   imageInputs?: MessageImageInput[];
   profileContext?: string;
   messageId: string;
-  surface?: ConversationSurface;
   identity?: RuyiUserIdentity | null;
-  surfaceLabel?: string;
   signal?: AbortSignal;
   persistUserMessage?: boolean;
-  messageTimestamp?: Date;
-  personality?: AssistantPersonality;
-  sessionLabel?: string;
 }
 
 interface TextStreamResult {
@@ -104,10 +98,7 @@ interface PersistIncomingUserMessageOptions {
   cacheIdentity: RuyiUserIdentity;
   conversationId: string;
   messageId: string;
-  messageTimestamp?: Date;
   persistUserMessage: boolean;
-  surface: ConversationSurface;
-  steamAccountId: string | null;
   userMessage: string;
   username: string;
 }
@@ -244,13 +235,9 @@ class ChatService {
       imageInputs = [],
       profileContext = '',
       messageId,
-      surface = 'discord',
       identity = buildDiscordUserIdentity(userId, username),
-      surfaceLabel,
       signal,
       persistUserMessage = true,
-      personality = 'ruyi',
-      sessionLabel = personality,
     } = options;
     const conversationId = channelId;
     const cacheIdentity = identity ?? buildDiscordUserIdentity(userId, username);
@@ -260,7 +247,6 @@ class ChatService {
       channelId,
       messageId,
       session,
-      surface,
       userId,
     });
 
@@ -281,11 +267,7 @@ class ChatService {
         chatHistory,
         configScope,
         {
-          surface,
           identity: cacheIdentity,
-          surfaceLabel,
-          steamAccountId: surface === 'steam' ? sessionLabel : null,
-          personality,
         },
       );
       throwIfAborted(signal);
@@ -296,15 +278,12 @@ class ChatService {
       const enrichedMessage = `${dynamicContext}${profileBlock}\n\nUser message from ${username}:\n${userMessage}${imageInputSummary}`;
       const runnerInput = buildRunnerInput(enrichedMessage, imageInputs);
 
-      this.debugPromptIfEnabled(enrichedMessage, personality);
-
-      const promptVersion = getSystemPromptVersion(personality);
+      this.debugPromptIfEnabled(enrichedMessage);
 
       aiLogger.info(
         {
           username,
-          personality,
-          promptVersion,
+          promptVersion: systemPromptVersion,
           contextLength: dynamicContext.length,
           profileContextLength: profileContext.length,
           historyCount: chatHistory.length,
@@ -320,10 +299,7 @@ class ChatService {
         cacheIdentity,
         conversationId,
         messageId,
-        messageTimestamp: options.messageTimestamp,
         persistUserMessage,
-        steamAccountId: surface === 'steam' ? sessionLabel : null,
-        surface,
         userMessage,
         username,
       });
@@ -335,9 +311,7 @@ class ChatService {
         messageId,
         model,
         modelSettings,
-        surface,
-        promptVersion,
-        sessionLabel,
+        systemPromptVersion,
       );
       throwIfAborted(signal);
 
@@ -348,8 +322,6 @@ class ChatService {
         toolUsage,
         model,
         modelSettings,
-        surface,
-        personality,
       );
       const runner = agentsRuntimeManager.getRunner();
       const runOptions = {
@@ -362,12 +334,10 @@ class ChatService {
 
       aiLogger.debug(
         {
-          surface,
           conversationId,
           sessionId: agentSessionId,
-          personality,
-          promptVersion,
-          localToolCount: getToolsForSurface(surface).length,
+          promptVersion: systemPromptVersion,
+          localToolCount: allTools.length,
           maxTurns: AGENT_MAX_TURNS,
         },
         'Using persistent OpenAI Agents session',
@@ -416,7 +386,7 @@ class ChatService {
 
       if (!finalContent) {
         aiLogger.warn(
-          { username, surface, conversationId },
+          { username, conversationId },
           'Chat request returned empty response from model',
         );
       }
@@ -431,13 +401,12 @@ class ChatService {
           name: err.name,
           status: err.status ?? err.code,
           username,
-          surface,
           conversationId,
         },
         'Chat request failed',
       );
 
-      await sessionManager.invalidate(conversationId, surface, sessionLabel);
+      await sessionManager.invalidate(conversationId);
       session.onError();
       throw error;
     } finally {
@@ -452,19 +421,16 @@ class ChatService {
     channelId,
     messageId,
     session,
-    surface,
     userId,
   }: {
     channel: TextBasedChannel | null;
     channelId: string;
     messageId: string;
     session: ChatRuntimeSession;
-    surface: ConversationSurface;
     userId: string;
   }): void {
     if (
-      surface !== 'discord'
-      || !channel?.isSendable()
+      !channel?.isSendable()
       || !session.getPermissionPromptController
     ) {
       return;
@@ -480,12 +446,11 @@ class ChatService {
 
   private debugPromptIfEnabled(
     enrichedMessage: string,
-    personality: AssistantPersonality,
   ): void {
     if (!env.DEBUG_PROMPTS) { return; }
 
     aiLogger.debug(
-      { systemPrompt: buildSystemPrompt(personality), personality },
+      { systemPrompt: buildSystemPrompt() },
       'system prompt (debug dump)',
     );
     aiLogger.debug(
@@ -498,22 +463,15 @@ class ChatService {
     cacheIdentity,
     conversationId,
     messageId,
-    messageTimestamp,
     persistUserMessage,
-    surface,
-    steamAccountId,
     userMessage,
     username,
   }: PersistIncomingUserMessageOptions): Promise<void> {
     if (!persistUserMessage) { return; }
 
     await this.rememberIncomingUserMessage({
-      cacheIdentity,
       conversationId,
       messageId,
-      messageTimestamp,
-      surface,
-      steamAccountId,
       userMessage,
       username,
     });
@@ -521,79 +479,49 @@ class ChatService {
     const { shouldExtract } = conversationContext.trackUserMessage(
       conversationId,
       cacheIdentity,
-      surface,
-      steamAccountId,
     );
     if (shouldExtract) {
       this.scheduleFactExtraction(
         username,
         cacheIdentity,
         conversationId,
-        surface,
-        steamAccountId,
       );
     }
   }
 
   private async rememberIncomingUserMessage({
-    cacheIdentity,
     conversationId,
     messageId,
-    messageTimestamp,
-    surface,
-    steamAccountId,
     userMessage,
     username,
-  }: Omit<PersistIncomingUserMessageOptions, 'persistUserMessage'>): Promise<void> {
-    if (surface === 'discord') {
-      await conversationContext.rememberMessage(
-        conversationId,
-        username,
-        userMessage,
-        false,
-        messageId,
-      );
-      return;
-    }
-
-    await conversationContext.rememberSteamMessage({
-      accountId: this.requireSteamAccountId(steamAccountId),
-      profileId: conversationId,
-      authorSteamId: cacheIdentity.surfaceUserId,
-      authorName: username,
-      content: userMessage,
-      isBot: false,
-      commentId: messageId,
-      timestamp: messageTimestamp,
-    });
-  }
-
-  private requireSteamAccountId(steamAccountId: string | null): string {
-    if (steamAccountId) { return steamAccountId; }
-    throw new Error('Steam chat persistence requires an explicit account id');
+  }: Pick<
+    PersistIncomingUserMessageOptions,
+    'conversationId' | 'messageId' | 'userMessage' | 'username'
+  >): Promise<void> {
+    await conversationContext.rememberMessage(
+      conversationId,
+      username,
+      userMessage,
+      false,
+      messageId,
+    );
   }
 
   private scheduleFactExtraction(
     username: string,
     cacheIdentity: RuyiUserIdentity,
     conversationId: string,
-    surface: ConversationSurface,
-    steamAccountId: string | null,
   ): void {
     void autoExtractFacts(
       username,
       cacheIdentity,
       conversationId,
-      surface,
-      steamAccountId,
     )
       .then((completed) => {
         if (completed) {
           conversationContext.markExtracted(
             conversationId,
             cacheIdentity,
-            surface,
-            steamAccountId,
           );
         }
       })
@@ -602,7 +530,6 @@ class ChatService {
           {
             error: (error as Error).message,
             username,
-            surface,
             conversationId,
           },
           'Background fact extraction crashed',
@@ -615,23 +542,21 @@ class ChatService {
     toolUsage: TurnToolUsage,
     model: string,
     modelSettings: ModelSettings,
-    surface: ConversationSurface,
-    personality: AssistantPersonality,
   ) {
     const agent = new Agent({
-      name: personality === 'tails' ? 'Tails' : 'Ruyi',
-      instructions: buildSystemPrompt(personality),
+      name: 'Ruyi',
+      instructions: buildSystemPrompt(),
       model,
       modelSettings,
-      tools: [...getToolsForSurface(surface)],
+      tools: [...allTools],
       toolUseBehavior: 'run_llm_again',
     });
 
     agent.on('agent_tool_start', (_context, tool, details) => {
-      this.handleToolStart(tool, details.toolCall, session, toolUsage, surface);
+      this.handleToolStart(tool, details.toolCall, session, toolUsage);
     });
     agent.on('agent_tool_end', (_context, tool) => {
-      this.handleToolEnd(tool, session, surface);
+      this.handleToolEnd(tool, session);
     });
 
     return agent;
@@ -674,11 +599,11 @@ class ChatService {
     }
   }
 
-  private getToolDisplayName(toolName: string, surface: ConversationSurface): {
+  private getToolDisplayName(toolName: string): {
     displayName: string;
     isLocalTool: boolean;
   } {
-    const isLocalTool = getToolNamesForSurface(surface).has(toolName);
+    const isLocalTool = getToolNames().has(toolName);
     const displayName = formatToolDisplayName(toolName, isLocalTool);
     return { displayName, isLocalTool };
   }
@@ -688,10 +613,9 @@ class ChatService {
     toolCall: unknown,
     session: ChatRuntimeSession,
     toolUsage: TurnToolUsage,
-    surface: ConversationSurface,
   ): void {
-    const { displayName, isLocalTool } = this.getToolDisplayName(tool.name, surface);
-    if (isExternalToolName(tool.name, surface)) {
+    const { displayName, isLocalTool } = this.getToolDisplayName(tool.name);
+    if (isExternalToolName(tool.name)) {
       toolUsage.externalToolCallCount += 1;
     } else if (isLocalTool) {
       toolUsage.localToolCallCount += 1;
@@ -699,7 +623,7 @@ class ChatService {
       toolUsage.externalToolCallCount += 1;
     }
     aiLogger.info(
-      { tool: tool.name, external: isExternalToolName(tool.name, surface) },
+      { tool: tool.name, external: isExternalToolName(tool.name) },
       'Tool execution starting',
     );
     session.onToolStart(displayName, getLifecycleToolArgs(toolCall));
@@ -708,9 +632,8 @@ class ChatService {
   private handleToolEnd(
     tool: Tool,
     session: ChatRuntimeSession,
-    surface: ConversationSurface,
   ): void {
-    const { displayName } = this.getToolDisplayName(tool.name, surface);
+    const { displayName } = this.getToolDisplayName(tool.name);
     aiLogger.debug({ tool: displayName }, 'Tool execution complete');
     session.onToolEnd(displayName);
     session.onThinking();

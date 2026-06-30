@@ -18,17 +18,11 @@ interface ToolTurnBudget {
 }
 
 export interface ToolContext {
-  surface: 'discord' | 'steam';
   identity: RuyiUserIdentity | null;
   message: Message | null;
   channel: TextBasedChannel | null;
   guild: Guild | null;
   referencedMessage: Message | null;
-  steam?: {
-    accountId: string;
-    profileId: string;
-    sourceCommentId?: string | null;
-  };
   toolBudget?: ToolTurnBudget;
 }
 
@@ -48,7 +42,6 @@ type ToolBudgetDecision
     };
 
 const EMPTY_CONTEXT: ToolContext = {
-  surface: 'discord',
   identity: null,
   message: null,
   channel: null,

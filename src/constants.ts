@@ -62,13 +62,6 @@ export const AWAY_MESSAGE_MIN_COOLDOWN_HOURS = 1;
 export const AWAY_MESSAGE_MAX_COOLDOWN_HOURS = 30 * 24;
 export const AWAY_MESSAGE_MAX_LENGTH = 700;
 
-// Steam Community profile comments
-export const STEAM_PROFILE_COMMENT_MAX_LENGTH = 1000;
-export const STEAM_PROFILE_DATA_CACHE_TTL_MS = 2 * 60 * 1000;
-export const STEAM_PROFILE_DATA_CACHE_MAX_ENTRIES = 200;
-export const STEAM_PROFILE_TOOL_LIMIT_MAX = 100;
-export const STEAM_INVENTORY_ITEM_LIMIT_MAX = 50;
-
 // Paid/read-only external API caches
 export const PINTEREST_DATA_CACHE_TTL_MS = 5 * 60 * 1000;
 export const PINTEREST_DATA_CACHE_MAX_ENTRIES = 150;

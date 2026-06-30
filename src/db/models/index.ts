@@ -25,9 +25,3 @@ export {
   type SmitheryConnectionStatus,
   type SmitheryServerId,
 } from './smithery-connection';
-export {
-  type ISteamAgentSession,
-  SteamAgentSession,
-} from './steam/agent-session';
-export { SteamCommentState } from './steam/comment-state';
-export { SteamConversation } from './steam/conversation';

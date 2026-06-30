@@ -39,21 +39,19 @@ describe('memory scope helpers', () => {
     });
   });
 
-  test('describes linked owner memory context separately from surface-local users', () => {
+  test('describes owner memory context separately from Discord users', () => {
     expect(
       formatUserMemoryContext({
-        surface: 'steam',
         username: 'Shadow',
         personId: 'owner',
       }),
-    ).toBe('Shadow across linked Discord and Steam identities');
+    ).toBe('Shadow');
 
     expect(
       formatUserMemoryContext({
-        surface: 'discord',
         username: 'Guest',
         personId: 'discord:123',
       }),
-    ).toBe('Guest on discord');
+    ).toBe('Guest on Discord');
   });
 });
